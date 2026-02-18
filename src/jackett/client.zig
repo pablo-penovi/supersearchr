@@ -1,4 +1,5 @@
 const std = @import("std");
+const Torrent = @import("torrent").Torrent;
 
 const xml_tags = .{
     .item = "<item>",
@@ -26,13 +27,6 @@ fn extractIntField(xml: []const u8, i: usize, tag: []const u8, default: u32) ?st
     }
     return null;
 }
-
-pub const Torrent = struct {
-    title: []const u8,
-    seeders: u32,
-    leechers: u32,
-    link: []const u8,
-};
 
 pub const Client = struct {
     allocator: std.mem.Allocator,
