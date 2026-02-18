@@ -88,6 +88,16 @@ pub fn build(b: *std.Build) void {
     });
     const run_jackett_tests = b.addRunArtifact(jackett_tests);
 
+    // Test for superseedr module
+    const superseedr_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/superseedr/client.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_superseedr_tests = b.addRunArtifact(superseedr_tests);
+
     // Creates an executable that will run `test` blocks from the executable's
     // root module. Note that test executables only test one module at a time,
     // hence why we have to create two separate ones.
@@ -105,6 +115,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_config_tests.step);
     test_step.dependOn(&run_jackett_tests.step);
+    test_step.dependOn(&run_superseedr_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
