@@ -27,10 +27,21 @@ src/
 
 **Responsibility:** Load config, create if missing
 
-**Public API:**
+**JSON Format (camelCase):**
+```json
+{
+  "apiKey": "YOUR_JACKETT_API_KEY",
+  "apiUrl": "YOUR_JACKET_URL",
+  "apiPort": 9117
+}
+```
+
+**Zig Struct (snake_case):**
 ```zig
 pub const Config = struct {
     api_key: []const u8,
+    api_url: []const u8,
+    api_port: u16,
 };
 
 pub fn loadConfig(allocator: std.mem.Allocator) !Config
@@ -46,18 +57,15 @@ pub fn loadConfig(allocator: std.mem.Allocator) !Config
      {
        "apiKey": "YOUR_JACKETT_API_KEY",
        "apiUrl": "YOUR_JACKET_URL",
-       "apiPort": "YOUR_JACKET_PORT"
+       "apiPort": 9117
      }
      ```
    - Print error: "Config created at ~/.config/supersearchr/config.json. Please add your Jackett API key, URL and port."
    - Exit with code 1
-4. Parse JSON, validate `apiKey`, `apiUrl`, `apiPort` fields exists and are not the default values, nor empty
-
-**Unit Tests:**
-- Test parsing valid config JSON
+4. Parse JSON, validate all three fields exist and are not the default/empty values
 - Test missing config creates file
-- Test missing config field returns error for each field
-- Test default config value returns error for each field
+- Test missing config field returns error for each field (apiKey, apiUrl, apiPort)
+- Test default config value returns error for each field (apiKey, apiUrl, apiPort)
 
 ---
 
@@ -292,6 +300,10 @@ pub fn run(allocator: std.mem.Allocator, config: Config) !void
 | Config missing | "Config created. Please add API key." | Exit 1 |
 | Config invalid JSON | "Invalid config file format" | Exit 1 |
 | Config missing apiKey | "apiKey not found in config" | Exit 1 |
+| Config missing apiUrl | "apiUrl not found in config" | Exit 1 |
+| Config missing apiPort | "apiPort not found in config" | Exit 1 |
+| Config empty apiKey | "apiKey cannot be empty" | Exit 1 |
+| Config empty apiUrl | "apiUrl cannot be empty" | Exit 1 |
 | Jackett connection | "Cannot connect to Jackett" | Show error screen |
 | Jackett HTTP error | "Jackett error: {code}" | Show error screen |
 | Jackett parse error | "Failed to parse response" | Show error screen |
