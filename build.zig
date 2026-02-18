@@ -79,6 +79,9 @@ pub fn build(b: *std.Build) void {
     const run_config_tests = b.addRunArtifact(config_tests);
 
     // Test for jackett module
+    const torrent_mod = b.createModule(.{
+        .root_source_file = b.path("src/structs/torrent.zig"),
+    });
     const jackett_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/jackett/client.zig"),
@@ -86,6 +89,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    jackett_tests.root_module.addImport("torrent", torrent_mod);
     const run_jackett_tests = b.addRunArtifact(jackett_tests);
 
     // Test for superseedr module
@@ -97,6 +101,32 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_superseedr_tests = b.addRunArtifact(superseedr_tests);
+
+    // Test for search widget
+    const term_mod = b.createModule(.{
+        .root_source_file = b.path("src/tui/term.zig"),
+    });
+    const search_widget_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tui/widgets/search.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    search_widget_tests.root_module.addImport("term", term_mod);
+    const run_search_widget_tests = b.addRunArtifact(search_widget_tests);
+
+    // Test for results widget
+    const results_widget_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tui/widgets/results.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    results_widget_tests.root_module.addImport("term", term_mod);
+    results_widget_tests.root_module.addImport("torrent", torrent_mod);
+    const run_results_widget_tests = b.addRunArtifact(results_widget_tests);
 
     // Creates an executable that will run `test` blocks from the executable's
     // root module. Note that test executables only test one module at a time,
@@ -116,6 +146,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_config_tests.step);
     test_step.dependOn(&run_jackett_tests.step);
     test_step.dependOn(&run_superseedr_tests.step);
+    test_step.dependOn(&run_search_widget_tests.step);
+    test_step.dependOn(&run_results_widget_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

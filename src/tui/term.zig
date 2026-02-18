@@ -138,6 +138,18 @@ pub fn resetColor() void {
     std.io.getStdOut().writeAll("\x1b[0m") catch {};
 }
 
+pub fn getTerminalSize() !struct { rows: u16, cols: u16 } {
+    const stdin = std.io.getStdIn();
+    var winsize: std.os.linux.winsize = undefined;
+    const result = std.os.linux.ioctl(stdin.handle, std.os.linux.TIOCGWINSZ, @intFromPtr(&winsize));
+
+    if (result == 0) {
+        return .{ .rows = winsize.ws_row, .cols = winsize.ws_col };
+    }
+
+    return error.Unexpected;
+}
+
 test "color escape codes" {
     const Testing = @import("std").testing;
     var buf: [16]u8 = undefined;

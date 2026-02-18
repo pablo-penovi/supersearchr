@@ -58,8 +58,7 @@ fn createConfigFile(config_path: []const u8) !void {
 }
 
 fn parseConfig(allocator: std.mem.Allocator, contents: []const u8) !Config {
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, contents, .{}) catch |err| {
-        std.debug.print("Invalid config file format: {}\n", .{err});
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, contents, .{}) catch {
         return error.InvalidConfig;
     };
     defer parsed.deinit();
@@ -67,54 +66,39 @@ fn parseConfig(allocator: std.mem.Allocator, contents: []const u8) !Config {
     const obj = parsed.value.object;
 
     const api_key = obj.get("apiKey") orelse {
-        std.debug.print("apiKey not found in config\n", .{});
         return error.MissingApiKey;
     };
     const api_url = obj.get("apiUrl") orelse {
-        std.debug.print("apiUrl not found in config\n", .{});
         return error.MissingApiUrl;
     };
     const api_port = obj.get("apiPort") orelse {
-        std.debug.print("apiPort not found in config\n", .{});
         return error.MissingApiPort;
     };
 
     const api_key_str = switch (api_key) {
         .string => |s| s,
-        else => {
-            std.debug.print("apiKey must be a string\n", .{});
-            return error.InvalidApiKey;
-        },
+        else => return error.InvalidApiKey,
     };
 
     const api_url_str = switch (api_url) {
         .string => |s| s,
-        else => {
-            std.debug.print("apiUrl must be a string\n", .{});
-            return error.InvalidApiUrl;
-        },
+        else => return error.InvalidApiUrl,
     };
 
     const api_port_num = switch (api_port) {
         .integer => |n| n,
-        else => {
-            std.debug.print("apiPort must be a number\n", .{});
-            return error.InvalidApiPort;
-        },
+        else => return error.InvalidApiPort,
     };
 
     if (api_key_str.len == 0 or std.mem.eql(u8, api_key_str, "YOUR_JACKETT_API_KEY")) {
-        std.debug.print("apiKey cannot be empty\n", .{});
         return error.EmptyApiKey;
     }
 
     if (api_url_str.len == 0 or std.mem.eql(u8, api_url_str, "YOUR_JACKET_URL")) {
-        std.debug.print("apiUrl cannot be empty\n", .{});
         return error.EmptyApiUrl;
     }
 
     if (api_port_num == 0) {
-        std.debug.print("apiPort cannot be 0\n", .{});
         return error.EmptyApiPort;
     }
 
