@@ -1,5 +1,32 @@
 const std = @import("std");
 
+const xml_tags = .{
+    .item = "<item>",
+    .item_end = "</item>",
+    .title = "<title>",
+    .link = "<link>",
+    .seeders_attr = "<torznab:attr name=\"seeders\">",
+    .peers_attr = "<torznab:attr name=\"peers\">",
+};
+
+fn extractStringField(xml: []const u8, i: usize, tag: []const u8) ?struct { value: []const u8, end: usize } {
+    if (std.mem.startsWith(u8, xml[i..], tag)) {
+        const start = i + tag.len;
+        const end = std.mem.indexOfScalarPos(u8, xml, start, '<') orelse xml.len;
+        return .{ .value = xml[start..end], .end = end };
+    }
+    return null;
+}
+
+fn extractIntField(xml: []const u8, i: usize, tag: []const u8, default: u32) ?struct { value: u32, end: usize } {
+    if (std.mem.startsWith(u8, xml[i..], tag)) {
+        const start = i + tag.len;
+        const end = std.mem.indexOfScalarPos(u8, xml, start, '<') orelse xml.len;
+        return .{ .value = std.fmt.parseInt(u32, xml[start..end], 10) catch default, .end = end };
+    }
+    return null;
+}
+
 pub const Torrent = struct {
     title: []const u8,
     seeders: u32,
@@ -75,39 +102,29 @@ fn parseTorrents(allocator: std.mem.Allocator, xml: []const u8) ![]Torrent {
 
     var i: usize = 0;
     while (i < xml.len) {
-        if (std.mem.startsWith(u8, xml[i..], "<item>")) {
-            i += 6;
+        if (std.mem.startsWith(u8, xml[i..], xml_tags.item)) {
+            i += xml_tags.item.len;
             var title: ?[]const u8 = null;
             var link: ?[]const u8 = null;
             var seeders: u32 = 0;
             var peers: u32 = 0;
 
             while (i < xml.len) {
-                if (std.mem.startsWith(u8, xml[i..], "</item>")) {
-                    i += 7;
+                if (extractStringField(xml, i, xml_tags.item_end)) |_| {
                     break;
                 }
-
-                if (std.mem.startsWith(u8, xml[i..], "<title>")) {
-                    const start = i + 7;
-                    const end = std.mem.indexOfScalarPos(u8, xml, start, '<') orelse xml.len;
-                    title = xml[start..end];
-                    i = end;
-                } else if (std.mem.startsWith(u8, xml[i..], "<link>")) {
-                    const start = i + 6;
-                    const end = std.mem.indexOfScalarPos(u8, xml, start, '<') orelse xml.len;
-                    link = xml[start..end];
-                    i = end;
-                } else if (std.mem.startsWith(u8, xml[i..], "<torznab:attr name=\"seeders\">")) {
-                    const start = i + 29;
-                    const end = std.mem.indexOfScalarPos(u8, xml, start, '<') orelse xml.len;
-                    seeders = std.fmt.parseInt(u32, xml[start..end], 10) catch 0;
-                    i = end;
-                } else if (std.mem.startsWith(u8, xml[i..], "<torznab:attr name=\"peers\">")) {
-                    const start = i + 27;
-                    const end = std.mem.indexOfScalarPos(u8, xml, start, '<') orelse xml.len;
-                    peers = std.fmt.parseInt(u32, xml[start..end], 10) catch 0;
-                    i = end;
+                if (extractStringField(xml, i, xml_tags.title)) |result| {
+                    title = result.value;
+                    i = result.end;
+                } else if (extractStringField(xml, i, xml_tags.link)) |result| {
+                    link = result.value;
+                    i = result.end;
+                } else if (extractIntField(xml, i, xml_tags.seeders_attr, 0)) |result| {
+                    seeders = result.value;
+                    i = result.end;
+                } else if (extractIntField(xml, i, xml_tags.peers_attr, 0)) |result| {
+                    peers = result.value;
+                    i = result.end;
                 } else {
                     i += 1;
                 }
