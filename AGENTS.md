@@ -27,8 +27,8 @@ When the user asks you to start a new feature, he should tell you what the featu
 
 **MANDATORY**: These steps should ALWAYS be executed first when starting a new task, and should always be the first steps when making a plan for a new task:
 
-1. If current branch has uncommitted changes or unpushed commits, inform user, stop and await instructions
-2. Check whether current branch is main. If it is not, switch to main
+1. If current branch is not main, and has uncommitted changes or unpushed commits, inform user, stop and await instructions
+2. If current branch is not main, switch to main
 3. If main has uncomitted changes or unpushed commits, inform user, stop and await instructions
 4. Pull latest changes from main
 5. Checkout a new branch with the format "feature/{succint name for task}" (ensure branch doesn't exist already in local or remote)
