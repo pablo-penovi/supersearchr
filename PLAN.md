@@ -71,7 +71,7 @@ pub fn loadConfig(allocator: std.mem.Allocator) !Config
 
 ### 3.2 Jackett Client (`jackett/client.zig`)
 
-**Responsibility:** Search torrents via Jackett API
+**Responsibility:** Search torrents via Jackett Torznab API
 
 **Public API:**
 ```zig
@@ -79,7 +79,7 @@ pub const Torrent = struct {
     title: []const u8,
     seeders: u32,
     leechers: u32,
-    magnet_uri: ?[]const u8,
+    link: []const u8,
 };
 
 pub const Client = struct {
@@ -93,24 +93,37 @@ pub const Client = struct {
 ```
 
 **Implementation:**
-- Endpoint: `<apiUrl>:<apiPort>/api/v2.0/indexers/all/results?apikey=<key>&q=<query>&o=json`
+- Endpoint: `<apiUrl>:<apiPort>/api/v2.0/indexers/all/results/torznab/api?apikey=<key>&q=<query>`
 - Use `std.http.Client`
-- Parse JSON response
-- Filter: only keep results where `magnet_uri` is non-null
+- Parse XML response (manual parsing - Zig 0.15.2 has no std.xml)
+- XML structure to parse:
+  ```xml
+  <rss>
+    <channel>
+      <item>
+        <title>Release Name</title>
+        <link>magnet:?xt=urn:btih:...</link>
+        <torznab:attr name="seeders">42</torznab:attr>
+        <torznab:attr name="peers">13</torznab:attr>
+      </item>
+    </channel>
+  </rss>
+  ```
+- Keep all results (both magnet links and .torrent URLs)
 - Sort by `seeders` descending
 
 **Error handling:**
 - Connection refused → "Cannot connect to Jackett. Is it running on URL <apiUrl> and port <apiPort>?"
 - HTTP error → "Jackett returned error: <code>"
-- JSON parse error → "Failed to parse Jackett response"
+- XML parse error → "Failed to parse Jackett response"
 
 **Unit Tests:**
-- Test JSON parsing with valid response
+- Test XML parsing with valid response
 - Test filtering results without magnet
 - Test sorting by seeders descending
 - Test connection refused error
 - Test HTTP error response by Jackett API
-- Test JSON parse error when invalid JSON received
+- Test XML parse error when invalid XML received
 
 ---
 
