@@ -82,7 +82,7 @@ pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
     }
 }
 
-fn runSearchState(app: *App, _: *SearchState) !void {
+fn runSearchState(app: *App) !void {
     var widget = search_widget.SearchWidget.init(app.allocator);
     defer widget.deinit();
 

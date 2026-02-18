@@ -353,7 +353,7 @@ None. All from Zig 0.15.2 std:
 6. Create `src/tui/widgets/results.zig` - Results display
 7. Create `src/tui/app.zig` - State machine + tests
 8. Update `src/main.zig` - Wire everything
-9. Run `zig build test` to verify all tests pass
+9. Run `zig build test --summary all` to verify all tests pass
 10. Manual testing
 
 ---
@@ -361,6 +361,6 @@ None. All from Zig 0.15.2 std:
 ## 8. Testing Strategy
 
 - **Unit tests** for each module (config, jackett, term, superseedr, app)
-- Run with `zig build test`
+- Run with `zig build test --summary all`
 - Mock HTTP responses where possible for jackett client tests
 - Manual testing for TUI interaction
