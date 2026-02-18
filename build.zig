@@ -128,6 +128,37 @@ pub fn build(b: *std.Build) void {
     results_widget_tests.root_module.addImport("torrent", torrent_mod);
     const run_results_widget_tests = b.addRunArtifact(results_widget_tests);
 
+    // Test for app module
+    const config_mod = b.createModule(.{
+        .root_source_file = b.path("src/config.zig"),
+    });
+    const superseedr_mod = b.createModule(.{
+        .root_source_file = b.path("src/superseedr/client.zig"),
+    });
+    const search_widget_mod = b.createModule(.{
+        .root_source_file = b.path("src/tui/widgets/search.zig"),
+    });
+    const results_widget_mod = b.createModule(.{
+        .root_source_file = b.path("src/tui/widgets/results.zig"),
+    });
+    const app_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tui/app.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    app_tests.root_module.addImport("config", config_mod);
+    app_tests.root_module.addImport("jackett", b.createModule(.{
+        .root_source_file = b.path("src/jackett/client.zig"),
+    }));
+    app_tests.root_module.addImport("superseedr", superseedr_mod);
+    app_tests.root_module.addImport("term", term_mod);
+    app_tests.root_module.addImport("search", search_widget_mod);
+    app_tests.root_module.addImport("results", results_widget_mod);
+    app_tests.root_module.addImport("torrent", torrent_mod);
+    const run_app_tests = b.addRunArtifact(app_tests);
+
     // Creates an executable that will run `test` blocks from the executable's
     // root module. Note that test executables only test one module at a time,
     // hence why we have to create two separate ones.
@@ -148,6 +179,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_superseedr_tests.step);
     test_step.dependOn(&run_search_widget_tests.step);
     test_step.dependOn(&run_results_widget_tests.step);
+    test_step.dependOn(&run_app_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

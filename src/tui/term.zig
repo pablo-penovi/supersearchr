@@ -36,7 +36,7 @@ pub const Color = enum {
 var original_termios: std.posix.termios = undefined;
 var term_initialized: bool = false;
 
-pub fn initTerm() !void {
+pub fn init() !void {
     const stdin = std.io.getStdIn();
     original_termios = try std.posix.tcgetattr(stdin.handle);
     term_initialized = true;
@@ -63,7 +63,7 @@ pub fn initTerm() !void {
     try std.posix.tcsetattr(stdin.handle, .now, raw);
 }
 
-pub fn deinitTerm() void {
+pub fn deinit() void {
     if (!term_initialized) return;
     term_initialized = false;
 

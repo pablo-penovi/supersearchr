@@ -28,26 +28,58 @@ fn extractIntField(xml: []const u8, i: usize, tag: []const u8, default: u32) ?st
     return null;
 }
 
+pub const SearchExecutor = fn (allocator: std.mem.Allocator, url: []const u8) anyerror![]Torrent;
+
+pub fn defaultSearchExecutor(allocator: std.mem.Allocator, url: []const u8) anyerror![]Torrent {
+    const http_client = std.http.Client{ .allocator = allocator };
+    defer http_client.deinit();
+
+    const uri = try std.Uri.parse(url);
+    var request = try http_client.open(.GET, uri, .{});
+    defer request.deinit();
+
+    request.send() catch |err| {
+        if (err == error.ConnectionRefused) {
+            return error.ConnectionRefused;
+        }
+        return err;
+    };
+    request.wait() catch |err| {
+        if (err == error.ConnectionRefused) {
+            return error.ConnectionRefused;
+        }
+        return err;
+    };
+
+    const status = request.response.status;
+    if (status != .ok) {
+        return error.HttpError;
+    }
+
+    const body = try request.reader().readAllAlloc(allocator, std.math.maxInt(usize));
+    defer allocator.free(body);
+
+    return try parseTorrents(allocator, body);
+}
+
 pub const Client = struct {
     allocator: std.mem.Allocator,
     base_url: []const u8,
     api_key: []const u8,
-    http_client: std.http.Client,
 
     pub fn init(allocator: std.mem.Allocator, base_url: []const u8, api_key: []const u8) Client {
         return .{
             .allocator = allocator,
             .base_url = base_url,
             .api_key = api_key,
-            .http_client = std.http.Client{ .allocator = allocator },
         };
     }
 
-    pub fn deinit(self: *Client) void {
-        self.http_client.deinit();
+    pub fn search(self: *Client, query: []const u8) ![]Torrent {
+        return self.searchWithExecutor(query, defaultSearchExecutor);
     }
 
-    pub fn search(self: *Client, query: []const u8) ![]Torrent {
+    pub fn searchWithExecutor(self: *Client, query: []const u8, executor: SearchExecutor) ![]Torrent {
         const url = try std.fmt.allocPrint(
             self.allocator,
             "{s}/api/v2.0/indexers/all/results/torznab/api?apikey={s}&q={s}",
@@ -55,32 +87,7 @@ pub const Client = struct {
         );
         defer self.allocator.free(url);
 
-        const uri = try std.Uri.parse(url);
-        var request = try self.http_client.open(.GET, uri, .{});
-        defer request.deinit();
-
-        request.send() catch |err| {
-            if (err == error.ConnectionRefused) {
-                return error.ConnectionRefused;
-            }
-            return err;
-        };
-        request.wait() catch |err| {
-            if (err == error.ConnectionRefused) {
-                return error.ConnectionRefused;
-            }
-            return err;
-        };
-
-        const status = request.response.status;
-        if (status != .ok) {
-            return error.HttpError;
-        }
-
-        const body = try request.reader().readAllAlloc(self.allocator, std.math.maxInt(usize));
-        defer self.allocator.free(body);
-
-        return parseTorrents(self.allocator, body);
+        return try executor(self.allocator, url);
     }
 };
 
