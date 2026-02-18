@@ -78,6 +78,16 @@ pub fn build(b: *std.Build) void {
     });
     const run_config_tests = b.addRunArtifact(config_tests);
 
+    // Test for jackett module
+    const jackett_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/jackett/client.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_jackett_tests = b.addRunArtifact(jackett_tests);
+
     // Creates an executable that will run `test` blocks from the executable's
     // root module. Note that test executables only test one module at a time,
     // hence why we have to create two separate ones.
@@ -94,6 +104,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_config_tests.step);
+    test_step.dependOn(&run_jackett_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
