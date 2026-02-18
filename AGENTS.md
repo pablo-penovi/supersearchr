@@ -19,7 +19,12 @@ defer {
 ```
 make sure the capture is a var (|*{name}|) and not a const (|{name}|)
 
-- When adding a new module with tests, add a corresponding test section in build.zig following the pattern of existing tests (config_tests, jackett_tests, superseedr_tests) and dependOn it in the test_step
+- When adding a new module with tests, add a corresponding test section in build.zig following the pattern of existing tests (config_tests, jackett_tests, superseedr_tests, search_widget_tests, results_widget_tests) and dependOn it in the test_step
+
+## Running Tests
+
+- Always run tests with `zig build test --summary all` to see detailed output including test names and pass/fail status
+- Do not use `std.debug.print` for output in tests or production code unless explicitly asked by the user or the plan
 
 ## Workflows
 
