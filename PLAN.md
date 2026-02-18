@@ -180,19 +180,27 @@ pub const Color = enum {
 
 **Public API:**
 ```zig
-pub fn addMagnet(magnet: []const u8) !void
+pub const AddLinkError = error{
+    InvalidLink,
+    SuperseedrNotFound,
+    SuperseedrFailed,
+};
+
+pub fn addLink(allocator: std.mem.Allocator, link: []const u8) AddLinkError!void
 ```
 
 **Implementation:**
-- Use `std.process.Child.run()` with `&.{"superseedr", "add", magnet}`
+- Use `std.process.Child.run()` with `&.{"superseedr", "add", link}`
+- Validate link: must start with `"magnet:"` OR end with `".torrent"`
 - Check for `std.process.Child.RunError`
-- On success: print "Added to superseedr" in green
+- On success: caller prints "Added to superseedr" in green (via TUI)
 - On spawn failure: "Error: superseedr not found. Ensure it is in your PATH."
 - On error by superseedr: "Error: superseedr returned error: <message>"
 
 **Unit Tests:**
 - Test magnet URL validation (starts with "magnet:")
-- Test command building
+- Test .torrent URL validation (ends with ".torrent")
+- Test invalid URL returns error
 
 ---
 
@@ -320,8 +328,8 @@ pub fn run(allocator: std.mem.Allocator, config: Config) !void
 | Jackett connection | "Cannot connect to Jackett" | Show error screen |
 | Jackett HTTP error | "Jackett error: {code}" | Show error screen |
 | Jackett parse error | "Failed to parse response" | Show error screen |
-| superseedr not found | "superseedr not in PATH" | Show error + Exit 1 |
-| superseedr failed | "Failed to add magnet" | Show in results screen |
+| superseedr not found | "superseedr not in PATH" | Show TUI error screen |
+| superseedr failed | "Failed to add magnet/torrent" | Show TUI error screen |
 
 ---
 
