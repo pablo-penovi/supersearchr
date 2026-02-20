@@ -31,7 +31,7 @@ pub const ResultsWidget = struct {
         term.moveCursor(1, 1);
         term.clearScreen();
 
-        const display_count = @min(@as(usize, @intCast(max_rows - 3)), self.torrents.len);
+        const display_count = @min(@as(usize, @intCast(max_rows - 4)), self.torrents.len);
 
         {
             var buf: [64]u8 = undefined;
@@ -51,19 +51,17 @@ pub const ResultsWidget = struct {
             std.fs.File.stdout().writeAll(msg) catch {};
         }
 
-        term.moveCursor(max_rows - 1, 1);
-        if (self.input_buffer.items.len > 0) {
-            std.fs.File.stdout().writeAll("> ") catch {};
-            std.fs.File.stdout().writeAll(self.input_buffer.items) catch {};
-            term.setColor(.cyan);
-            std.fs.File.stdout().writeAll("_") catch {};
-            term.resetColor();
-        } else {
-            std.fs.File.stdout().writeAll("> ") catch {};
-        }
+        term.moveCursor(max_rows - 2, 1);
+        std.fs.File.stdout().writeAll("[Enter to confirm, ESC exit, n new search]\r\n") catch {};
 
-        term.moveCursor(max_rows, 1);
-        std.fs.File.stdout().writeAll("[Enter number to add, ESC exit, n new]") catch {};
+        term.moveCursor(max_rows - 1, 1);
+        std.fs.File.stdout().writeAll("Select #: ") catch {};
+        if (self.input_buffer.items.len > 0) {
+            std.fs.File.stdout().writeAll(self.input_buffer.items) catch {};
+        }
+        term.setColor(.cyan);
+        std.fs.File.stdout().writeAll("█") catch {};
+        term.resetColor();
     }
 
     pub fn handleEvent(self: *ResultsWidget, event: term.Event) ResultsAction {
