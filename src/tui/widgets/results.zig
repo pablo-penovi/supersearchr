@@ -35,19 +35,19 @@ pub const ResultsWidget = struct {
 
         {
             var buf: [64]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "Results ({d} found)\n", .{self.total_count}) catch return;
+            const msg = std.fmt.bufPrint(&buf, "Results ({d} found)\r\n", .{self.total_count}) catch return;
             std.fs.File.stdout().writeAll(msg) catch {};
         }
 
         for (self.torrents[0..display_count], 1..) |torrent, idx| {
             var buf: [256]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "{d}. {s} [S:{d} L:{d}]\n", .{ idx, torrent.title, torrent.seeders, torrent.leechers }) catch continue;
+            const msg = std.fmt.bufPrint(&buf, "{d}. {s} [S:{d} L:{d}]\r\n", .{ idx, torrent.title, torrent.seeders, torrent.leechers }) catch continue;
             std.fs.File.stdout().writeAll(msg) catch {};
         }
 
         if (self.torrents.len < self.total_count) {
             var buf: [64]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "(showing first {d} of {d})\n", .{ self.torrents.len, self.total_count }) catch return;
+            const msg = std.fmt.bufPrint(&buf, "(showing first {d} of {d})\r\n", .{ self.torrents.len, self.total_count }) catch return;
             std.fs.File.stdout().writeAll(msg) catch {};
         }
 

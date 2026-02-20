@@ -47,7 +47,10 @@ pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
 
     const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
 
-    var client = jackett.Client.init(allocator, cfg.api_url, cfg.api_key);
+    const base_url = try std.fmt.allocPrint(allocator, "{s}:{d}", .{ cfg.api_url, cfg.api_port });
+    defer allocator.free(base_url);
+
+    var client = jackett.Client.init(allocator, base_url, cfg.api_key);
 
     var app = App{
         .allocator = allocator,
@@ -98,7 +101,7 @@ fn runSearchState(app: *App) !void {
         switch (action) {
             .continue_search => {},
             .submit => {
-                const query = widget.getQuery();
+                const query = try app.allocator.dupe(u8, widget.getQuery());
                 app.state = .{ .loading = .{ .query = query } };
                 return;
             },
@@ -111,9 +114,12 @@ fn runSearchState(app: *App) !void {
 }
 
 fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
-    renderLoading(loading_state.query);
+    const query = loading_state.query;
+    defer app.allocator.free(query);
 
-    const torrents = app.client.searchWithExecutor(loading_state.query, jackett.defaultSearchExecutor) catch |err| {
+    renderLoading(query);
+
+    const torrents = app.client.searchWithExecutor(query, jackett.defaultSearchExecutor) catch |err| {
         const message = getErrorMessage(err);
         app.state = .{ .err = .{ .message = message } };
         return;
