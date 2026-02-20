@@ -47,18 +47,12 @@ pub fn defaultSearchExecutor(allocator: std.mem.Allocator, url: []const u8) anye
         return error.HttpError;
     }
 
-    var body: std.ArrayList(u8) = .{};
-    defer body.deinit();
+    var read_buf: [4096]u8 = undefined;
+    const reader = response.reader(&read_buf);
+    const body = try reader.allocRemaining(allocator, .unlimited);
+    defer allocator.free(body);
 
-    var read_buf: [1024]u8 = undefined;
-    var reader = response.reader(&read_buf);
-    while (true) {
-        const bytes_read = reader.read(&read_buf) catch break;
-        if (bytes_read == 0) break;
-        try body.appendSlice(read_buf[0..bytes_read]);
-    }
-
-    return try parseTorrents(allocator, body.items);
+    return try parseTorrents(allocator, body);
 }
 
 pub const Client = struct {
