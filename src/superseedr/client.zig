@@ -4,9 +4,16 @@ pub const AddLinkError = error{
     InvalidLink,
     SuperseedrNotFound,
     SuperseedrFailed,
+    SuperseedrLaunchFailed,
 };
 
 pub const Executor = fn (allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void;
+
+/// Returns true if superseedr is already running.
+pub const ProcessChecker = fn (allocator: std.mem.Allocator) anyerror!bool;
+
+/// Spawns superseedr in the background (does not wait for it to exit).
+pub const Spawner = fn (allocator: std.mem.Allocator) anyerror!void;
 
 pub fn defaultExecutor(allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void {
     const result = std.process.Child.run(.{
@@ -22,25 +29,53 @@ pub fn defaultExecutor(allocator: std.mem.Allocator, argv: []const []const u8) a
     }
 }
 
+pub fn defaultProcessChecker(allocator: std.mem.Allocator) anyerror!bool {
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{ "pgrep", "-x", "superseedr" },
+    }) catch return false;
+    defer {
+        allocator.free(result.stdout);
+        allocator.free(result.stderr);
+    }
+    return result.term == .Exited and result.term.Exited == 0;
+}
+
+pub fn defaultSpawner(allocator: std.mem.Allocator) anyerror!void {
+    var child = std.process.Child.init(&.{ "ghostty", "-e", "superseedr" }, allocator);
+    try child.spawn();
+    std.Thread.sleep(500 * std.time.ns_per_ms);
+}
+
+pub fn addLinkWithAllDeps(
+    allocator: std.mem.Allocator,
+    link: []const u8,
+    executor: Executor,
+    checker: ProcessChecker,
+    spawner: Spawner,
+) AddLinkError!void {
+    const is_magnet = std.mem.startsWith(u8, link, "magnet:");
+    const is_torrent = std.mem.endsWith(u8, link, ".torrent");
+    if (!is_magnet and !is_torrent) return error.InvalidLink;
+
+    const running = checker(allocator) catch false;
+    if (!running) {
+        spawner(allocator) catch return error.SuperseedrLaunchFailed;
+    }
+
+    executor(allocator, &.{ "superseedr", "add", link }) catch |err| switch (err) {
+        error.SuperseedrNotFound => return error.SuperseedrNotFound,
+        error.SuperseedrFailed => return error.SuperseedrFailed,
+        else => return error.SuperseedrFailed,
+    };
+}
+
 pub fn addLink(allocator: std.mem.Allocator, link: []const u8) AddLinkError!void {
-    return addLinkWithExecutor(allocator, link, defaultExecutor);
+    return addLinkWithAllDeps(allocator, link, defaultExecutor, defaultProcessChecker, defaultSpawner);
 }
 
 pub fn addLinkWithExecutor(allocator: std.mem.Allocator, link: []const u8, executor: Executor) AddLinkError!void {
-    const is_magnet = std.mem.startsWith(u8, link, "magnet:");
-    const is_torrent = std.mem.endsWith(u8, link, ".torrent");
-
-    if (!is_magnet and !is_torrent) {
-        return error.InvalidLink;
-    }
-
-    executor(allocator, &.{ "superseedr", "add", link }) catch |err| {
-        switch (err) {
-            error.SuperseedrNotFound => return error.SuperseedrNotFound,
-            error.SuperseedrFailed => return error.SuperseedrFailed,
-            else => return error.SuperseedrFailed,
-        }
-    };
+    return addLinkWithAllDeps(allocator, link, executor, defaultProcessChecker, defaultSpawner);
 }
 
 test "valid magnet URL is accepted" {
@@ -50,10 +85,16 @@ test "valid magnet URL is accepted" {
         fn exec(_: std.mem.Allocator, argv: []const []const u8) anyerror!void {
             captured.* = argv;
         }
+        fn checker(_: std.mem.Allocator) anyerror!bool {
+            return true;
+        }
+        fn spawner(_: std.mem.Allocator) anyerror!void {
+            unreachable;
+        }
     };
     mock.captured = &argv_captured;
 
-    try addLinkWithExecutor(std.testing.allocator, "magnet:?xt=urn:btih:1234567890", mock.exec);
+    try addLinkWithAllDeps(std.testing.allocator, "magnet:?xt=urn:btih:1234567890", mock.exec, mock.checker, mock.spawner);
     try std.testing.expect(argv_captured != null);
     try std.testing.expectEqualStrings("superseedr", argv_captured.?[0]);
     try std.testing.expectEqualStrings("add", argv_captured.?[1]);
@@ -67,10 +108,16 @@ test "valid torrent URL is accepted" {
         fn exec(_: std.mem.Allocator, argv: []const []const u8) anyerror!void {
             captured.* = argv;
         }
+        fn checker(_: std.mem.Allocator) anyerror!bool {
+            return true;
+        }
+        fn spawner(_: std.mem.Allocator) anyerror!void {
+            unreachable;
+        }
     };
     mock.captured = &argv_captured;
 
-    try addLinkWithExecutor(std.testing.allocator, "https://example.com/file.torrent", mock.exec);
+    try addLinkWithAllDeps(std.testing.allocator, "https://example.com/file.torrent", mock.exec, mock.checker, mock.spawner);
     try std.testing.expect(argv_captured != null);
     try std.testing.expectEqualStrings("superseedr", argv_captured.?[0]);
     try std.testing.expectEqualStrings("add", argv_captured.?[1]);
@@ -83,9 +130,15 @@ test "invalid URL returns error" {
             _ = argv;
             unreachable;
         }
-    }.exec;
+        fn checker(_: std.mem.Allocator) anyerror!bool {
+            return true;
+        }
+        fn spawner(_: std.mem.Allocator) anyerror!void {
+            unreachable;
+        }
+    };
 
-    try std.testing.expectError(error.InvalidLink, addLinkWithExecutor(std.testing.allocator, "https://example.com/file.txt", mock));
+    try std.testing.expectError(error.InvalidLink, addLinkWithAllDeps(std.testing.allocator, "https://example.com/file.txt", mock.exec, mock.checker, mock.spawner));
 }
 
 test "empty URL returns error" {
@@ -94,7 +147,72 @@ test "empty URL returns error" {
             _ = argv;
             unreachable;
         }
-    }.exec;
+        fn checker(_: std.mem.Allocator) anyerror!bool {
+            return true;
+        }
+        fn spawner(_: std.mem.Allocator) anyerror!void {
+            unreachable;
+        }
+    };
 
-    try std.testing.expectError(error.InvalidLink, addLinkWithExecutor(std.testing.allocator, "", mock));
+    try std.testing.expectError(error.InvalidLink, addLinkWithAllDeps(std.testing.allocator, "", mock.exec, mock.checker, mock.spawner));
+}
+
+test "superseedr already running - no spawn called" {
+    const mock = struct {
+        fn exec(_: std.mem.Allocator, argv: []const []const u8) anyerror!void {
+            _ = argv;
+        }
+        fn checker(_: std.mem.Allocator) anyerror!bool {
+            return true;
+        }
+        fn spawner(_: std.mem.Allocator) anyerror!void {
+            unreachable; // must not be called
+        }
+    };
+
+    try addLinkWithAllDeps(std.testing.allocator, "magnet:?xt=urn:btih:abc", mock.exec, mock.checker, mock.spawner);
+}
+
+test "superseedr not running - spawned then add called" {
+    const state = struct {
+        var spawned: bool = false;
+        var added: bool = false;
+    };
+    state.spawned = false;
+    state.added = false;
+
+    const mock = struct {
+        fn exec(_: std.mem.Allocator, argv: []const []const u8) anyerror!void {
+            _ = argv;
+            state.added = true;
+        }
+        fn checker(_: std.mem.Allocator) anyerror!bool {
+            return false;
+        }
+        fn spawner(_: std.mem.Allocator) anyerror!void {
+            state.spawned = true;
+        }
+    };
+
+    try addLinkWithAllDeps(std.testing.allocator, "magnet:?xt=urn:btih:abc", mock.exec, mock.checker, mock.spawner);
+    try std.testing.expect(state.spawned);
+    try std.testing.expect(state.added);
+}
+
+test "spawner failure returns SuperseedrLaunchFailed" {
+    const mock = struct {
+        fn exec(_: std.mem.Allocator, argv: []const []const u8) anyerror!void {
+            _ = argv;
+            unreachable;
+        }
+        fn checker(_: std.mem.Allocator) anyerror!bool {
+            return false;
+        }
+        fn spawner(_: std.mem.Allocator) anyerror!void {
+            return error.SomeLaunchError;
+        }
+    };
+
+    try std.testing.expectError(error.SuperseedrLaunchFailed, addLinkWithAllDeps(std.testing.allocator, "magnet:?xt=urn:btih:abc", mock.exec, mock.checker, mock.spawner));
 }

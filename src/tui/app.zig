@@ -229,6 +229,7 @@ fn getSuperseedrErrorMessage(err: superseedr.AddLinkError) []const u8 {
         error.InvalidLink => "Invalid link",
         error.SuperseedrNotFound => "superseedr not found in PATH",
         error.SuperseedrFailed => "Failed to add to superseedr",
+        error.SuperseedrLaunchFailed => "Failed to launch superseedr",
     };
 }
 
