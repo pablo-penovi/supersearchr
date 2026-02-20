@@ -94,11 +94,7 @@ pub fn readKey() !Event {
         return Event{ .key = .digit, .value = b };
     }
 
-    if (b >= 'a' and b <= 'z') {
-        return Event{ .key = .char, .value = b };
-    }
-
-    if (b >= 'A' and b <= 'Z') {
+    if (b >= 0x20 and b <= 0x7e) {
         return Event{ .key = .char, .value = b };
     }
 

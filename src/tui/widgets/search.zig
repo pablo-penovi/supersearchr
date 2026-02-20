@@ -22,7 +22,7 @@ pub const SearchWidget = struct {
         std.fs.File.stdout().writeAll("Search: ") catch {};
         std.fs.File.stdout().writeAll(self.query.items) catch {};
         term.setColor(.cyan);
-        std.fs.File.stdout().writeAll("_") catch {};
+        std.fs.File.stdout().writeAll("█") catch {};
         term.resetColor();
         term.moveCursor(3, 1);
         std.fs.File.stdout().writeAll("[Enter to search, ESC to exit]") catch {};
@@ -30,7 +30,7 @@ pub const SearchWidget = struct {
 
     pub fn handleEvent(self: *SearchWidget, event: term.Event) SearchAction {
         switch (event.key) {
-            .char => {
+            .char, .digit => {
                 self.query.append(self.allocator, event.value) catch return .continue_search;
                 return .continue_search;
             },

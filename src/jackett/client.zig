@@ -6,8 +6,8 @@ const xml_tags = .{
     .item_end = "</item>",
     .title = "<title>",
     .link = "<link>",
-    .seeders_attr = "<torznab:attr name=\"seeders\">",
-    .peers_attr = "<torznab:attr name=\"peers\">",
+    .seeders_attr = "<torznab:attr name=\"seeders\" value=\"",
+    .peers_attr = "<torznab:attr name=\"peers\" value=\"",
 };
 
 fn extractStringField(xml: []const u8, i: usize, tag: []const u8) ?struct { value: []const u8, end: usize } {
@@ -22,7 +22,7 @@ fn extractStringField(xml: []const u8, i: usize, tag: []const u8) ?struct { valu
 fn extractIntField(xml: []const u8, i: usize, tag: []const u8, default: u32) ?struct { value: u32, end: usize } {
     if (std.mem.startsWith(u8, xml[i..], tag)) {
         const start = i + tag.len;
-        const end = std.mem.indexOfScalarPos(u8, xml, start, '<') orelse xml.len;
+        const end = std.mem.indexOfScalarPos(u8, xml, start, '"') orelse xml.len;
         return .{ .value = std.fmt.parseInt(u32, xml[start..end], 10) catch default, .end = end };
     }
     return null;
@@ -77,16 +77,37 @@ pub const Client = struct {
     }
 
     pub fn searchWithExecutor(self: *Client, query: []const u8, executor: SearchExecutor) ![]Torrent {
+        const encoded_query = try percentEncode(self.allocator, query);
+        defer self.allocator.free(encoded_query);
+
         const url = try std.fmt.allocPrint(
             self.allocator,
             "{s}/api/v2.0/indexers/all/results/torznab/api?apikey={s}&q={s}",
-            .{ self.base_url, self.api_key, query },
+            .{ self.base_url, self.api_key, encoded_query },
         );
         defer self.allocator.free(url);
 
         return try executor(self.allocator, url);
     }
 };
+
+fn percentEncode(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    var result: std.ArrayList(u8) = .{};
+    errdefer result.deinit(allocator);
+    for (raw) |c| {
+        switch (c) {
+            'A'...'Z', 'a'...'z', '0'...'9', '-', '_', '.', '~' => {
+                try result.append(allocator, c);
+            },
+            else => {
+                var buf: [3]u8 = undefined;
+                const encoded = std.fmt.bufPrint(&buf, "%{X:0>2}", .{c}) catch unreachable;
+                try result.appendSlice(allocator, encoded);
+            },
+        }
+    }
+    return result.toOwnedSlice(allocator);
+}
 
 fn parseTorrents(allocator: std.mem.Allocator, xml: []const u8) ![]Torrent {
     var torrents: std.ArrayList(Torrent) = .{};
@@ -155,7 +176,7 @@ fn parseTorrents(allocator: std.mem.Allocator, xml: []const u8) ![]Torrent {
 test "parse XML with valid response" {
     const allocator = std.testing.allocator;
 
-    const xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?><rss version=\"1.0\"><channel><item><title>Movie.2024.1080p.WEB.h264</title><link>magnet:?xt=urn:btih:abc123</link><torznab:attr name=\"seeders\">100</torznab:attr><torznab:attr name=\"peers\">50</torznab:attr></item><item><title>Movie.2024.720p.WEB.h264</title><link>magnet:?xt=urn:btih:def456</link><torznab:attr name=\"seeders\">200</torznab:attr><torznab:attr name=\"peers\">75</torznab:attr></item></channel></rss>";
+    const xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?><rss version=\"1.0\"><channel><item><title>Movie.2024.1080p.WEB.h264</title><link>magnet:?xt=urn:btih:abc123</link><torznab:attr name=\"seeders\" value=\"100\"/><torznab:attr name=\"peers\" value=\"50\"/></item><item><title>Movie.2024.720p.WEB.h264</title><link>magnet:?xt=urn:btih:def456</link><torznab:attr name=\"seeders\" value=\"200\"/><torznab:attr name=\"peers\" value=\"75\"/></item></channel></rss>";
 
     const torrents = try parseTorrents(allocator, xml);
     defer {
@@ -177,7 +198,7 @@ test "parse XML with valid response" {
 test "include non-magnet links" {
     const allocator = std.testing.allocator;
 
-    const xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?><rss version=\"1.0\"><channel><item><title>With Magnet</title><link>magnet:?xt=urn:btih:abc123</link><torznab:attr name=\"seeders\">100</torznab:attr></item><item><title>With Torrent Link</title><link>https://example.com/torrent.torrent</link><torznab:attr name=\"seeders\">200</torznab:attr></item><item><title>No Link</title></item></channel></rss>";
+    const xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?><rss version=\"1.0\"><channel><item><title>With Magnet</title><link>magnet:?xt=urn:btih:abc123</link><torznab:attr name=\"seeders\" value=\"100\"/></item><item><title>With Torrent Link</title><link>https://example.com/torrent.torrent</link><torznab:attr name=\"seeders\" value=\"200\"/></item><item><title>No Link</title></item></channel></rss>";
 
     const torrents = try parseTorrents(allocator, xml);
     defer {
@@ -198,7 +219,7 @@ test "include non-magnet links" {
 test "sort by seeders descending" {
     const allocator = std.testing.allocator;
 
-    const xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?><rss version=\"1.0\"><channel><item><title>Low Seeders</title><link>magnet:?xt=urn:btih:aaa</link><torznab:attr name=\"seeders\">10</torznab:attr></item><item><title>High Seeders</title><link>magnet:?xt=urn:btih:bbb</link><torznab:attr name=\"seeders\">1000</torznab:attr></item><item><title>Medium Seeders</title><link>magnet:?xt=urn:btih:ccc</link><torznab:attr name=\"seeders\">100</torznab:attr></item></channel></rss>";
+    const xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?><rss version=\"1.0\"><channel><item><title>Low Seeders</title><link>magnet:?xt=urn:btih:aaa</link><torznab:attr name=\"seeders\" value=\"10\"/></item><item><title>High Seeders</title><link>magnet:?xt=urn:btih:bbb</link><torznab:attr name=\"seeders\" value=\"1000\"/></item><item><title>Medium Seeders</title><link>magnet:?xt=urn:btih:ccc</link><torznab:attr name=\"seeders\" value=\"100\"/></item></channel></rss>";
 
     const torrents = try parseTorrents(allocator, xml);
     defer {
