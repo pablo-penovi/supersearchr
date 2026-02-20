@@ -141,7 +141,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
             app.state = .{ .err = .{ .message = "Failed to read input" } };
             return;
         };
-        const action = widget.handleEvent(event);
+        const action = widget.handleEvent(event, app.term_rows);
 
         switch (action) {
             .continue_browsing => {},
