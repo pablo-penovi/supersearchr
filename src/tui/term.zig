@@ -67,6 +67,9 @@ pub fn deinit() void {
     if (!term_initialized) return;
     term_initialized = false;
 
+    clearScreen();
+    std.fs.File.stdout().writeAll("\x1b[1;1H") catch {};
+
     const stdin = std.fs.File.stdin();
     std.posix.tcsetattr(stdin.handle, .NOW, original_termios) catch {};
 }

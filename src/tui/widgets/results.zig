@@ -31,7 +31,7 @@ pub const ResultsWidget = struct {
         term.moveCursor(1, 1);
         term.clearScreen();
 
-        const display_count = @min(@as(usize, @intCast(max_rows - 4)), self.torrents.len);
+        const display_count = @min(@as(usize, @intCast(max_rows - 5)), self.torrents.len);
 
         {
             var buf: [64]u8 = undefined;
