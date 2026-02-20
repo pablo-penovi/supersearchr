@@ -31,35 +31,34 @@ fn extractIntField(xml: []const u8, i: usize, tag: []const u8, default: u32) ?st
 pub const SearchExecutor = fn (allocator: std.mem.Allocator, url: []const u8) anyerror![]Torrent;
 
 pub fn defaultSearchExecutor(allocator: std.mem.Allocator, url: []const u8) anyerror![]Torrent {
-    const http_client = std.http.Client{ .allocator = allocator };
+    var http_client = std.http.Client{ .allocator = allocator };
     defer http_client.deinit();
 
     const uri = try std.Uri.parse(url);
-    var request = try http_client.open(.GET, uri, .{});
+    var request = try http_client.request(.GET, uri, .{});
     defer request.deinit();
 
-    request.send() catch |err| {
-        if (err == error.ConnectionRefused) {
-            return error.ConnectionRefused;
-        }
-        return err;
-    };
-    request.wait() catch |err| {
-        if (err == error.ConnectionRefused) {
-            return error.ConnectionRefused;
-        }
-        return err;
-    };
+    try request.sendBodiless();
+    var header_buf: [1024]u8 = undefined;
+    var response = try request.receiveHead(&header_buf);
 
-    const status = request.response.status;
+    const status = response.head.status;
     if (status != .ok) {
         return error.HttpError;
     }
 
-    const body = try request.reader().readAllAlloc(allocator, std.math.maxInt(usize));
-    defer allocator.free(body);
+    var body: std.ArrayList(u8) = .{};
+    defer body.deinit();
 
-    return try parseTorrents(allocator, body);
+    var read_buf: [1024]u8 = undefined;
+    var reader = response.reader(&read_buf);
+    while (true) {
+        const bytes_read = reader.read(&read_buf) catch break;
+        if (bytes_read == 0) break;
+        try body.appendSlice(read_buf[0..bytes_read]);
+    }
+
+    return try parseTorrents(allocator, body.items);
 }
 
 pub const Client = struct {
@@ -73,6 +72,10 @@ pub const Client = struct {
             .base_url = base_url,
             .api_key = api_key,
         };
+    }
+
+    pub fn deinit(self: *Client) void {
+        _ = self;
     }
 
     pub fn search(self: *Client, query: []const u8) ![]Torrent {

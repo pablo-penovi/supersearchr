@@ -19,13 +19,13 @@ pub const SearchWidget = struct {
     pub fn render(self: *SearchWidget) void {
         term.moveCursor(1, 1);
         term.clearScreen();
-        std.io.getStdOut().writeAll("Search: ") catch {};
-        std.io.getStdOut().writeAll(self.query.items) catch {};
+        std.fs.File.stdout().writeAll("Search: ") catch {};
+        std.fs.File.stdout().writeAll(self.query.items) catch {};
         term.setColor(.cyan);
-        std.io.getStdOut().writeAll("_") catch {};
+        std.fs.File.stdout().writeAll("_") catch {};
         term.resetColor();
         term.moveCursor(3, 1);
-        std.io.getStdOut().writeAll("[Enter to search, ESC to exit]") catch {};
+        std.fs.File.stdout().writeAll("[Enter to search, ESC to exit]") catch {};
     }
 
     pub fn handleEvent(self: *SearchWidget, event: term.Event) SearchAction {

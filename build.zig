@@ -36,6 +36,53 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const config_mod = b.createModule(.{
+        .root_source_file = b.path("src/config.zig"),
+    });
+    const jackett_mod = b.createModule(.{
+        .root_source_file = b.path("src/jackett/client.zig"),
+    });
+    const superseedr_mod = b.createModule(.{
+        .root_source_file = b.path("src/superseedr/client.zig"),
+    });
+    const term_mod = b.createModule(.{
+        .root_source_file = b.path("src/tui/term.zig"),
+    });
+    const torrent_mod = b.createModule(.{
+        .root_source_file = b.path("src/structs/torrent.zig"),
+    });
+
+    jackett_mod.addImport("torrent", torrent_mod);
+    const search_widget_mod = b.createModule(.{
+        .root_source_file = b.path("src/tui/widgets/search.zig"),
+    });
+    search_widget_mod.addImport("term", term_mod);
+    const results_widget_mod = b.createModule(.{
+        .root_source_file = b.path("src/tui/widgets/results.zig"),
+    });
+    results_widget_mod.addImport("term", term_mod);
+    results_widget_mod.addImport("torrent", torrent_mod);
+    const app_mod = b.createModule(.{
+        .root_source_file = b.path("src/tui/app.zig"),
+    });
+
+    app_mod.addImport("config", config_mod);
+    app_mod.addImport("jackett", jackett_mod);
+    app_mod.addImport("superseedr", superseedr_mod);
+    app_mod.addImport("term", term_mod);
+    app_mod.addImport("search", search_widget_mod);
+    app_mod.addImport("results", results_widget_mod);
+    app_mod.addImport("torrent", torrent_mod);
+
+    exe.root_module.addImport("config", config_mod);
+    exe.root_module.addImport("jackett", jackett_mod);
+    exe.root_module.addImport("superseedr", superseedr_mod);
+    exe.root_module.addImport("term", term_mod);
+    exe.root_module.addImport("torrent", torrent_mod);
+    exe.root_module.addImport("search", search_widget_mod);
+    exe.root_module.addImport("results", results_widget_mod);
+    exe.root_module.addImport("tui/app", app_mod);
+
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
@@ -79,9 +126,7 @@ pub fn build(b: *std.Build) void {
     const run_config_tests = b.addRunArtifact(config_tests);
 
     // Test for jackett module
-    const torrent_mod = b.createModule(.{
-        .root_source_file = b.path("src/structs/torrent.zig"),
-    });
+    // Reuse torrent_mod defined above
     const jackett_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/jackett/client.zig"),
@@ -103,9 +148,7 @@ pub fn build(b: *std.Build) void {
     const run_superseedr_tests = b.addRunArtifact(superseedr_tests);
 
     // Test for search widget
-    const term_mod = b.createModule(.{
-        .root_source_file = b.path("src/tui/term.zig"),
-    });
+    // Reuse term_mod defined above
     const search_widget_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tui/widgets/search.zig"),
@@ -129,18 +172,7 @@ pub fn build(b: *std.Build) void {
     const run_results_widget_tests = b.addRunArtifact(results_widget_tests);
 
     // Test for app module
-    const config_mod = b.createModule(.{
-        .root_source_file = b.path("src/config.zig"),
-    });
-    const superseedr_mod = b.createModule(.{
-        .root_source_file = b.path("src/superseedr/client.zig"),
-    });
-    const search_widget_mod = b.createModule(.{
-        .root_source_file = b.path("src/tui/widgets/search.zig"),
-    });
-    const results_widget_mod = b.createModule(.{
-        .root_source_file = b.path("src/tui/widgets/results.zig"),
-    });
+    // Reuse modules defined above
     const app_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tui/app.zig"),

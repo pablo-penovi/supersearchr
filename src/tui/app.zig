@@ -45,7 +45,7 @@ pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
     };
     defer term.deinit();
 
-    const size = term.getTerminalSize() catch .{ .rows = 24, .cols = 80 };
+    const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
 
     var client = jackett.Client.init(allocator, cfg.api_url, cfg.api_key);
 
@@ -66,8 +66,8 @@ pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
 
     while (app.running) {
         switch (app.state) {
-            .search => |*search_state| {
-                try runSearchState(&app, search_state);
+            .search => {
+                try runSearchState(&app);
             },
             .loading => |*loading_state| {
                 try runLoadingState(&app, loading_state);
@@ -178,17 +178,19 @@ fn runErrorState(app: *App, error_state: *ErrorState) !void {
 fn renderLoading(query: []const u8) void {
     term.moveCursor(1, 1);
     term.clearScreen();
-    std.io.getStdOut().writer().print("Searching for \"{s}\"...", .{query}) catch {};
+    var buf: [64]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "Searching for \"{s}\"...", .{query}) catch return;
+    std.fs.File.stdout().writeAll(msg) catch {};
 }
 
 fn renderSuccess() void {
     term.moveCursor(1, 1);
     term.clearScreen();
     term.setColor(.green);
-    std.io.getStdOut().writeAll("Added to superseedr!") catch {};
+    std.fs.File.stdout().writeAll("Added to superseedr!") catch {};
     term.resetColor();
     term.moveCursor(3, 1);
-    std.io.getStdOut().writeAll("Press any key to continue...") catch {};
+    std.fs.File.stdout().writeAll("Press any key to continue...") catch {};
 
     const event = term.readKey() catch return;
     _ = event;
@@ -198,10 +200,14 @@ fn renderError(message: []const u8) void {
     term.moveCursor(1, 1);
     term.clearScreen();
     term.setColor(.red);
-    std.io.getStdOut().writer().print("Error: {s}", .{message}) catch {};
+    {
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Error: {s}", .{message}) catch return;
+        std.fs.File.stdout().writeAll(msg) catch {};
+    }
     term.resetColor();
     term.moveCursor(3, 1);
-    std.io.getStdOut().writeAll("Press any key to continue...") catch {};
+    std.fs.File.stdout().writeAll("Press any key to continue...") catch {};
 }
 
 fn getErrorMessage(err: anyerror) []const u8 {

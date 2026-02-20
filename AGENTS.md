@@ -18,8 +18,8 @@ defer {
 }
 ```
 make sure the capture is a var (|*{name}|) and not a const (|{name}|)
-
 - When adding a new module with tests, add a corresponding test section in build.zig following the pattern of existing tests (config_tests, jackett_tests, superseedr_tests, search_widget_tests, results_widget_tests, app_tests) and dependOn it in the test_step
+- std.io.getStdIn() and std.io.getStdOut() are deprecated in Zig 0.15.2. Use std.fs.File.stdin() and std.fs.File.stdout() instead
 
 ## Running Tests
 
