@@ -12,7 +12,7 @@ pub fn loadConfig(allocator: std.mem.Allocator) !Config {
 
     const file = std.fs.openFileAbsolute(config_path, .{}) catch |err| {
         if (err == error.FileNotFound) {
-            try createConfigFile(allocator, config_path);
+            try createConfigFile(config_path);
             return error.ConfigCreated;
         }
         return err;

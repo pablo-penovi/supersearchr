@@ -45,9 +45,12 @@ pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
     };
     defer term.deinit();
 
-    const size = term.getTerminalSize() catch .{ .rows = 24, .cols = 80 };
+    const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
 
-    var client = jackett.Client.init(allocator, cfg.api_url, cfg.api_key);
+    const base_url = try std.fmt.allocPrint(allocator, "{s}:{d}", .{ cfg.api_url, cfg.api_port });
+    defer allocator.free(base_url);
+
+    var client = jackett.Client.init(allocator, base_url, cfg.api_key);
 
     var app = App{
         .allocator = allocator,
@@ -66,8 +69,8 @@ pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
 
     while (app.running) {
         switch (app.state) {
-            .search => |*search_state| {
-                try runSearchState(&app, search_state);
+            .search => {
+                try runSearchState(&app);
             },
             .loading => |*loading_state| {
                 try runLoadingState(&app, loading_state);
@@ -98,7 +101,7 @@ fn runSearchState(app: *App) !void {
         switch (action) {
             .continue_search => {},
             .submit => {
-                const query = widget.getQuery();
+                const query = try app.allocator.dupe(u8, widget.getQuery());
                 app.state = .{ .loading = .{ .query = query } };
                 return;
             },
@@ -111,9 +114,12 @@ fn runSearchState(app: *App) !void {
 }
 
 fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
-    renderLoading(loading_state.query);
+    const query = loading_state.query;
+    defer app.allocator.free(query);
 
-    const torrents = app.client.searchWithExecutor(loading_state.query, jackett.defaultSearchExecutor) catch |err| {
+    renderLoading(query);
+
+    const torrents = app.client.searchWithExecutor(query, jackett.defaultSearchExecutor) catch |err| {
         const message = getErrorMessage(err);
         app.state = .{ .err = .{ .message = message } };
         return;
@@ -178,17 +184,19 @@ fn runErrorState(app: *App, error_state: *ErrorState) !void {
 fn renderLoading(query: []const u8) void {
     term.moveCursor(1, 1);
     term.clearScreen();
-    std.io.getStdOut().writer().print("Searching for \"{s}\"...", .{query}) catch {};
+    var buf: [64]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "Searching for \"{s}\"...", .{query}) catch return;
+    std.fs.File.stdout().writeAll(msg) catch {};
 }
 
 fn renderSuccess() void {
     term.moveCursor(1, 1);
     term.clearScreen();
     term.setColor(.green);
-    std.io.getStdOut().writeAll("Added to superseedr!") catch {};
+    std.fs.File.stdout().writeAll("Added to superseedr!") catch {};
     term.resetColor();
     term.moveCursor(3, 1);
-    std.io.getStdOut().writeAll("Press any key to continue...") catch {};
+    std.fs.File.stdout().writeAll("Press any key to continue...") catch {};
 
     const event = term.readKey() catch return;
     _ = event;
@@ -198,10 +206,14 @@ fn renderError(message: []const u8) void {
     term.moveCursor(1, 1);
     term.clearScreen();
     term.setColor(.red);
-    std.io.getStdOut().writer().print("Error: {s}", .{message}) catch {};
+    {
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Error: {s}", .{message}) catch return;
+        std.fs.File.stdout().writeAll(msg) catch {};
+    }
     term.resetColor();
     term.moveCursor(3, 1);
-    std.io.getStdOut().writeAll("Press any key to continue...") catch {};
+    std.fs.File.stdout().writeAll("Press any key to continue...") catch {};
 }
 
 fn getErrorMessage(err: anyerror) []const u8 {

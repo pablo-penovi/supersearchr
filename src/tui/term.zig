@@ -37,78 +37,79 @@ var original_termios: std.posix.termios = undefined;
 var term_initialized: bool = false;
 
 pub fn init() !void {
-    const stdin = std.io.getStdIn();
+    const stdin = std.fs.File.stdin();
     original_termios = try std.posix.tcgetattr(stdin.handle);
     term_initialized = true;
 
     var raw = original_termios;
-    raw.lflag.cbreak = true;
-    raw.lflag.echo = false;
-    raw.iflag.ignbrk = false;
-    raw.iflag.brkint = false;
-    raw.iflag.parmrk = false;
-    raw.iflag.inpck = false;
-    raw.iflag.istrip = false;
-    raw.iflag.inlcr = false;
-    raw.iflag.igncr = false;
-    raw.iflag.icrnl = false;
-    raw.iflag.ixon = false;
-    raw.iflag.ixany = false;
-    raw.iflag.ixoff = false;
-    raw.iflag.imaxbel = false;
-    raw.oflag.opost = false;
-    raw.cflagPARENB = false;
-    raw.cflagCS8 = true;
+    raw.lflag.ICANON = false;
+    raw.lflag.ECHO = false;
+    raw.iflag.IGNBRK = false;
+    raw.iflag.BRKINT = false;
+    raw.iflag.PARMRK = false;
+    raw.iflag.INPCK = false;
+    raw.iflag.ISTRIP = false;
+    raw.iflag.INLCR = false;
+    raw.iflag.IGNCR = false;
+    raw.iflag.ICRNL = false;
+    raw.iflag.IXON = false;
+    raw.iflag.IXANY = false;
+    raw.iflag.IXOFF = false;
+    raw.iflag.IMAXBEL = false;
+    raw.oflag.OPOST = false;
+    raw.cflag.PARENB = false;
+    raw.cflag.CSIZE = .CS8;
 
-    try std.posix.tcsetattr(stdin.handle, .now, raw);
+    try std.posix.tcsetattr(stdin.handle, .NOW, raw);
 }
 
 pub fn deinit() void {
     if (!term_initialized) return;
     term_initialized = false;
 
-    const stdin = std.io.getStdIn();
-    std.posix.tcsetattr(stdin.handle, .now, original_termios) catch {};
+    const stdin = std.fs.File.stdin();
+    std.posix.tcsetattr(stdin.handle, .NOW, original_termios) catch {};
 }
 
 pub fn readKey() !Event {
-    const stdin = std.io.getStdIn();
-    const byte = try stdin.reader().readByte();
+    const stdin = std.fs.File.stdin();
+    var buf: [1]u8 = undefined;
+    const byte = try stdin.read(&buf);
+    if (byte == 0) return error.EndOfStream;
+    const b = buf[0];
 
-    if (byte == 0x1b) {
+    if (b == 0x1b) {
         return Event{ .key = .escape, .value = 0 };
     }
 
-    if (byte == '\r' or byte == '\n') {
+    if (b == '\r' or b == '\n') {
         return Event{ .key = .enter, .value = 0 };
     }
 
-    if (byte == 0x7f or byte == 0x08) {
+    if (b == 0x7f or b == 0x08) {
         return Event{ .key = .backspace, .value = 0 };
     }
 
-    if (byte >= '0' and byte <= '9') {
-        return Event{ .key = .digit, .value = byte };
+    if (b >= '0' and b <= '9') {
+        return Event{ .key = .digit, .value = b };
     }
 
-    if (byte >= 'a' and byte <= 'z') {
-        return Event{ .key = .char, .value = byte };
+    if (b >= 0x20 and b <= 0x7e) {
+        return Event{ .key = .char, .value = b };
     }
 
-    if (byte >= 'A' and byte <= 'Z') {
-        return Event{ .key = .char, .value = byte };
-    }
-
-    return Event{ .key = .unknown, .value = byte };
+    return Event{ .key = .unknown, .value = b };
 }
 
 pub fn clearScreen() void {
-    std.io.getStdOut().writeAll("\x1b[2J") catch {};
+    std.fs.File.stdout().writeAll("\x1b[2J") catch {};
 }
 
 pub fn moveCursor(row: u16, col: u16) void {
-    const stdout = std.io.getStdOut();
-    stdout.writer().print("\x1b[{};{}H", .{ row, col }) catch {};
+    const stdout = std.fs.File.stdout();
+    var buf: [32]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "\x1b[{};{}H", .{ row, col }) catch return;
+    stdout.writeAll(msg) catch {};
 }
 
 pub fn setColor(fg: Color) void {
@@ -130,21 +131,24 @@ pub fn setColor(fg: Color) void {
         .bright_cyan => 96,
         .bright_white => 97,
     };
-    const stdout = std.io.getStdOut();
-    stdout.writer().print("\x1b[{}m", .{code}) catch {};
+    var buf: [16]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "\x1b[{}m", .{code}) catch return;
+    std.fs.File.stdout().writeAll(msg) catch {};
 }
 
 pub fn resetColor() void {
-    std.io.getStdOut().writeAll("\x1b[0m") catch {};
+    std.fs.File.stdout().writeAll("\x1b[0m") catch {};
 }
 
-pub fn getTerminalSize() !struct { rows: u16, cols: u16 } {
-    const stdin = std.io.getStdIn();
-    var winsize: std.os.linux.winsize = undefined;
-    const result = std.os.linux.ioctl(stdin.handle, std.os.linux.TIOCGWINSZ, @intFromPtr(&winsize));
+pub const TerminalSize = struct { rows: u16, cols: u16 };
+
+pub fn getTerminalSize() !TerminalSize {
+    const stdin = std.fs.File.stdin();
+    var winsize: std.posix.winsize = undefined;
+    const result = std.os.linux.ioctl(stdin.handle, 0x5413, @intFromPtr(&winsize));
 
     if (result == 0) {
-        return .{ .rows = winsize.ws_row, .cols = winsize.ws_col };
+        return TerminalSize{ .rows = winsize.row, .cols = winsize.col };
     }
 
     return error.Unexpected;
