@@ -10,7 +10,7 @@ Supersearchr is a Linux-only-guaranteed (actually not sure if it would be cross-
 > [!NOTE]
 > This app has no other dependency than the Zig standard library
 
-Build:
+Basic build:
 ```bash
 zig build
 ```
@@ -18,6 +18,11 @@ zig build
 Build a Linux executable:
 ```bash
 zig build -Dtarget=x86_64-linux
+```
+
+Recommended build (safe optimization, specific to CPU architecture running the build command):
+```bash
+zig build -Doptimize=ReleaseFast -Dtarget=native-native
 ```
 
 Run (from project folder):
