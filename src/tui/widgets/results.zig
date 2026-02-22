@@ -45,7 +45,8 @@ pub const ResultsWidget = struct {
         const compact = max_cols < 48 or max_rows < 10;
         const panel_width = if (compact) @as(usize, 0) else @as(usize, @intCast(max_cols - 2));
         const inner_width = if (compact) @as(usize, 0) else panel_width - 2;
-        const title_col_width = if (compact) @as(usize, 0) else if (inner_width > 21) inner_width - 21 else 8;
+        const row_fixed_width: usize = 16; // " " + "  {seeders:>5}  {leechers:>5} "
+        const title_col_width = if (compact) @as(usize, 0) else if (inner_width > row_fixed_width) inner_width - row_fixed_width else 8;
         const content_rows: usize = if (max_rows > 9) @as(usize, @intCast(max_rows - 9)) else 1;
         self.display_count = @max(@as(usize, 1), @min(content_rows, self.torrents.len));
         const end_idx = @min(self.scroll_offset + self.display_count, self.torrents.len);
@@ -351,7 +352,7 @@ fn drawPanelFrame(
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.setFg256(colors.muted);
-    theme.writePadded(stdout, " #  Title                                          S      L ", inner_width) catch {};
+    theme.writePadded(stdout, " Title                                             S      L ", inner_width) catch {};
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.resetColor();
@@ -385,8 +386,8 @@ fn drawContentRow(
     const row_title = theme.truncateWithEllipsis(torrent.title, title_col_width, trunc_buf[0..]);
     const row = std.fmt.bufPrint(
         &row_buf,
-        " {d:>2} {s}  {d:>5}  {d:>5} ",
-        .{ abs_idx + 1, row_title, torrent.seeders, torrent.leechers },
+        " {s}  {d:>5}  {d:>5} ",
+        .{ row_title, torrent.seeders, torrent.leechers },
     ) catch "";
 
     if (abs_idx == selected_idx) {
