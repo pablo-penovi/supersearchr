@@ -340,7 +340,7 @@ fn computeRedrawMode(
 fn computeDisplayCount(max_rows: u16, torrents_len: usize) usize {
     if (torrents_len == 0) return 1;
 
-    const content_rows: usize = if (max_rows > 10) @as(usize, @intCast(max_rows - 10)) else 1;
+    const content_rows: usize = if (max_rows > 7) @as(usize, @intCast(max_rows - 7)) else 1;
     return @max(@as(usize, 1), @min(content_rows, torrents_len));
 }
 
@@ -767,7 +767,7 @@ test "ResultsWidget handleEvent j moves cursor down" {
     try std.testing.expectEqual(@as(usize, 0), widget.cursor);
 
     const event = term.Event{ .key = .char, .value = 'j' };
-    const action = widget.handleEvent(event, 10);
+    const action = widget.handleEvent(event, 8);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
     try std.testing.expectEqual(@as(usize, 1), widget.cursor);
@@ -839,11 +839,11 @@ test "ResultsWidget handleEvent j adjusts scroll when cursor leaves window" {
         .{ .title = "T6", .seeders = 6, .leechers = 0, .link = "magnet:6" },
     };
     widget.setTorrents(torrents, 6);
-    // max_rows=10, display_count=1. cursor at 0 (last visible), j pushes it to 1 and scrolls.
+    // max_rows=8, display_count=1. cursor at 0 (last visible), j pushes it to 1 and scrolls.
     widget.cursor = 0;
 
     const event = term.Event{ .key = .char, .value = 'j' };
-    const action = widget.handleEvent(event, 10);
+    const action = widget.handleEvent(event, 8);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
     try std.testing.expectEqual(@as(usize, 1), widget.cursor);
@@ -931,9 +931,9 @@ test "ResultsWidget handleEvent J moves cursor by display_count" {
         .{ .title = "T8", .seeders = 8, .leechers = 0, .link = "magnet:8" },
     };
     widget.setTorrents(torrents, 8);
-    // max_rows=10, display_count=1, cursor=0 -> J moves cursor to 1
+    // max_rows=8, display_count=1, cursor=0 -> J moves cursor to 1
     const event = term.Event{ .key = .char, .value = 'J' };
-    const action = widget.handleEvent(event, 10);
+    const action = widget.handleEvent(event, 8);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
     try std.testing.expectEqual(@as(usize, 1), widget.cursor);
@@ -958,9 +958,9 @@ test "ResultsWidget handleEvent K retreats cursor by display_count" {
     widget.setTorrents(torrents, 8);
     widget.cursor = 1;
     widget.scroll_offset = 0;
-    // max_rows=10, display_count=1, cursor=1 -> K moves cursor to 0
+    // max_rows=8, display_count=1, cursor=1 -> K moves cursor to 0
     const event = term.Event{ .key = .char, .value = 'K' };
-    const action = widget.handleEvent(event, 10);
+    const action = widget.handleEvent(event, 8);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
     try std.testing.expectEqual(@as(usize, 0), widget.cursor);
