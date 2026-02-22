@@ -26,6 +26,36 @@ make sure the capture is a var (|*{name}|) and not a const (|{name}|)
 - Always run tests with `zig build test --summary all` to see detailed output including test names and pass/fail status
 - Do not use `std.debug.print` for output in tests or production code unless explicitly asked by the user or the plan
 
+## Project Overview
+
+Supersearchr is a TUI BitTorrent search tool written in Zig 0.15.2. It searches via Jackett and sends selected magnet or torrent links to Superseedr.
+
+## Commands
+
+```bash
+zig build                          # Compile (output: zig-out/bin/supersearchr)
+zig build run                      # Build and run
+zig build test --summary all       # Run all tests with detailed output
+```
+
+## Architecture
+
+The app is a state machine: SEARCH → LOADING → RESULTS → ERROR, with ESC exiting from any state.
+
+Modules use dependency injection (function pointer executors/checkers/spawners) for testability in `jackett/client.zig` and `superseedr/client.zig`.
+
+## Key Modules
+
+- `src/main.zig`: Entry point; loads config and starts the TUI app.
+- `src/config.zig`: Loads `~/.config/supersearchr/config.json`, validates required fields, and patches optional defaults like `terminal`.
+- `src/structs/torrent.zig`: Torrent struct (title, seeders, leechers, link).
+- `src/jackett/client.zig`: Jackett Torznab HTTP client; parses XML and sorts results.
+- `src/superseedr/client.zig`: Spawns or talks to `superseedr add <link>`, validates link format.
+- `src/tui/term.zig`: Raw terminal mode, input, ANSI helpers, size detection.
+- `src/tui/app.zig`: Main event loop and state machine.
+- `src/tui/widgets/search.zig`: Search input widget.
+- `src/tui/widgets/results.zig`: Results list widget with navigation and selection.
+
 ## Workflows
 
 ### Starting a new feature
