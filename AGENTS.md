@@ -56,6 +56,10 @@ Modules use dependency injection (function pointer executors/checkers/spawners) 
 - `src/tui/widgets/search.zig`: Search input widget.
 - `src/tui/widgets/results.zig`: Results list widget with navigation and selection.
 
+## Repository Map
+
+See `STRUCTURE.md` for a concise summary of all tracked files and their contents.
+
 ## Workflows
 
 ### Starting a new feature
