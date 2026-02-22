@@ -269,6 +269,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                 if (result) |_| {
                     term.discardPendingInput();
                     renderSuccess();
+                    widget.force_full_redraw = true;
                 } else |err| {
                     const message = getSuperseedrErrorMessage(err);
                     app.state = .{ .err = .{ .message = message } };
