@@ -22,7 +22,7 @@ zig build -Dtarget=x86_64-linux
 
 Recommended build (safe optimization, specific to CPU architecture running the build command):
 ```bash
-zig build -Doptimize=ReleaseFast -Dtarget=native-native
+zig build -Doptimize=ReleaseSafe -Dtarget=native-native
 ```
 
 Run (from project folder):
