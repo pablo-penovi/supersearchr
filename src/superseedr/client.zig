@@ -43,6 +43,8 @@ pub fn defaultProcessChecker(allocator: std.mem.Allocator) anyerror!bool {
 
 pub fn defaultSpawner(allocator: std.mem.Allocator) anyerror!void {
     var child = std.process.Child.init(&.{ "ghostty", "-e", "superseedr" }, allocator);
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
     try child.spawn();
     std.Thread.sleep(500 * std.time.ns_per_ms);
 }
