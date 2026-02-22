@@ -173,9 +173,6 @@ fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
         term.setFg256(colors.text);
         stdout.writeAll(query_line) catch {};
         stdout.writeAll("\r\n") catch {};
-        term.setFg256(colors.muted);
-        stdout.writeAll("Contacting Jackett...") catch {};
-        term.resetColor();
     } else {
         term.moveCursor(@as(u16, @intCast(top_pad)), 1);
 
@@ -193,15 +190,24 @@ fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
         term.resetColor();
         stdout.writeAll("\r\n") catch {};
         writeSpaces(stdout, left_pad) catch {};
+        theme.drawPanelRow(stdout, panel_width, "", border, colors) catch {};
+        writeSpaces(stdout, left_pad) catch {};
         theme.drawPanelRow(stdout, panel_width, query_line, border, colors) catch {};
         writeSpaces(stdout, left_pad) catch {};
-        theme.drawPanelRow(stdout, panel_width, " Contacting Jackett...", border, colors) catch {};
+        term.setFg256(colors.panel_border);
+        stdout.writeAll(border.vertical) catch {};
+        term.setFg256(colors.muted);
+        theme.writePadded(stdout, "", panel_width - 2) catch {};
+        term.setFg256(colors.panel_border);
+        stdout.writeAll(border.vertical) catch {};
+        term.resetColor();
+        stdout.writeAll("\r\n") catch {};
         writeSpaces(stdout, left_pad) catch {};
         theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
     }
 
     var stop = std.atomic.Value(bool).init(false);
-    const spinner_row = if (compact) @as(u16, 3) else @as(u16, @intCast(top_pad + 4));
+    const spinner_row = if (compact) @as(u16, 3) else @as(u16, @intCast(top_pad + 6));
     const spinner_col = if (compact) @as(u16, 1) else @as(u16, @intCast(left_pad + 3));
     const thread = try std.Thread.spawn(.{}, spinnerThread, .{SpinnerContext{
         .message = " Contacting Jackett...",

@@ -27,6 +27,7 @@ pub const SearchWidget = struct {
         const border = theme.unicode_border;
         const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
         const redraw_mode = computeRedrawMode(self.has_drawn_once, self.last_size, size);
+        term.hideCursor();
 
         if (size.cols < 56 or size.rows < 12) {
             switch (redraw_mode) {
@@ -44,6 +45,7 @@ pub const SearchWidget = struct {
 
         const cursor = computeSearchCursorPosition(size, self.query.items.len);
         term.moveCursor(cursor.row, cursor.col);
+        term.showCursor();
         self.has_drawn_once = true;
         self.last_size = size;
     }
@@ -132,11 +134,16 @@ fn drawCompactFull(stdout: std.fs.File, colors: theme.Theme, query: []const u8) 
 
 fn drawCompactInputLine(stdout: std.fs.File, size: term.TerminalSize, colors: theme.Theme, query: []const u8) void {
     term.moveCursor(clampCursorCoord(size.rows, 2), 1);
-    writeSpaces(stdout, @as(usize, @intCast(size.cols))) catch {};
-    term.moveCursor(clampCursorCoord(size.rows, 2), 1);
+
+    var trunc_buf: [512]u8 = undefined;
+    const usable = if (size.cols <= 2) @as(usize, 0) else @as(usize, @intCast(size.cols - 2));
+    const shown = theme.truncateWithEllipsis(query, usable, trunc_buf[0..]);
+
     term.setFg256(colors.text);
     stdout.writeAll("> ") catch {};
-    stdout.writeAll(query) catch {};
+    stdout.writeAll(shown) catch {};
+    const fill = usable - shown.len;
+    writeSpaces(stdout, fill) catch {};
     term.resetColor();
 }
 
@@ -180,17 +187,26 @@ fn drawPanelFrame(stdout: std.fs.File, colors: theme.Theme, border: theme.Border
 
 fn drawPanelQueryRow(stdout: std.fs.File, size: term.TerminalSize, colors: theme.Theme, border: theme.BorderChars, layout: PanelLayout, query: []const u8) void {
     const query_row = clampCursorCoord(size.rows, layout.top_pad + 3);
-    term.moveCursor(query_row, 1);
-    writeSpaces(stdout, @as(usize, @intCast(size.cols))) catch {};
-    term.moveCursor(query_row, 1);
+    term.moveCursor(query_row, @as(u16, @intCast(layout.left_pad + 1)));
 
     var trunc_buf: [512]u8 = undefined;
     var line_buf: [640]u8 = undefined;
     const shown = theme.truncateWithEllipsis(query, layout.panel_width - 11, trunc_buf[0..]);
     const query_line = std.fmt.bufPrint(&line_buf, " Query: {s}", .{shown}) catch " Query:";
 
-    writeSpaces(stdout, layout.left_pad) catch {};
-    theme.drawPanelRow(stdout, layout.panel_width, query_line, border, colors) catch {};
+    writePanelRowNoNewline(stdout, layout.panel_width, query_line, border, colors, true) catch {};
+}
+
+fn writePanelRowNoNewline(writer: anytype, width: usize, content: []const u8, border: theme.BorderChars, colors: theme.Theme, emit_colors: bool) !void {
+    if (width < 2) return;
+    const inner = width - 2;
+    if (emit_colors) term.setFg256(colors.panel_border);
+    try writer.writeAll(border.vertical);
+    if (emit_colors) term.setFg256(colors.text);
+    try theme.writePadded(writer, content, inner);
+    if (emit_colors) term.setFg256(colors.panel_border);
+    try writer.writeAll(border.vertical);
+    if (emit_colors) term.resetColor();
 }
 
 fn clampCursorCoord(max: u16, value: usize) u16 {
@@ -348,4 +364,41 @@ test "computeRedrawMode unchanged size is partial" {
 test "computeRedrawMode resize is full" {
     const mode = computeRedrawMode(true, .{ .rows = 24, .cols = 80 }, .{ .rows = 30, .cols = 100 });
     try std.testing.expectEqual(RedrawMode.full, mode);
+}
+
+test "writePanelRowNoNewline writes row without CRLF" {
+    const allocator = std.testing.allocator;
+    var out = std.ArrayList(u8){};
+    defer out.deinit(allocator);
+
+    const ascii_border = theme.BorderChars{
+        .top_left = "+",
+        .top_right = "+",
+        .bottom_left = "+",
+        .bottom_right = "+",
+        .horizontal = "-",
+        .vertical = "|",
+    };
+
+    try writePanelRowNoNewline(out.writer(allocator), 10, " Query:", ascii_border, theme.superseedr_like, false);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\r\n") == null);
+}
+
+test "writePanelRowNoNewline fills to width with borders" {
+    const allocator = std.testing.allocator;
+    var out = std.ArrayList(u8){};
+    defer out.deinit(allocator);
+
+    const ascii_border = theme.BorderChars{
+        .top_left = "+",
+        .top_right = "+",
+        .bottom_left = "+",
+        .bottom_right = "+",
+        .horizontal = "-",
+        .vertical = "|",
+    };
+
+    try writePanelRowNoNewline(out.writer(allocator), 12, " Query: x", ascii_border, theme.superseedr_like, false);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "\r\n") == null);
+    try std.testing.expectEqual(@as(usize, 12), out.items.len);
 }
