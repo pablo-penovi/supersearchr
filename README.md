@@ -6,8 +6,8 @@ Supersearchr is a Linux-only-guaranteed (actually not sure if it would be cross-
 
 ## Build and Test
 
-Dependencies:
-Only the Zig standard library
+> [!NOTE]
+> This app has no other dependency than the Zig standard library
 
 Build:
 ```bash
