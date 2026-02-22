@@ -45,8 +45,7 @@ pub const ResultsWidget = struct {
         const compact = max_cols < 48 or max_rows < 10;
         const panel_width = if (compact) @as(usize, 0) else @as(usize, @intCast(max_cols - 2));
         const inner_width = if (compact) @as(usize, 0) else panel_width - 2;
-        const row_fixed_width: usize = 16; // " " + "  {seeders:>5}  {leechers:>5} "
-        const title_col_width = if (compact) @as(usize, 0) else if (inner_width > row_fixed_width) inner_width - row_fixed_width else 8;
+        const layout = if (compact) TableLayout.compactFallback() else TableLayout.forInnerWidth(inner_width);
         const content_rows: usize = if (max_rows > 9) @as(usize, @intCast(max_rows - 9)) else 1;
         self.display_count = @max(@as(usize, 1), @min(content_rows, self.torrents.len));
         const end_idx = @min(self.scroll_offset + self.display_count, self.torrents.len);
@@ -74,7 +73,7 @@ pub const ResultsWidget = struct {
                 } else {
                     term.moveCursor(1, 1);
                     term.clearScreen();
-                    drawPanelFrame(stdout, panel_width, inner_width, border, colors, self.total_count);
+                    drawPanelFrame(stdout, panel_width, inner_width, border, colors, self.total_count, layout);
                     for (0..self.display_count) |rel_idx| {
                         const abs_idx = self.scroll_offset + rel_idx;
                         if (abs_idx < end_idx) {
@@ -82,7 +81,7 @@ pub const ResultsWidget = struct {
                                 stdout,
                                 panel_width,
                                 inner_width,
-                                title_col_width,
+                                layout,
                                 border,
                                 colors,
                                 self.torrents,
@@ -99,7 +98,7 @@ pub const ResultsWidget = struct {
                     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 
                     term.setFg256(colors.muted);
-                    stdout.writeAll("  ENTER select | n search | ESC exit | j/k move | J/K page") catch {};
+                    stdout.writeAll("  ENTER select | n search | ESC exit | j/k line down/up | J/K page down/up") catch {};
                     term.resetColor();
                 }
             },
@@ -112,7 +111,7 @@ pub const ResultsWidget = struct {
                             stdout,
                             panel_width,
                             inner_width,
-                            title_col_width,
+                            layout,
                             border,
                             colors,
                             self.torrents,
@@ -136,7 +135,7 @@ pub const ResultsWidget = struct {
                     stdout,
                     panel_width,
                     inner_width,
-                    title_col_width,
+                    layout,
                     border,
                     colors,
                     self.torrents,
@@ -149,7 +148,7 @@ pub const ResultsWidget = struct {
                     stdout,
                     panel_width,
                     inner_width,
-                    title_col_width,
+                    layout,
                     border,
                     colors,
                     self.torrents,
@@ -279,6 +278,43 @@ const RenderSnapshot = struct {
     total_count: usize,
 };
 
+const TableLayout = struct {
+    title_col_width: usize,
+    seeders_width: usize,
+    leechers_width: usize,
+    title_to_seeders_gap: usize,
+    between_stats_gap: usize,
+
+    const fixed_seeders_width: usize = 4;
+    const fixed_leechers_width: usize = 4;
+    const fixed_title_to_seeders_gap: usize = 2;
+    const fixed_between_stats_gap: usize = 2;
+    const fixed_left_padding: usize = 1;
+    const fixed_right_padding: usize = 1;
+
+    fn forInnerWidth(inner_width: usize) TableLayout {
+        const fixed_suffix = fixed_left_padding + fixed_title_to_seeders_gap + fixed_seeders_width + fixed_between_stats_gap + fixed_leechers_width + fixed_right_padding;
+        const title_width = if (inner_width > fixed_suffix) inner_width - fixed_suffix else 1;
+        return .{
+            .title_col_width = title_width,
+            .seeders_width = fixed_seeders_width,
+            .leechers_width = fixed_leechers_width,
+            .title_to_seeders_gap = fixed_title_to_seeders_gap,
+            .between_stats_gap = fixed_between_stats_gap,
+        };
+    }
+
+    fn compactFallback() TableLayout {
+        return .{
+            .title_col_width = 0,
+            .seeders_width = fixed_seeders_width,
+            .leechers_width = fixed_leechers_width,
+            .title_to_seeders_gap = fixed_title_to_seeders_gap,
+            .between_stats_gap = fixed_between_stats_gap,
+        };
+    }
+};
+
 fn computeRedrawMode(
     has_drawn_once: bool,
     force_full_redraw: bool,
@@ -319,7 +355,7 @@ fn drawCompact(stdout: std.fs.File, colors: theme.Theme, torrents: []const Torre
         stdout.writeAll("\r\n") catch {};
     }
     term.setFg256(colors.muted);
-    stdout.writeAll("ENTER select | n search | ESC exit | j/k move") catch {};
+    stdout.writeAll("ENTER select | n search | ESC exit | j/k line down/up") catch {};
     term.resetColor();
 }
 
@@ -330,6 +366,7 @@ fn drawPanelFrame(
     border: theme.BorderChars,
     colors: theme.Theme,
     total_count: usize,
+    layout: TableLayout,
 ) void {
     writeSpaces(stdout, 1) catch {};
     theme.drawPanelTop(stdout, panel_width, border, colors) catch {};
@@ -352,7 +389,7 @@ fn drawPanelFrame(
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.setFg256(colors.muted);
-    theme.writePadded(stdout, " Title                                             S      L ", inner_width) catch {};
+    writeHeaderCells(stdout, inner_width, layout) catch {};
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.resetColor();
@@ -363,7 +400,7 @@ fn drawContentRow(
     stdout: std.fs.File,
     panel_width: usize,
     inner_width: usize,
-    title_col_width: usize,
+    layout: TableLayout,
     border: theme.BorderChars,
     colors: theme.Theme,
     torrents: []const Torrent,
@@ -381,14 +418,10 @@ fn drawContentRow(
     try stdout.writeAll(border.vertical);
 
     var trunc_buf: [512]u8 = undefined;
-    var row_buf: [640]u8 = undefined;
+    var cell_buf: [768]u8 = undefined;
     const torrent = torrents[abs_idx];
-    const row_title = theme.truncateWithEllipsis(torrent.title, title_col_width, trunc_buf[0..]);
-    const row = std.fmt.bufPrint(
-        &row_buf,
-        " {s}  {d:>5}  {d:>5} ",
-        .{ row_title, torrent.seeders, torrent.leechers },
-    ) catch "";
+    const row_title = theme.truncateWithEllipsis(torrent.title, layout.title_col_width, trunc_buf[0..]);
+    const row = buildDataCells(&cell_buf, inner_width, layout, row_title, torrent.seeders, torrent.leechers);
 
     if (abs_idx == selected_idx) {
         term.setBg256(colors.selected_bg);
@@ -406,6 +439,73 @@ fn drawContentRow(
     try stdout.writeAll(border.vertical);
     term.resetColor();
     try stdout.writeAll("\r\n");
+}
+
+fn writeHeaderCells(stdout: std.fs.File, inner_width: usize, layout: TableLayout) !void {
+    var buf: [256]u8 = undefined;
+    const header = buildHeaderCells(&buf, inner_width, layout);
+    try stdout.writeAll(header);
+}
+
+fn buildHeaderCells(buf: []u8, inner_width: usize, layout: TableLayout) []const u8 {
+    var stream = std.io.fixedBufferStream(buf);
+    const writer = stream.writer();
+
+    writer.writeAll(" ") catch return "";
+    theme.writePadded(writer, "Title", layout.title_col_width) catch return "";
+    writeSpaces(writer, layout.title_to_seeders_gap) catch return "";
+    writeRightAligned(writer, "S", layout.seeders_width) catch return "";
+    writeSpaces(writer, layout.between_stats_gap) catch return "";
+    writeRightAligned(writer, "L", layout.leechers_width) catch return "";
+    writer.writeAll(" ") catch return "";
+
+    const used = stream.getWritten().len;
+    if (used < inner_width) {
+        writeSpaces(writer, inner_width - used) catch {};
+    }
+    return stream.getWritten();
+}
+
+fn buildDataCells(
+    buf: []u8,
+    inner_width: usize,
+    layout: TableLayout,
+    title: []const u8,
+    seeders: u32,
+    leechers: u32,
+) []const u8 {
+    var stream = std.io.fixedBufferStream(buf);
+    const writer = stream.writer();
+
+    writer.writeAll(" ") catch return "";
+    theme.writePadded(writer, title, layout.title_col_width) catch return "";
+    writeSpaces(writer, layout.title_to_seeders_gap) catch return "";
+
+    var sbuf: [16]u8 = undefined;
+    const seeders_text = std.fmt.bufPrint(&sbuf, "{d}", .{seeders}) catch "";
+    writeRightAligned(writer, seeders_text, layout.seeders_width) catch return "";
+    writeSpaces(writer, layout.between_stats_gap) catch return "";
+
+    var lbuf: [16]u8 = undefined;
+    const leechers_text = std.fmt.bufPrint(&lbuf, "{d}", .{leechers}) catch "";
+    writeRightAligned(writer, leechers_text, layout.leechers_width) catch return "";
+    writer.writeAll(" ") catch return "";
+
+    const used = stream.getWritten().len;
+    if (used < inner_width) {
+        writeSpaces(writer, inner_width - used) catch {};
+    }
+    return stream.getWritten();
+}
+
+fn writeRightAligned(writer: anytype, text: []const u8, width: usize) !void {
+    if (text.len >= width) {
+        try writer.writeAll(text);
+        return;
+    }
+
+    try writeSpaces(writer, width - text.len);
+    try writer.writeAll(text);
 }
 
 fn drawStatusRow(
@@ -427,7 +527,15 @@ fn drawStatusRow(
         .{ showing_start, showing_end, total_count },
     ) catch " Showing ";
     try writeSpaces(stdout, 1);
-    try theme.drawPanelRow(stdout, panel_width, status, border, colors);
+    const inner_width = panel_width - 2;
+    term.setFg256(colors.panel_border);
+    try stdout.writeAll(border.vertical);
+    term.setFg256(colors.panel_title);
+    try theme.writePadded(stdout, status, inner_width);
+    term.setFg256(colors.panel_border);
+    try stdout.writeAll(border.vertical);
+    term.resetColor();
+    try stdout.writeAll("\r\n");
 }
 
 fn contentRowFromRelative(rel_idx: usize) u16 {
@@ -569,6 +677,48 @@ test "computeRedrawMode uses full when forced" {
         RenderMode.full,
         computeRedrawMode(true, true, prev, current),
     );
+}
+
+test "header and data cells align stats columns for short title" {
+    const inner_width: usize = 56;
+    const layout = TableLayout.forInnerWidth(inner_width);
+
+    var hbuf: [256]u8 = undefined;
+    const header = buildHeaderCells(&hbuf, inner_width, layout);
+
+    var rbuf: [256]u8 = undefined;
+    const row = buildDataCells(&rbuf, inner_width, layout, "Voyager", 7, 42);
+
+    const s_header = std.mem.indexOfScalar(u8, header, 'S') orelse return error.TestUnexpectedResult;
+    const l_header = std.mem.indexOfScalar(u8, header, 'L') orelse return error.TestUnexpectedResult;
+    const s_row = std.mem.lastIndexOfScalar(u8, row, '7') orelse return error.TestUnexpectedResult;
+    const l_row = std.mem.lastIndexOfScalar(u8, row, '2') orelse return error.TestUnexpectedResult;
+
+    try std.testing.expectEqual(s_header, s_row);
+    try std.testing.expectEqual(l_header, l_row);
+}
+
+test "stats columns stay aligned when title is truncated" {
+    const inner_width: usize = 56;
+    const layout = TableLayout.forInnerWidth(inner_width);
+
+    var hbuf: [256]u8 = undefined;
+    const header = buildHeaderCells(&hbuf, inner_width, layout);
+
+    var trunc_buf: [128]u8 = undefined;
+    const long_title = "A very very very long title that must truncate";
+    const shown_title = theme.truncateWithEllipsis(long_title, layout.title_col_width, trunc_buf[0..]);
+
+    var rbuf: [256]u8 = undefined;
+    const row = buildDataCells(&rbuf, inner_width, layout, shown_title, 999, 1000);
+
+    const s_header = std.mem.indexOfScalar(u8, header, 'S') orelse return error.TestUnexpectedResult;
+    const l_header = std.mem.indexOfScalar(u8, header, 'L') orelse return error.TestUnexpectedResult;
+    const s_row = std.mem.lastIndexOfScalar(u8, row, '9') orelse return error.TestUnexpectedResult;
+    const l_row = std.mem.lastIndexOfScalar(u8, row, '0') orelse return error.TestUnexpectedResult;
+
+    try std.testing.expectEqual(s_header, s_row);
+    try std.testing.expectEqual(l_header, l_row);
 }
 
 test "ResultsWidget handleEvent j moves cursor down" {
