@@ -1,5 +1,6 @@
 const std = @import("std");
 const term = @import("term");
+const theme = @import("theme");
 const Torrent = @import("torrent").Torrent;
 
 pub const ResultsWidget = struct {
@@ -32,93 +33,125 @@ pub const ResultsWidget = struct {
 
     pub fn render(self: *ResultsWidget, max_rows: u16, max_cols: u16) void {
         const stdout = std.fs.File.stdout();
+        const colors = theme.superseedr_like;
+        const border = theme.unicode_border;
         term.moveCursor(1, 1);
+        term.clearScreen();
 
-        if (max_cols < 10) {
-            stdout.writeAll("Terminal too narrow\r\n") catch {};
+        if (max_cols < 48 or max_rows < 10) {
+            term.setFg256(colors.panel_title);
+            term.setBold(true);
+            stdout.writeAll("Results\r\n") catch {};
+            term.setBold(false);
+            term.setFg256(colors.text);
+            if (self.torrents.len == 0) {
+                stdout.writeAll("No results found\r\n") catch {};
+            } else {
+                const current = self.torrents[self.cursor];
+                var trunc_buf: [96]u8 = undefined;
+                const shown = theme.truncateWithEllipsis(current.title, 78, trunc_buf[0..]);
+                stdout.writeAll("> ") catch {};
+                stdout.writeAll(shown) catch {};
+                stdout.writeAll("\r\n") catch {};
+            }
+            term.setFg256(colors.muted);
+            stdout.writeAll("ENTER select | n search | ESC exit | j/k move") catch {};
+            term.resetColor();
             return;
         }
 
-        const inner_width = @as(usize, @intCast(max_cols - 9));
-        const title_col_width = inner_width - 15;
-
-        if (self.torrents.len == 0) {
-            drawBorder('=', max_cols);
-
-            stdout.writeAll("||") catch {};
-            centerText(stdout, "Results (0 found)", inner_width) catch {};
-            stdout.writeAll("     ||\r\n") catch {};
-            drawBorder('=', max_cols);
-
-            stdout.writeAll("||") catch {};
-            centerText(stdout, "No results found", inner_width) catch {};
-            stdout.writeAll("     ||\r\n") catch {};
-
-            drawBorder('=', max_cols);
-            term.moveCursor(max_rows, 1);
-            stdout.writeAll("[n\xe2\x86\x92search  ESC\xe2\x86\x92exit]") catch {};
-            return;
-        }
-
-        self.display_count = @min(@as(usize, @intCast(max_rows - 9)), self.torrents.len);
+        const panel_width = @as(usize, @intCast(max_cols - 2));
+        const inner_width = panel_width - 2;
+        const title_col_width = if (inner_width > 21) inner_width - 21 else 8;
+        const content_rows: usize = if (max_rows > 9) @as(usize, @intCast(max_rows - 9)) else 1;
+        self.display_count = @max(@as(usize, 1), @min(content_rows, self.torrents.len));
         const end_idx = @min(self.scroll_offset + self.display_count, self.torrents.len);
 
-        drawBorder('=', max_cols);
+        writeSpaces(stdout, 1) catch {};
+        theme.drawPanelTop(stdout, panel_width, border, colors) catch {};
 
-        stdout.writeAll("||") catch {};
-        {
-            var buf: [64]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "Results ({d} found)", .{self.total_count}) catch return;
-            centerText(stdout, msg, inner_width) catch {};
-        }
-        stdout.writeAll("     ||\r\n") catch {};
-        drawBorder('=', max_cols);
+        writeSpaces(stdout, 1) catch {};
+        term.setFg256(colors.panel_border);
+        stdout.writeAll(border.vertical) catch {};
+        term.setFg256(colors.panel_title);
+        term.setBold(true);
+        var title_buf: [96]u8 = undefined;
+        const title = std.fmt.bufPrint(&title_buf, " Results ({d} found) ", .{self.total_count}) catch " Results ";
+        theme.writePadded(stdout, title, inner_width) catch {};
+        term.setBold(false);
+        term.setFg256(colors.panel_border);
+        stdout.writeAll(border.vertical) catch {};
+        term.resetColor();
+        stdout.writeAll("\r\n") catch {};
 
-        for (self.torrents[self.scroll_offset..end_idx], self.scroll_offset..) |torrent, abs_idx| {
-            stdout.writeAll("|| ") catch {};
-            if (abs_idx == self.cursor) {
-                term.reverseVideo(stdout) catch {};
-            }
-            var buf: [256]u8 = undefined;
-            const title_len = @min(torrent.title.len, title_col_width);
-            const msg = std.fmt.bufPrint(&buf, "{s}", .{torrent.title[0..title_len]}) catch continue;
-            stdout.writeAll(msg) catch {};
-            const padding_len = title_col_width - title_len;
-            for (0..padding_len) |_| stdout.writeAll(" ") catch {};
-            stdout.writeAll(" | S:") catch {};
-            {
-                var num_buf: [5]u8 = undefined;
-                const num_msg = std.fmt.bufPrint(&num_buf, "{d:>4}", .{torrent.seeders}) catch continue;
-                stdout.writeAll(num_msg) catch {};
-            }
-            stdout.writeAll(" | L:") catch {};
-            {
-                var num_buf: [5]u8 = undefined;
-                const num_msg = std.fmt.bufPrint(&num_buf, "{d:>4}", .{torrent.leechers}) catch continue;
-                stdout.writeAll(num_msg) catch {};
-            }
-            stdout.writeAll(" ||") catch {};
-            if (abs_idx == self.cursor) {
-                term.reverseVideoOff(stdout) catch {};
+        writeSpaces(stdout, 1) catch {};
+        term.setFg256(colors.panel_border);
+        stdout.writeAll(border.vertical) catch {};
+        term.setFg256(colors.muted);
+        theme.writePadded(stdout, " #  Title                                          S      L ", inner_width) catch {};
+        term.setFg256(colors.panel_border);
+        stdout.writeAll(border.vertical) catch {};
+        term.resetColor();
+        stdout.writeAll("\r\n") catch {};
+
+        if (self.torrents.len == 0) {
+            writeSpaces(stdout, 1) catch {};
+            theme.drawPanelRow(stdout, panel_width, " No results found", border, colors) catch {};
+        } else {
+            for (self.torrents[self.scroll_offset..end_idx], self.scroll_offset..) |torrent, abs_idx| {
+                writeSpaces(stdout, 1) catch {};
+                term.setFg256(colors.panel_border);
+                stdout.writeAll(border.vertical) catch {};
+
+                var trunc_buf: [512]u8 = undefined;
+                var row_buf: [640]u8 = undefined;
+                const row_title = theme.truncateWithEllipsis(torrent.title, title_col_width, trunc_buf[0..]);
+                const row = std.fmt.bufPrint(
+                    &row_buf,
+                    " {d:>2} {s}  {d:>5}  {d:>5} ",
+                    .{ abs_idx + 1, row_title, torrent.seeders, torrent.leechers },
+                ) catch "";
+
+                if (abs_idx == self.cursor) {
+                    term.setBg256(colors.selected_bg);
+                    term.setFg256(colors.selected_fg);
+                    term.setBold(true);
+                    theme.writePadded(stdout, row, inner_width) catch {};
+                    term.resetColor();
+                    term.setBold(false);
+                } else {
+                    term.setFg256(colors.text);
+                    theme.writePadded(stdout, row, inner_width) catch {};
+                }
+
+                term.setFg256(colors.panel_border);
+                stdout.writeAll(border.vertical) catch {};
                 term.resetColor();
+                stdout.writeAll("\r\n") catch {};
             }
-            stdout.writeAll("\r\n") catch {};
         }
 
-        drawBorder('=', max_cols);
-
-        stdout.writeAll("||") catch {};
-        {
-            var buf: [80]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "Showing {d}-{d} of {d}", .{ self.scroll_offset + 1, end_idx, self.total_count }) catch return;
-            centerText(stdout, msg, inner_width) catch {};
+        for (end_idx - self.scroll_offset..self.display_count) |_| {
+            writeSpaces(stdout, 1) catch {};
+            theme.drawPanelRow(stdout, panel_width, "", border, colors) catch {};
         }
-        stdout.writeAll("     ||\r\n") catch {};
 
-        drawBorder('=', max_cols);
+        var status_buf: [96]u8 = undefined;
+        const showing_start = if (self.torrents.len == 0) @as(usize, 0) else self.scroll_offset + 1;
+        const showing_end = if (self.torrents.len == 0) @as(usize, 0) else end_idx;
+        const status = std.fmt.bufPrint(
+            &status_buf,
+            " Showing {d}-{d} of {d} ",
+            .{ showing_start, showing_end, self.total_count },
+        ) catch " Showing ";
+        writeSpaces(stdout, 1) catch {};
+        theme.drawPanelRow(stdout, panel_width, status, border, colors) catch {};
+        writeSpaces(stdout, 1) catch {};
+        theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 
-        term.moveCursor(max_rows - 2, 1);
-        stdout.writeAll("[ENTER\xe2\x86\x92select  n\xe2\x86\x92search  ESC\xe2\x86\x92exit  j/k\xe2\x86\x92\xe2\x86\x91/\xe2\x86\x93  J/K\xe2\x86\x92page]") catch {};
+        term.setFg256(colors.muted);
+        stdout.writeAll("  ENTER select | n search | ESC exit | j/k move | J/K page") catch {};
+        term.resetColor();
     }
 
     fn drawBorder(char: u8, width: u16) void {
@@ -216,6 +249,10 @@ pub const ResultsWidget = struct {
         return null;
     }
 };
+
+fn writeSpaces(writer: anytype, count: usize) !void {
+    for (0..count) |_| try writer.writeAll(" ");
+}
 
 pub const ResultsAction = union(enum) {
     continue_browsing,

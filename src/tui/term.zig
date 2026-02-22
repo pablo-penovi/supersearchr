@@ -147,6 +147,34 @@ pub fn setColor(fg: Color) void {
     std.fs.File.stdout().writeAll(msg) catch {};
 }
 
+pub fn setFg256(code: u8) void {
+    var buf: [24]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "\x1b[38;5;{}m", .{code}) catch return;
+    std.fs.File.stdout().writeAll(msg) catch {};
+}
+
+pub fn setBg256(code: u8) void {
+    var buf: [24]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "\x1b[48;5;{}m", .{code}) catch return;
+    std.fs.File.stdout().writeAll(msg) catch {};
+}
+
+pub fn setBold(on: bool) void {
+    if (on) {
+        std.fs.File.stdout().writeAll("\x1b[1m") catch {};
+    } else {
+        std.fs.File.stdout().writeAll("\x1b[22m") catch {};
+    }
+}
+
+pub fn setDim(on: bool) void {
+    if (on) {
+        std.fs.File.stdout().writeAll("\x1b[2m") catch {};
+    } else {
+        std.fs.File.stdout().writeAll("\x1b[22m") catch {};
+    }
+}
+
 pub fn resetColor() void {
     std.fs.File.stdout().writeAll("\x1b[0m") catch {};
 }
@@ -187,4 +215,18 @@ test "cursor position escape code" {
 
     const result = std.fmt.bufPrint(&buf, "\x1b[{};{}H", .{ 5, 10 }) catch unreachable;
     try Testing.expectEqualStrings("\x1b[5;10H", result);
+}
+
+test "256 color fg escape code" {
+    const Testing = @import("std").testing;
+    var buf: [24]u8 = undefined;
+    const result = std.fmt.bufPrint(&buf, "\x1b[38;5;{}m", .{33}) catch unreachable;
+    try Testing.expectEqualStrings("\x1b[38;5;33m", result);
+}
+
+test "256 color bg escape code" {
+    const Testing = @import("std").testing;
+    var buf: [24]u8 = undefined;
+    const result = std.fmt.bufPrint(&buf, "\x1b[48;5;{}m", .{236}) catch unreachable;
+    try Testing.expectEqualStrings("\x1b[48;5;236m", result);
 }
