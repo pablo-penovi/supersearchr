@@ -56,3 +56,7 @@ The config includes:
 2. Use j/k or J/K keys to navigate results.
 3. Press Enter to select a result and send it to Superseedr. If Superseedr is not running, a new terminal instance will be spawned with superseedr running on it.
 4. You can either select one or more torrents from the same result list, press n to make a new search, or press ESC to exit the application.
+
+## What's next
+
+This app is actually feature complete, taking into account its only purpose is to satisfy my own particular needs. If anything, I'd ask superseedr creator if they'd let me take a shot of adding this functionality to superseedr itself. Maybe I'll do that.
