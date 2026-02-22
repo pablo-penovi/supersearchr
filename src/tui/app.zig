@@ -166,6 +166,9 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
     const torrents = results_state.torrents;
     defer freeTorrents(app.allocator, torrents);
 
+    term.hideCursor();
+    defer term.showCursor();
+
     var widget = results_widget.ResultsWidget.init(app.allocator);
     defer widget.deinit();
 

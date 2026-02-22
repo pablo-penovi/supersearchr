@@ -19,7 +19,7 @@ pub const SearchWidget = struct {
     pub fn render(self: *SearchWidget) void {
         term.moveCursor(1, 1);
         term.clearScreen();
-        std.fs.File.stdout().writeAll("[ENTER→search, ESC→exit]: ") catch {};
+        std.fs.File.stdout().writeAll("[Type in search query. ENTER→search, ESC→exit]: ") catch {};
         std.fs.File.stdout().writeAll(self.query.items) catch {};
     }
 

@@ -151,6 +151,14 @@ pub fn resetColor() void {
     std.fs.File.stdout().writeAll("\x1b[0m") catch {};
 }
 
+pub fn reverseVideo(writer: anytype) !void {
+    try writer.writeAll("\x1b[7m");
+}
+
+pub fn reverseVideoOff(writer: anytype) !void {
+    try writer.writeAll("\x1b[27m");
+}
+
 pub const TerminalSize = struct { rows: u16, cols: u16 };
 
 pub fn getTerminalSize() !TerminalSize {

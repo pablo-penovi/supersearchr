@@ -5,102 +5,142 @@ const Torrent = @import("torrent").Torrent;
 pub const ResultsWidget = struct {
     allocator: std.mem.Allocator,
     torrents: []const Torrent,
-    input_buffer: std.ArrayList(u8),
     total_count: usize,
     scroll_offset: usize,
+    cursor: usize,
+    display_count: usize,
 
     pub fn init(allocator: std.mem.Allocator) ResultsWidget {
         return .{
             .allocator = allocator,
             .torrents = &.{},
-            .input_buffer = .{},
             .total_count = 0,
             .scroll_offset = 0,
+            .cursor = 0,
+            .display_count = 0,
         };
     }
 
-    pub fn deinit(self: *ResultsWidget) void {
-        self.input_buffer.deinit(self.allocator);
-    }
+    pub fn deinit(_: *ResultsWidget) void {}
 
     pub fn setTorrents(self: *ResultsWidget, torrents: []const Torrent, total: usize) void {
         self.torrents = torrents;
         self.total_count = total;
-        self.input_buffer.clearRetainingCapacity();
+        self.cursor = 0;
         self.scroll_offset = 0;
     }
 
     pub fn render(self: *ResultsWidget, max_rows: u16) void {
+        const stdout = std.fs.File.stdout();
         term.moveCursor(1, 1);
         term.clearScreen();
 
-        const display_count = @min(@as(usize, @intCast(max_rows - 6)), self.torrents.len);
-        const end_idx = @min(self.scroll_offset + display_count, self.torrents.len);
+        if (self.torrents.len == 0) {
+            term.setColor(.cyan);
+            stdout.writeAll("Results (0 found)\r\n") catch {};
+            term.resetColor();
+            stdout.writeAll("\r\n") catch {};
+            stdout.writeAll("No results found.\r\n") catch {};
+            term.moveCursor(max_rows - 1, 1);
+            stdout.writeAll("[n\xe2\x86\x92search  ESC\xe2\x86\x92exit]") catch {};
+            return;
+        }
+
+        self.display_count = @min(@as(usize, @intCast(max_rows - 6)), self.torrents.len);
+        const end_idx = @min(self.scroll_offset + self.display_count, self.torrents.len);
 
         {
             var buf: [64]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "Results ({d} found)\r\n", .{self.total_count}) catch return;
             term.setColor(.cyan);
-            std.fs.File.stdout().writeAll(msg) catch {};
+            stdout.writeAll(msg) catch {};
             term.resetColor();
-            std.fs.File.stdout().writeAll("\r\n") catch {};
+            stdout.writeAll("\r\n") catch {};
         }
 
-        for (self.torrents[self.scroll_offset..end_idx], self.scroll_offset + 1..) |torrent, idx| {
+        for (self.torrents[self.scroll_offset..end_idx], self.scroll_offset..) |torrent, abs_idx| {
             var buf: [256]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "{d}. {s} [S:{d} L:{d}]\r\n", .{ idx, torrent.title, torrent.seeders, torrent.leechers }) catch continue;
-            std.fs.File.stdout().writeAll(msg) catch {};
+            const msg = std.fmt.bufPrint(&buf, "{s} [S:{d} L:{d}]\r\n", .{ torrent.title, torrent.seeders, torrent.leechers }) catch continue;
+            if (abs_idx == self.cursor) {
+                term.reverseVideo(stdout) catch {};
+                stdout.writeAll(msg) catch {};
+                term.reverseVideoOff(stdout) catch {};
+                term.resetColor();
+            } else {
+                stdout.writeAll(msg) catch {};
+            }
         }
 
-        std.fs.File.stdout().writeAll("\r\n") catch {};
+        stdout.writeAll("\r\n") catch {};
 
-        if (self.torrents.len > display_count) {
+        if (self.torrents.len > self.display_count) {
             var buf: [80]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "(showing {d}-{d} of {d}, j/k scroll · J/K page)\r\n", .{ self.scroll_offset + 1, end_idx, self.torrents.len }) catch return;
+            const msg = std.fmt.bufPrint(&buf, "(showing {d}-{d} of {d})\r\n", .{ self.scroll_offset + 1, end_idx, self.torrents.len }) catch return;
             term.setColor(.bright_black);
-            std.fs.File.stdout().writeAll(msg) catch {};
+            stdout.writeAll(msg) catch {};
             term.resetColor();
         } else if (self.torrents.len < self.total_count) {
             var buf: [64]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "(showing first {d} of {d})\r\n", .{ self.torrents.len, self.total_count }) catch return;
             term.setColor(.bright_black);
-            std.fs.File.stdout().writeAll(msg) catch {};
+            stdout.writeAll(msg) catch {};
             term.resetColor();
         }
 
         term.moveCursor(max_rows - 1, 1);
-        std.fs.File.stdout().writeAll("[ENTER→select  n→search  ESC→exit  j/k→down/up line  J/K→down/up page]: ") catch {};
-        if (self.input_buffer.items.len > 0) {
-            std.fs.File.stdout().writeAll(self.input_buffer.items) catch {};
+        stdout.writeAll("[ENTER\xe2\x86\x92select  n\xe2\x86\x92search  ESC\xe2\x86\x92exit  j/k\xe2\x86\x92\xe2\x86\x91/\xe2\x86\x93  J/K\xe2\x86\x92page]") catch {};
+    }
+
+    fn adjustScroll(self: *ResultsWidget) void {
+        if (self.display_count == 0) return;
+        if (self.cursor < self.scroll_offset) {
+            self.scroll_offset = self.cursor;
+        } else if (self.cursor >= self.scroll_offset + self.display_count) {
+            self.scroll_offset = self.cursor - self.display_count + 1;
         }
     }
 
     pub fn handleEvent(self: *ResultsWidget, event: term.Event, max_rows: u16) ResultsAction {
-        const display_count = if (max_rows >= 6) @min(@as(usize, @intCast(max_rows - 6)), self.torrents.len) else self.torrents.len;
-        const max_scroll = if (self.torrents.len > display_count) self.torrents.len - display_count else 0;
+        if (self.torrents.len == 0) {
+            switch (event.key) {
+                .char => {
+                    if (event.value == 'n' or event.value == 'N') return .new_search;
+                    return .continue_browsing;
+                },
+                .escape => return .cancel,
+                else => return .continue_browsing,
+            }
+        }
+
+        const dc = if (max_rows >= 6) @min(@as(usize, @intCast(max_rows - 6)), self.torrents.len) else self.torrents.len;
+        self.display_count = dc;
 
         switch (event.key) {
             .char => {
                 if (event.value == 'j') {
-                    if (self.scroll_offset < max_scroll) {
-                        self.scroll_offset += 1;
+                    if (self.cursor < self.torrents.len - 1) {
+                        self.cursor += 1;
+                        self.adjustScroll();
                     }
                     return .continue_browsing;
                 }
                 if (event.value == 'k') {
-                    if (self.scroll_offset > 0) {
-                        self.scroll_offset -= 1;
+                    if (self.cursor > 0) {
+                        self.cursor -= 1;
+                        self.adjustScroll();
                     }
                     return .continue_browsing;
                 }
                 if (event.value == 'J') {
-                    const step = @min(display_count, max_scroll - self.scroll_offset);
-                    self.scroll_offset += step;
+                    const step = @min(self.display_count, self.torrents.len - 1 - self.cursor);
+                    self.cursor += step;
+                    self.adjustScroll();
                     return .continue_browsing;
                 }
                 if (event.value == 'K') {
-                    const step = @min(display_count, self.scroll_offset);
-                    self.scroll_offset -= step;
+                    const step = @min(self.display_count, self.cursor);
+                    self.cursor -= step;
+                    self.adjustScroll();
                     return .continue_browsing;
                 }
                 if (event.value == 'n' or event.value == 'N') {
@@ -108,30 +148,8 @@ pub const ResultsWidget = struct {
                 }
                 return .continue_browsing;
             },
-            .digit => {
-                self.input_buffer.append(self.allocator, event.value) catch return .continue_browsing;
-                return .continue_browsing;
-            },
-            .backspace => {
-                if (self.input_buffer.items.len > 0) {
-                    _ = self.input_buffer.pop();
-                }
-                return .continue_browsing;
-            },
             .enter => {
-                if (self.input_buffer.items.len == 0) {
-                    return .continue_browsing;
-                }
-                const idx = std.fmt.parseInt(usize, self.input_buffer.items, 10) catch {
-                    self.input_buffer.clearRetainingCapacity();
-                    return .continue_browsing;
-                };
-                if (idx == 0 or idx > self.torrents.len) {
-                    self.input_buffer.clearRetainingCapacity();
-                    return .continue_browsing;
-                }
-                self.input_buffer.clearRetainingCapacity();
-                return .{ .select = idx - 1 };
+                return .{ .select = self.cursor };
             },
             .escape => {
                 return .cancel;
@@ -154,21 +172,29 @@ pub const ResultsAction = union(enum) {
     cancel,
 };
 
-test "ResultsWidget handleEvent digit appends to input" {
+test "ResultsWidget handleEvent j moves cursor down" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
     const torrents = &[_]Torrent{
-        .{ .title = "Test", .seeders = 1, .leechers = 0, .link = "magnet:1" },
+        .{ .title = "Test1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
+        .{ .title = "Test2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
+        .{ .title = "Test3", .seeders = 3, .leechers = 0, .link = "magnet:3" },
+        .{ .title = "Test4", .seeders = 4, .leechers = 0, .link = "magnet:4" },
+        .{ .title = "Test5", .seeders = 5, .leechers = 0, .link = "magnet:5" },
+        .{ .title = "Test6", .seeders = 6, .leechers = 0, .link = "magnet:6" },
     };
-    widget.setTorrents(torrents, 1);
+    widget.setTorrents(torrents, 6);
 
-    const event = term.Event{ .key = .digit, .value = '1' };
-    const action = widget.handleEvent(event, 20);
+    try std.testing.expectEqual(@as(usize, 0), widget.cursor);
+
+    const event = term.Event{ .key = .char, .value = 'j' };
+    const action = widget.handleEvent(event, 10);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
-    try std.testing.expectEqualStrings("1", widget.input_buffer.items);
+    try std.testing.expectEqual(@as(usize, 1), widget.cursor);
+    try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
 }
 
 test "ResultsWidget handleEvent char n returns new_search" {
@@ -182,35 +208,28 @@ test "ResultsWidget handleEvent char n returns new_search" {
     try std.testing.expectEqual(ResultsAction.new_search, action);
 }
 
-test "ResultsWidget handleEvent enter with valid index returns select" {
+test "ResultsWidget handleEvent enter returns select with cursor" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
     const torrents = &[_]Torrent{
-        .{ .title = "Test", .seeders = 1, .leechers = 0, .link = "magnet:1" },
+        .{ .title = "Test1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
+        .{ .title = "Test2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
     };
-    widget.setTorrents(torrents, 1);
-
-    try widget.input_buffer.append(allocator, '1');
+    widget.setTorrents(torrents, 2);
+    widget.cursor = 1;
 
     const event = term.Event{ .key = .enter, .value = 0 };
     const action = widget.handleEvent(event, 20);
 
-    try std.testing.expectEqual(ResultsAction{ .select = 0 }, action);
+    try std.testing.expectEqual(ResultsAction{ .select = 1 }, action);
 }
 
-test "ResultsWidget handleEvent enter with invalid index continues" {
+test "ResultsWidget handleEvent enter with no torrents continues" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
-
-    const torrents = &[_]Torrent{
-        .{ .title = "Test", .seeders = 1, .leechers = 0, .link = "magnet:1" },
-    };
-    widget.setTorrents(torrents, 1);
-
-    try widget.input_buffer.append(allocator, '9');
 
     const event = term.Event{ .key = .enter, .value = 0 };
     const action = widget.handleEvent(event, 20);
@@ -229,46 +248,32 @@ test "ResultsWidget handleEvent escape returns cancel" {
     try std.testing.expectEqual(ResultsAction.cancel, action);
 }
 
-test "ResultsWidget handleEvent backspace removes last digit" {
-    const allocator = std.testing.allocator;
-    var widget = ResultsWidget.init(allocator);
-    defer widget.deinit();
-
-    try widget.input_buffer.append(allocator, '1');
-    try widget.input_buffer.append(allocator, '2');
-
-    const event = term.Event{ .key = .backspace, .value = 0 };
-    const action = widget.handleEvent(event, 20);
-
-    try std.testing.expectEqual(ResultsAction.continue_browsing, action);
-    try std.testing.expectEqualStrings("1", widget.input_buffer.items);
-}
-
-test "ResultsWidget handleEvent j increments scroll_offset" {
+test "ResultsWidget handleEvent j adjusts scroll when cursor leaves window" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
     const torrents = &[_]Torrent{
-        .{ .title = "Test1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
-        .{ .title = "Test2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
-        .{ .title = "Test3", .seeders = 3, .leechers = 0, .link = "magnet:3" },
-        .{ .title = "Test4", .seeders = 4, .leechers = 0, .link = "magnet:4" },
-        .{ .title = "Test5", .seeders = 5, .leechers = 0, .link = "magnet:5" },
-        .{ .title = "Test6", .seeders = 6, .leechers = 0, .link = "magnet:6" },
+        .{ .title = "T1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
+        .{ .title = "T2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
+        .{ .title = "T3", .seeders = 3, .leechers = 0, .link = "magnet:3" },
+        .{ .title = "T4", .seeders = 4, .leechers = 0, .link = "magnet:4" },
+        .{ .title = "T5", .seeders = 5, .leechers = 0, .link = "magnet:5" },
+        .{ .title = "T6", .seeders = 6, .leechers = 0, .link = "magnet:6" },
     };
     widget.setTorrents(torrents, 6);
-
-    try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
+    // max_rows=10, display_count=4. cursor at 3 (last visible), j pushes it to 4.
+    widget.cursor = 3;
 
     const event = term.Event{ .key = .char, .value = 'j' };
     const action = widget.handleEvent(event, 10);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
+    try std.testing.expectEqual(@as(usize, 4), widget.cursor);
     try std.testing.expectEqual(@as(usize, 1), widget.scroll_offset);
 }
 
-test "ResultsWidget handleEvent k decrements scroll_offset" {
+test "ResultsWidget handleEvent k moves cursor up" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
@@ -282,16 +287,16 @@ test "ResultsWidget handleEvent k decrements scroll_offset" {
         .{ .title = "Test6", .seeders = 6, .leechers = 0, .link = "magnet:6" },
     };
     widget.setTorrents(torrents, 6);
-    widget.scroll_offset = 1;
+    widget.cursor = 1;
 
     const event = term.Event{ .key = .char, .value = 'k' };
     const action = widget.handleEvent(event, 10);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
-    try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
+    try std.testing.expectEqual(@as(usize, 0), widget.cursor);
 }
 
-test "ResultsWidget handleEvent j at max scroll does nothing" {
+test "ResultsWidget handleEvent j at last torrent does nothing" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
@@ -305,16 +310,16 @@ test "ResultsWidget handleEvent j at max scroll does nothing" {
         .{ .title = "Test6", .seeders = 6, .leechers = 0, .link = "magnet:6" },
     };
     widget.setTorrents(torrents, 6);
-    widget.scroll_offset = 2; // max_scroll = 6 - (10-6) = 2
+    widget.cursor = 5; // last torrent
 
     const event = term.Event{ .key = .char, .value = 'j' };
     const action = widget.handleEvent(event, 10);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
-    try std.testing.expectEqual(@as(usize, 2), widget.scroll_offset);
+    try std.testing.expectEqual(@as(usize, 5), widget.cursor);
 }
 
-test "ResultsWidget handleEvent k at zero scroll does nothing" {
+test "ResultsWidget handleEvent k at cursor 0 does nothing" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
@@ -324,16 +329,16 @@ test "ResultsWidget handleEvent k at zero scroll does nothing" {
     };
     widget.setTorrents(torrents, 1);
 
-    try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
+    try std.testing.expectEqual(@as(usize, 0), widget.cursor);
 
     const event = term.Event{ .key = .char, .value = 'k' };
     const action = widget.handleEvent(event, 20);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
-    try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
+    try std.testing.expectEqual(@as(usize, 0), widget.cursor);
 }
 
-test "ResultsWidget handleEvent J advances scroll by display_count" {
+test "ResultsWidget handleEvent J moves cursor by display_count" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
@@ -349,15 +354,16 @@ test "ResultsWidget handleEvent J advances scroll by display_count" {
         .{ .title = "T8", .seeders = 8, .leechers = 0, .link = "magnet:8" },
     };
     widget.setTorrents(torrents, 8);
-    // max_rows=10, display_count = 10-6 = 4, max_scroll = 8-4 = 4
+    // max_rows=10, display_count=4, cursor=0 -> J moves cursor to 4
     const event = term.Event{ .key = .char, .value = 'J' };
     const action = widget.handleEvent(event, 10);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
-    try std.testing.expectEqual(@as(usize, 4), widget.scroll_offset);
+    try std.testing.expectEqual(@as(usize, 4), widget.cursor);
+    try std.testing.expectEqual(@as(usize, 1), widget.scroll_offset);
 }
 
-test "ResultsWidget handleEvent K retreats scroll by display_count" {
+test "ResultsWidget handleEvent K retreats cursor by display_count" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
@@ -373,16 +379,18 @@ test "ResultsWidget handleEvent K retreats scroll by display_count" {
         .{ .title = "T8", .seeders = 8, .leechers = 0, .link = "magnet:8" },
     };
     widget.setTorrents(torrents, 8);
-    widget.scroll_offset = 4;
-    // max_rows=10, display_count = 4
+    widget.cursor = 4;
+    widget.scroll_offset = 1;
+    // max_rows=10, display_count=4, cursor=4 -> K moves cursor to 0
     const event = term.Event{ .key = .char, .value = 'K' };
     const action = widget.handleEvent(event, 10);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
+    try std.testing.expectEqual(@as(usize, 0), widget.cursor);
     try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
 }
 
-test "ResultsWidget handleEvent J at max scroll does nothing" {
+test "ResultsWidget handleEvent J at last torrent does nothing" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
@@ -398,15 +406,17 @@ test "ResultsWidget handleEvent J at max scroll does nothing" {
         .{ .title = "T8", .seeders = 8, .leechers = 0, .link = "magnet:8" },
     };
     widget.setTorrents(torrents, 8);
-    widget.scroll_offset = 4; // already at max (max_scroll = 8-4 = 4)
+    widget.cursor = 7; // last torrent
+    widget.scroll_offset = 4;
     const event = term.Event{ .key = .char, .value = 'J' };
     const action = widget.handleEvent(event, 10);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
+    try std.testing.expectEqual(@as(usize, 7), widget.cursor);
     try std.testing.expectEqual(@as(usize, 4), widget.scroll_offset);
 }
 
-test "ResultsWidget handleEvent K at zero scroll does nothing" {
+test "ResultsWidget handleEvent K at cursor 0 does nothing" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
@@ -418,29 +428,34 @@ test "ResultsWidget handleEvent K at zero scroll does nothing" {
         .{ .title = "T4", .seeders = 4, .leechers = 0, .link = "magnet:4" },
     };
     widget.setTorrents(torrents, 4);
-    // scroll_offset starts at 0
+    // cursor starts at 0
     const event = term.Event{ .key = .char, .value = 'K' };
     const action = widget.handleEvent(event, 10);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
+    try std.testing.expectEqual(@as(usize, 0), widget.cursor);
     try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
 }
 
-test "ResultsWidget scroll_offset resets on new search" {
+test "ResultsWidget cursor resets on new search" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
     const torrents1 = &[_]Torrent{
         .{ .title = "Test1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
+        .{ .title = "Test2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
+        .{ .title = "Test3", .seeders = 3, .leechers = 0, .link = "magnet:3" },
     };
-    widget.setTorrents(torrents1, 1);
-    widget.scroll_offset = 5;
+    widget.setTorrents(torrents1, 3);
+    widget.cursor = 2;
+    widget.scroll_offset = 1;
 
     const torrents2 = &[_]Torrent{
-        .{ .title = "Test2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
+        .{ .title = "Test4", .seeders = 4, .leechers = 0, .link = "magnet:4" },
     };
     widget.setTorrents(torrents2, 1);
 
+    try std.testing.expectEqual(@as(usize, 0), widget.cursor);
     try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
 }
