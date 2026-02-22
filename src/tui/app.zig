@@ -267,6 +267,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                 const result = superseedr.addLink(app.allocator, torrent.link, app.terminal);
 
                 if (result) |_| {
+                    term.discardPendingInput();
                     renderSuccess();
                 } else |err| {
                     const message = getSuperseedrErrorMessage(err);
@@ -295,6 +296,7 @@ fn renderSuccess() void {
 
     const event = term.readKey() catch return;
     _ = event;
+    term.discardPendingInput();
 }
 
 fn renderError(message: []const u8) void {
@@ -354,7 +356,9 @@ fn renderNoticePanel(title: []const u8, message: []const u8, title_color: u8) vo
     stdout.writeAll("\r\n") catch {};
 
     writeSpaces(stdout, left_pad) catch {};
-    theme.drawPanelRow(stdout, panel_width, shown, border, colors) catch {};
+    var msg_buf: [352]u8 = undefined;
+    const message_line = std.fmt.bufPrint(&msg_buf, " {s}", .{shown}) catch shown;
+    theme.drawPanelRow(stdout, panel_width, message_line, border, colors) catch {};
 
     writeSpaces(stdout, left_pad) catch {};
     term.setFg256(colors.panel_border);

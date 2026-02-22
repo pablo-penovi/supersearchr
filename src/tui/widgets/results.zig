@@ -46,8 +46,7 @@ pub const ResultsWidget = struct {
         const panel_width = if (compact) @as(usize, 0) else @as(usize, @intCast(max_cols - 2));
         const inner_width = if (compact) @as(usize, 0) else panel_width - 2;
         const layout = if (compact) TableLayout.compactFallback() else TableLayout.forInnerWidth(inner_width);
-        const content_rows: usize = if (max_rows > 9) @as(usize, @intCast(max_rows - 9)) else 1;
-        self.display_count = @max(@as(usize, 1), @min(content_rows, self.torrents.len));
+        self.display_count = computeDisplayCount(max_rows, self.torrents.len);
         const end_idx = @min(self.scroll_offset + self.display_count, self.torrents.len);
         const snapshot = RenderSnapshot{
             .rows = max_rows,
@@ -69,11 +68,12 @@ pub const ResultsWidget = struct {
         switch (redraw_mode) {
             .full => {
                 if (compact) {
-                    drawCompact(stdout, colors, self.torrents, self.cursor);
+                    drawCompact(stdout, colors, border, self.torrents, self.cursor, max_cols);
                 } else {
                     term.moveCursor(1, 1);
                     term.clearScreen();
-                    drawPanelFrame(stdout, panel_width, inner_width, border, colors, self.total_count, layout);
+                    drawPanelFrame(stdout, panel_width, inner_width, border, colors, layout);
+                    drawPanelDivider(stdout, panel_width, border, colors) catch {};
                     for (0..self.display_count) |rel_idx| {
                         const abs_idx = self.scroll_offset + rel_idx;
                         if (abs_idx < end_idx) {
@@ -93,6 +93,7 @@ pub const ResultsWidget = struct {
                             theme.drawPanelRow(stdout, panel_width, "", border, colors) catch {};
                         }
                     }
+                    drawPanelDivider(stdout, panel_width, border, colors) catch {};
                     drawStatusRow(stdout, panel_width, border, colors, self.scroll_offset, end_idx, self.total_count, self.torrents.len) catch {};
                     writeSpaces(stdout, 1) catch {};
                     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
@@ -123,6 +124,7 @@ pub const ResultsWidget = struct {
                         theme.drawPanelRow(stdout, panel_width, "", border, colors) catch {};
                     }
                 }
+                drawPanelDivider(stdout, panel_width, border, colors) catch {};
                 drawStatusRow(stdout, panel_width, border, colors, self.scroll_offset, end_idx, self.total_count, self.torrents.len) catch {};
             },
             .partial_cursor => {
@@ -207,8 +209,7 @@ pub const ResultsWidget = struct {
             }
         }
 
-        const dc = if (max_rows >= 9) @min(@as(usize, @intCast(max_rows - 9)), self.torrents.len) else self.torrents.len;
-        self.display_count = dc;
+        self.display_count = computeDisplayCount(max_rows, self.torrents.len);
 
         switch (event.key) {
             .char => {
@@ -336,13 +337,28 @@ fn computeRedrawMode(
     return .none;
 }
 
-fn drawCompact(stdout: std.fs.File, colors: theme.Theme, torrents: []const Torrent, cursor: usize) void {
+fn computeDisplayCount(max_rows: u16, torrents_len: usize) usize {
+    if (torrents_len == 0) return 1;
+
+    const content_rows: usize = if (max_rows > 10) @as(usize, @intCast(max_rows - 10)) else 1;
+    return @max(@as(usize, 1), @min(content_rows, torrents_len));
+}
+
+fn drawCompact(
+    stdout: std.fs.File,
+    colors: theme.Theme,
+    border: theme.BorderChars,
+    torrents: []const Torrent,
+    cursor: usize,
+    max_cols: u16,
+) void {
     term.moveCursor(1, 1);
     term.clearScreen();
     term.setFg256(colors.panel_title);
     term.setBold(true);
     stdout.writeAll("Results\r\n") catch {};
     term.setBold(false);
+    drawCompactDivider(stdout, colors, border, max_cols);
     term.setFg256(colors.text);
     if (torrents.len == 0) {
         stdout.writeAll("No results found\r\n") catch {};
@@ -354,9 +370,20 @@ fn drawCompact(stdout: std.fs.File, colors: theme.Theme, torrents: []const Torre
         stdout.writeAll(shown) catch {};
         stdout.writeAll("\r\n") catch {};
     }
+    drawCompactDivider(stdout, colors, border, max_cols);
     term.setFg256(colors.muted);
     stdout.writeAll("ENTER select | n search | ESC exit | j/k line down/up") catch {};
     term.resetColor();
+}
+
+fn drawCompactDivider(stdout: std.fs.File, colors: theme.Theme, border: theme.BorderChars, max_cols: u16) void {
+    const cols: usize = @max(@as(usize, 1), @as(usize, @intCast(max_cols)));
+    term.setFg256(colors.panel_border);
+    for (0..cols) |_| {
+        stdout.writeAll(border.horizontal) catch {};
+    }
+    term.resetColor();
+    stdout.writeAll("\r\n") catch {};
 }
 
 fn drawPanelFrame(
@@ -365,25 +392,10 @@ fn drawPanelFrame(
     inner_width: usize,
     border: theme.BorderChars,
     colors: theme.Theme,
-    total_count: usize,
     layout: TableLayout,
 ) void {
     writeSpaces(stdout, 1) catch {};
     theme.drawPanelTop(stdout, panel_width, border, colors) catch {};
-
-    writeSpaces(stdout, 1) catch {};
-    term.setFg256(colors.panel_border);
-    stdout.writeAll(border.vertical) catch {};
-    term.setFg256(colors.panel_title);
-    term.setBold(true);
-    var title_buf: [96]u8 = undefined;
-    const title = std.fmt.bufPrint(&title_buf, " Results ({d} found) ", .{total_count}) catch " Results ";
-    theme.writePadded(stdout, title, inner_width) catch {};
-    term.setBold(false);
-    term.setFg256(colors.panel_border);
-    stdout.writeAll(border.vertical) catch {};
-    term.resetColor();
-    stdout.writeAll("\r\n") catch {};
 
     writeSpaces(stdout, 1) catch {};
     term.setFg256(colors.panel_border);
@@ -394,6 +406,22 @@ fn drawPanelFrame(
     stdout.writeAll(border.vertical) catch {};
     term.resetColor();
     stdout.writeAll("\r\n") catch {};
+}
+
+fn drawPanelDivider(
+    stdout: std.fs.File,
+    panel_width: usize,
+    border: theme.BorderChars,
+    colors: theme.Theme,
+) !void {
+    if (panel_width < 2) return;
+    try writeSpaces(stdout, 1);
+    term.setFg256(colors.panel_border);
+    try stdout.writeAll(border.vertical);
+    try theme.writeRepeat(stdout, border.horizontal, panel_width - 2);
+    try stdout.writeAll(border.vertical);
+    term.resetColor();
+    try stdout.writeAll("\r\n");
 }
 
 fn drawContentRow(
@@ -811,7 +839,7 @@ test "ResultsWidget handleEvent j adjusts scroll when cursor leaves window" {
         .{ .title = "T6", .seeders = 6, .leechers = 0, .link = "magnet:6" },
     };
     widget.setTorrents(torrents, 6);
-    // max_rows=10, display_count=1. cursor at 0 (last visible), j pushes it to 1.
+    // max_rows=10, display_count=1. cursor at 0 (last visible), j pushes it to 1 and scrolls.
     widget.cursor = 0;
 
     const event = term.Event{ .key = .char, .value = 'j' };

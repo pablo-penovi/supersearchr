@@ -104,6 +104,28 @@ pub fn readKey() !Event {
     return Event{ .key = .unknown, .value = b };
 }
 
+pub fn discardPendingInput() void {
+    const stdin = std.fs.File.stdin();
+    var poll_fds = [_]std.posix.pollfd{
+        .{
+            .fd = stdin.handle,
+            .events = std.posix.POLL.IN,
+            .revents = 0,
+        },
+    };
+    var buf: [64]u8 = undefined;
+
+    while (true) {
+        const ready = std.posix.poll(&poll_fds, 0) catch return;
+        if (ready == 0) break;
+        if ((poll_fds[0].revents & std.posix.POLL.IN) == 0) break;
+
+        const read_n = stdin.read(&buf) catch return;
+        if (read_n == 0) break;
+        poll_fds[0].revents = 0;
+    }
+}
+
 pub fn clearScreen() void {
     std.fs.File.stdout().writeAll("\x1b[2J") catch {};
 }
