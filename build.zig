@@ -48,19 +48,25 @@ pub fn build(b: *std.Build) void {
     const term_mod = b.createModule(.{
         .root_source_file = b.path("src/tui/term.zig"),
     });
+    const theme_mod = b.createModule(.{
+        .root_source_file = b.path("src/tui/theme.zig"),
+    });
     const torrent_mod = b.createModule(.{
         .root_source_file = b.path("src/structs/torrent.zig"),
     });
 
+    theme_mod.addImport("term", term_mod);
     jackett_mod.addImport("torrent", torrent_mod);
     const search_widget_mod = b.createModule(.{
         .root_source_file = b.path("src/tui/widgets/search.zig"),
     });
     search_widget_mod.addImport("term", term_mod);
+    search_widget_mod.addImport("theme", theme_mod);
     const results_widget_mod = b.createModule(.{
         .root_source_file = b.path("src/tui/widgets/results.zig"),
     });
     results_widget_mod.addImport("term", term_mod);
+    results_widget_mod.addImport("theme", theme_mod);
     results_widget_mod.addImport("torrent", torrent_mod);
     const app_mod = b.createModule(.{
         .root_source_file = b.path("src/tui/app.zig"),
@@ -70,6 +76,7 @@ pub fn build(b: *std.Build) void {
     app_mod.addImport("jackett", jackett_mod);
     app_mod.addImport("superseedr", superseedr_mod);
     app_mod.addImport("term", term_mod);
+    app_mod.addImport("theme", theme_mod);
     app_mod.addImport("search", search_widget_mod);
     app_mod.addImport("results", results_widget_mod);
     app_mod.addImport("torrent", torrent_mod);
@@ -78,6 +85,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("jackett", jackett_mod);
     exe.root_module.addImport("superseedr", superseedr_mod);
     exe.root_module.addImport("term", term_mod);
+    exe.root_module.addImport("theme", theme_mod);
     exe.root_module.addImport("torrent", torrent_mod);
     exe.root_module.addImport("search", search_widget_mod);
     exe.root_module.addImport("results", results_widget_mod);
@@ -157,6 +165,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     search_widget_tests.root_module.addImport("term", term_mod);
+    search_widget_tests.root_module.addImport("theme", theme_mod);
     const run_search_widget_tests = b.addRunArtifact(search_widget_tests);
 
     // Test for results widget
@@ -168,8 +177,20 @@ pub fn build(b: *std.Build) void {
         }),
     });
     results_widget_tests.root_module.addImport("term", term_mod);
+    results_widget_tests.root_module.addImport("theme", theme_mod);
     results_widget_tests.root_module.addImport("torrent", torrent_mod);
     const run_results_widget_tests = b.addRunArtifact(results_widget_tests);
+
+    // Test for theme module
+    const theme_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tui/theme.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    theme_tests.root_module.addImport("term", term_mod);
+    const run_theme_tests = b.addRunArtifact(theme_tests);
 
     // Test for app module
     // Reuse modules defined above
@@ -186,6 +207,7 @@ pub fn build(b: *std.Build) void {
     }));
     app_tests.root_module.addImport("superseedr", superseedr_mod);
     app_tests.root_module.addImport("term", term_mod);
+    app_tests.root_module.addImport("theme", theme_mod);
     app_tests.root_module.addImport("search", search_widget_mod);
     app_tests.root_module.addImport("results", results_widget_mod);
     app_tests.root_module.addImport("torrent", torrent_mod);
@@ -209,6 +231,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_config_tests.step);
     test_step.dependOn(&run_jackett_tests.step);
     test_step.dependOn(&run_superseedr_tests.step);
+    test_step.dependOn(&run_theme_tests.step);
     test_step.dependOn(&run_search_widget_tests.step);
     test_step.dependOn(&run_results_widget_tests.step);
     test_step.dependOn(&run_app_tests.step);

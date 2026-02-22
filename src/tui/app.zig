@@ -3,6 +3,7 @@ const config = @import("config");
 const jackett = @import("jackett");
 const superseedr = @import("superseedr");
 const term = @import("term");
+const theme = @import("theme");
 const search_widget = @import("search");
 const results_widget = @import("results");
 const Torrent = @import("torrent").Torrent;
@@ -33,6 +34,9 @@ const ErrorState = struct {
 const SpinnerContext = struct {
     message: []const u8,
     stop: *std.atomic.Value(bool),
+    row: u16,
+    col: u16,
+    color: u8,
 };
 
 const App = struct {
@@ -124,13 +128,19 @@ fn spinnerThread(ctx: SpinnerContext) void {
     var buf: [128]u8 = undefined;
 
     while (!ctx.stop.load(.acquire)) {
-        const line = std.fmt.bufPrint(&buf, "\r{s} {c}", .{ ctx.message, frames[frame] }) catch break;
+        term.moveCursor(ctx.row, ctx.col);
+        term.setFg256(ctx.color);
+        const line = std.fmt.bufPrint(&buf, "{s} {c}", .{ ctx.message, frames[frame] }) catch break;
         stdout.writeAll(line) catch break;
+        term.resetColor();
         frame = (frame + 1) % frames.len;
         std.Thread.sleep(100 * std.time.ns_per_ms);
     }
-    const line = std.fmt.bufPrint(&buf, "\r{s}  ", .{ctx.message}) catch return;
+    term.moveCursor(ctx.row, ctx.col);
+    term.setFg256(ctx.color);
+    const line = std.fmt.bufPrint(&buf, "{s}  ", .{ctx.message}) catch return;
     stdout.writeAll(line) catch {};
+    term.resetColor();
 }
 
 fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
@@ -140,15 +150,66 @@ fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
     term.hideCursor();
     defer term.showCursor();
 
-    var msg_buf: [64]u8 = undefined;
-    const msg = std.fmt.bufPrint(&msg_buf, "Searching for \"{s}\"...", .{query}) catch "Searching...";
+    const stdout = std.fs.File.stdout();
+    const colors = theme.superseedr_like;
+    const border = theme.chooseBorderCharset();
+    const compact = app.term_cols < 56 or app.term_rows < 10;
+    const panel_width = if (compact) @as(usize, 0) else @min(@as(usize, 74), @as(usize, @intCast(app.term_cols - 4)));
+    const left_pad = if (compact) @as(usize, 0) else (@as(usize, @intCast(app.term_cols)) - panel_width) / 2;
+    const top_pad = if (compact) @as(usize, 1) else @max(@as(usize, 2), (@as(usize, @intCast(app.term_rows)) - 8) / 2);
+
+    var query_trunc: [256]u8 = undefined;
+    const shown_query = theme.truncateWithEllipsis(query, panel_width - 13, query_trunc[0..]);
+    var query_line_buf: [320]u8 = undefined;
+    const query_line = std.fmt.bufPrint(&query_line_buf, " Query: {s}", .{shown_query}) catch " Query:";
 
     term.moveCursor(1, 1);
     term.clearScreen();
-    std.fs.File.stdout().writeAll(msg) catch {};
+    if (compact) {
+        term.setFg256(colors.panel_title);
+        term.setBold(true);
+        stdout.writeAll("Searching\r\n") catch {};
+        term.setBold(false);
+        term.setFg256(colors.text);
+        stdout.writeAll(query_line) catch {};
+        stdout.writeAll("\r\n") catch {};
+        term.setFg256(colors.muted);
+        stdout.writeAll("Contacting Jackett...") catch {};
+        term.resetColor();
+    } else {
+        term.moveCursor(@as(u16, @intCast(top_pad)), 1);
+
+        writeSpaces(stdout, left_pad) catch {};
+        theme.drawPanelTop(stdout, panel_width, border, colors) catch {};
+        writeSpaces(stdout, left_pad) catch {};
+        term.setFg256(colors.panel_border);
+        stdout.writeAll(border.vertical) catch {};
+        term.setFg256(colors.panel_title);
+        term.setBold(true);
+        theme.writePadded(stdout, " Searching ", panel_width - 2) catch {};
+        term.setBold(false);
+        term.setFg256(colors.panel_border);
+        stdout.writeAll(border.vertical) catch {};
+        term.resetColor();
+        stdout.writeAll("\r\n") catch {};
+        writeSpaces(stdout, left_pad) catch {};
+        theme.drawPanelRow(stdout, panel_width, query_line, border, colors) catch {};
+        writeSpaces(stdout, left_pad) catch {};
+        theme.drawPanelRow(stdout, panel_width, " Contacting Jackett...", border, colors) catch {};
+        writeSpaces(stdout, left_pad) catch {};
+        theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
+    }
 
     var stop = std.atomic.Value(bool).init(false);
-    const thread = try std.Thread.spawn(.{}, spinnerThread, .{SpinnerContext{ .message = msg, .stop = &stop }});
+    const spinner_row = if (compact) @as(u16, 3) else @as(u16, @intCast(top_pad + 4));
+    const spinner_col = if (compact) @as(u16, 1) else @as(u16, @intCast(left_pad + 3));
+    const thread = try std.Thread.spawn(.{}, spinnerThread, .{SpinnerContext{
+        .message = " Contacting Jackett...",
+        .stop = &stop,
+        .row = spinner_row,
+        .col = spinner_col,
+        .color = colors.accent,
+    }});
 
     const torrents = app.client.searchWithExecutor(query, jackett.defaultSearchExecutor) catch |err| {
         stop.store(true, .release);
@@ -224,30 +285,83 @@ fn runErrorState(app: *App, error_state: *ErrorState) !void {
 }
 
 fn renderSuccess() void {
-    term.moveCursor(1, 1);
-    term.clearScreen();
-    term.setColor(.green);
-    std.fs.File.stdout().writeAll("Added to superseedr!") catch {};
-    term.resetColor();
-    term.moveCursor(3, 1);
-    std.fs.File.stdout().writeAll("Press any key to continue...") catch {};
+    renderNoticePanel("Success", "Added to superseedr!", theme.superseedr_like.ok);
 
     const event = term.readKey() catch return;
     _ = event;
 }
 
 fn renderError(message: []const u8) void {
+    var buf: [256]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "Error: {s}", .{message}) catch "Error";
+    renderNoticePanel("Error", msg, theme.superseedr_like.err);
+}
+
+fn renderNoticePanel(title: []const u8, message: []const u8, title_color: u8) void {
+    const stdout = std.fs.File.stdout();
+    const colors = theme.superseedr_like;
+    const border = theme.chooseBorderCharset();
+    const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
+
+    if (size.cols < 56 or size.rows < 10) {
+        term.moveCursor(1, 1);
+        term.clearScreen();
+        term.setFg256(title_color);
+        term.setBold(true);
+        stdout.writeAll(title) catch {};
+        term.setBold(false);
+        stdout.writeAll(": ") catch {};
+        term.setFg256(colors.text);
+        stdout.writeAll(message) catch {};
+        stdout.writeAll("\r\n") catch {};
+        term.setFg256(colors.muted);
+        stdout.writeAll("Press any key to continue...") catch {};
+        term.resetColor();
+        return;
+    }
+
+    const panel_width = @min(@as(usize, 72), @as(usize, @intCast(size.cols - 4)));
+    const left_pad = (@as(usize, @intCast(size.cols)) - panel_width) / 2;
+    const top_pad = @max(@as(usize, 2), (@as(usize, @intCast(size.rows)) - 7) / 2);
+    var trunc_buf: [320]u8 = undefined;
+    const shown = theme.truncateWithEllipsis(message, panel_width - 4, trunc_buf[0..]);
+
     term.moveCursor(1, 1);
     term.clearScreen();
-    term.setColor(.red);
-    {
-        var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Error: {s}", .{message}) catch return;
-        std.fs.File.stdout().writeAll(msg) catch {};
-    }
+    term.moveCursor(@as(u16, @intCast(top_pad)), 1);
+
+    writeSpaces(stdout, left_pad) catch {};
+    theme.drawPanelTop(stdout, panel_width, border, colors) catch {};
+
+    writeSpaces(stdout, left_pad) catch {};
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.setFg256(title_color);
+    term.setBold(true);
+    var title_buf: [64]u8 = undefined;
+    const title_line = std.fmt.bufPrint(&title_buf, " {s} ", .{title}) catch title;
+    theme.writePadded(stdout, title_line, panel_width - 2) catch {};
+    term.setBold(false);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
     term.resetColor();
-    term.moveCursor(3, 1);
-    std.fs.File.stdout().writeAll("Press any key to continue...") catch {};
+    stdout.writeAll("\r\n") catch {};
+
+    writeSpaces(stdout, left_pad) catch {};
+    theme.drawPanelRow(stdout, panel_width, shown, border, colors) catch {};
+
+    writeSpaces(stdout, left_pad) catch {};
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.setFg256(colors.muted);
+    theme.writePadded(stdout, " Press any key to continue... ", panel_width - 2) catch {};
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.resetColor();
+    stdout.writeAll("\r\n") catch {};
+
+    writeSpaces(stdout, left_pad) catch {};
+    theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 }
 
 fn getErrorMessage(err: anyerror) []const u8 {
@@ -273,6 +387,10 @@ fn freeTorrents(allocator: std.mem.Allocator, torrents: []Torrent) void {
         allocator.free(t.link);
     }
     allocator.free(torrents);
+}
+
+fn writeSpaces(writer: anytype, count: usize) !void {
+    for (0..count) |_| try writer.writeAll(" ");
 }
 
 test "state transitions: search -> loading -> results" {
