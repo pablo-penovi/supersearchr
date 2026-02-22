@@ -46,13 +46,9 @@ pub const ResultsWidget = struct {
         if (self.torrents.len == 0) {
             drawBorder('=', max_cols);
 
-            term.setColor(.cyan);
             stdout.writeAll("||") catch {};
-            term.resetColor();
             centerText(stdout, "Results (0 found)", inner_width) catch {};
-            term.setColor(.cyan);
             stdout.writeAll("     ||\r\n") catch {};
-            term.resetColor();
             drawBorder('=', max_cols);
 
             stdout.writeAll("||") catch {};
