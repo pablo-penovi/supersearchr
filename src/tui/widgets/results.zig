@@ -30,65 +30,126 @@ pub const ResultsWidget = struct {
         self.scroll_offset = 0;
     }
 
-    pub fn render(self: *ResultsWidget, max_rows: u16) void {
+    pub fn render(self: *ResultsWidget, max_rows: u16, max_cols: u16) void {
         const stdout = std.fs.File.stdout();
         term.moveCursor(1, 1);
         term.clearScreen();
 
+        if (max_cols < 10) {
+            stdout.writeAll("Terminal too narrow\r\n") catch {};
+            return;
+        }
+
+        const inner_width = @as(usize, @intCast(max_cols - 9));
+        const title_col_width = inner_width - 15;
+
         if (self.torrents.len == 0) {
+            drawBorder('=', max_cols);
+
             term.setColor(.cyan);
-            stdout.writeAll("Results (0 found)\r\n") catch {};
+            stdout.writeAll("||") catch {};
             term.resetColor();
-            stdout.writeAll("\r\n") catch {};
-            stdout.writeAll("No results found.\r\n") catch {};
-            term.moveCursor(max_rows - 1, 1);
+            centerText(stdout, "Results (0 found)", inner_width) catch {};
+            term.setColor(.cyan);
+            stdout.writeAll("     ||\r\n") catch {};
+            term.resetColor();
+            drawBorder('=', max_cols);
+
+            stdout.writeAll("||") catch {};
+            centerText(stdout, "No results found", inner_width) catch {};
+            stdout.writeAll("     ||\r\n") catch {};
+
+            drawBorder('=', max_cols);
+            term.moveCursor(max_rows, 1);
             stdout.writeAll("[n\xe2\x86\x92search  ESC\xe2\x86\x92exit]") catch {};
             return;
         }
 
-        self.display_count = @min(@as(usize, @intCast(max_rows - 6)), self.torrents.len);
+        self.display_count = @min(@as(usize, @intCast(max_rows - 9)), self.torrents.len);
         const end_idx = @min(self.scroll_offset + self.display_count, self.torrents.len);
 
+        drawBorder('=', max_cols);
+
+        term.setColor(.cyan);
+        stdout.writeAll("||") catch {};
+        term.resetColor();
         {
             var buf: [64]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "Results ({d} found)\r\n", .{self.total_count}) catch return;
-            term.setColor(.cyan);
+            const msg = std.fmt.bufPrint(&buf, "Results ({d} found)", .{self.total_count}) catch return;
+            centerText(stdout, msg, inner_width) catch {};
+        }
+        term.setColor(.cyan);
+        stdout.writeAll("     ||\r\n") catch {};
+        term.resetColor();
+        drawBorder('=', max_cols);
+
+        for (self.torrents[self.scroll_offset..end_idx], self.scroll_offset..) |torrent, abs_idx| {
+            stdout.writeAll("|| ") catch {};
+            if (abs_idx == self.cursor) {
+                term.reverseVideo(stdout) catch {};
+            }
+            var buf: [256]u8 = undefined;
+            const title_len = @min(torrent.title.len, title_col_width);
+            const msg = std.fmt.bufPrint(&buf, "{s}", .{torrent.title[0..title_len]}) catch continue;
             stdout.writeAll(msg) catch {};
-            term.resetColor();
+            const padding_len = title_col_width - title_len;
+            for (0..padding_len) |_| stdout.writeAll(" ") catch {};
+            stdout.writeAll(" | S:") catch {};
+            {
+                var num_buf: [5]u8 = undefined;
+                const num_msg = std.fmt.bufPrint(&num_buf, "{d:>4}", .{torrent.seeders}) catch continue;
+                stdout.writeAll(num_msg) catch {};
+            }
+            stdout.writeAll(" | L:") catch {};
+            {
+                var num_buf: [5]u8 = undefined;
+                const num_msg = std.fmt.bufPrint(&num_buf, "{d:>4}", .{torrent.leechers}) catch continue;
+                stdout.writeAll(num_msg) catch {};
+            }
+            stdout.writeAll(" ||") catch {};
+            if (abs_idx == self.cursor) {
+                term.reverseVideoOff(stdout) catch {};
+                term.resetColor();
+            }
             stdout.writeAll("\r\n") catch {};
         }
 
-        for (self.torrents[self.scroll_offset..end_idx], self.scroll_offset..) |torrent, abs_idx| {
-            var buf: [256]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "{s} [S:{d} L:{d}]\r\n", .{ torrent.title, torrent.seeders, torrent.leechers }) catch continue;
-            if (abs_idx == self.cursor) {
-                term.reverseVideo(stdout) catch {};
-                stdout.writeAll(msg) catch {};
-                term.reverseVideoOff(stdout) catch {};
-                term.resetColor();
-            } else {
-                stdout.writeAll(msg) catch {};
-            }
-        }
+        drawBorder('=', max_cols);
 
-        stdout.writeAll("\r\n") catch {};
-
-        if (self.torrents.len > self.display_count) {
+        stdout.writeAll("||") catch {};
+        {
             var buf: [80]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "(showing {d}-{d} of {d})\r\n", .{ self.scroll_offset + 1, end_idx, self.torrents.len }) catch return;
-            term.setColor(.bright_black);
-            stdout.writeAll(msg) catch {};
-            term.resetColor();
-        } else if (self.torrents.len < self.total_count) {
-            var buf: [64]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "(showing first {d} of {d})\r\n", .{ self.torrents.len, self.total_count }) catch return;
-            term.setColor(.bright_black);
-            stdout.writeAll(msg) catch {};
-            term.resetColor();
+            const msg = std.fmt.bufPrint(&buf, "Showing {d}-{d} of {d}", .{ self.scroll_offset + 1, end_idx, self.total_count }) catch return;
+            centerText(stdout, msg, inner_width) catch {};
         }
+        stdout.writeAll("     ||\r\n") catch {};
 
-        term.moveCursor(max_rows - 1, 1);
+        drawBorder('=', max_cols);
+
+        term.moveCursor(max_rows - 2, 1);
         stdout.writeAll("[ENTER\xe2\x86\x92select  n\xe2\x86\x92search  ESC\xe2\x86\x92exit  j/k\xe2\x86\x92\xe2\x86\x91/\xe2\x86\x93  J/K\xe2\x86\x92page]") catch {};
+    }
+
+    fn drawBorder(char: u8, width: u16) void {
+        const stdout = std.fs.File.stdout();
+        const buf: [1]u8 = .{char};
+        for (0..@as(usize, @intCast(width))) |_| {
+            stdout.writeAll(&buf) catch {};
+        }
+        stdout.writeAll("\r\n") catch {};
+    }
+
+    fn centerText(writer: anytype, text: []const u8, width: usize) !void {
+        if (text.len >= width) {
+            try writer.writeAll(text[0..width]);
+            return;
+        }
+        const padding = width - text.len;
+        const left_pad = padding / 2;
+        const right_pad = padding - left_pad;
+        for (0..left_pad) |_| try writer.writeAll(" ");
+        try writer.writeAll(text);
+        for (0..right_pad) |_| try writer.writeAll(" ");
     }
 
     fn adjustScroll(self: *ResultsWidget) void {
@@ -112,7 +173,7 @@ pub const ResultsWidget = struct {
             }
         }
 
-        const dc = if (max_rows >= 6) @min(@as(usize, @intCast(max_rows - 6)), self.torrents.len) else self.torrents.len;
+        const dc = if (max_rows >= 9) @min(@as(usize, @intCast(max_rows - 9)), self.torrents.len) else self.torrents.len;
         self.display_count = dc;
 
         switch (event.key) {
@@ -194,7 +255,7 @@ test "ResultsWidget handleEvent j moves cursor down" {
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
     try std.testing.expectEqual(@as(usize, 1), widget.cursor);
-    try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
+    try std.testing.expectEqual(@as(usize, 1), widget.scroll_offset);
 }
 
 test "ResultsWidget handleEvent char n returns new_search" {
@@ -262,14 +323,14 @@ test "ResultsWidget handleEvent j adjusts scroll when cursor leaves window" {
         .{ .title = "T6", .seeders = 6, .leechers = 0, .link = "magnet:6" },
     };
     widget.setTorrents(torrents, 6);
-    // max_rows=10, display_count=4. cursor at 3 (last visible), j pushes it to 4.
-    widget.cursor = 3;
+    // max_rows=10, display_count=1. cursor at 0 (last visible), j pushes it to 1.
+    widget.cursor = 0;
 
     const event = term.Event{ .key = .char, .value = 'j' };
     const action = widget.handleEvent(event, 10);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
-    try std.testing.expectEqual(@as(usize, 4), widget.cursor);
+    try std.testing.expectEqual(@as(usize, 1), widget.cursor);
     try std.testing.expectEqual(@as(usize, 1), widget.scroll_offset);
 }
 
@@ -354,12 +415,12 @@ test "ResultsWidget handleEvent J moves cursor by display_count" {
         .{ .title = "T8", .seeders = 8, .leechers = 0, .link = "magnet:8" },
     };
     widget.setTorrents(torrents, 8);
-    // max_rows=10, display_count=4, cursor=0 -> J moves cursor to 4
+    // max_rows=10, display_count=1, cursor=0 -> J moves cursor to 1
     const event = term.Event{ .key = .char, .value = 'J' };
     const action = widget.handleEvent(event, 10);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
-    try std.testing.expectEqual(@as(usize, 4), widget.cursor);
+    try std.testing.expectEqual(@as(usize, 1), widget.cursor);
     try std.testing.expectEqual(@as(usize, 1), widget.scroll_offset);
 }
 
@@ -379,9 +440,9 @@ test "ResultsWidget handleEvent K retreats cursor by display_count" {
         .{ .title = "T8", .seeders = 8, .leechers = 0, .link = "magnet:8" },
     };
     widget.setTorrents(torrents, 8);
-    widget.cursor = 4;
-    widget.scroll_offset = 1;
-    // max_rows=10, display_count=4, cursor=4 -> K moves cursor to 0
+    widget.cursor = 1;
+    widget.scroll_offset = 0;
+    // max_rows=10, display_count=1, cursor=1 -> K moves cursor to 0
     const event = term.Event{ .key = .char, .value = 'K' };
     const action = widget.handleEvent(event, 10);
 
@@ -407,13 +468,13 @@ test "ResultsWidget handleEvent J at last torrent does nothing" {
     };
     widget.setTorrents(torrents, 8);
     widget.cursor = 7; // last torrent
-    widget.scroll_offset = 4;
+    widget.scroll_offset = 7;
     const event = term.Event{ .key = .char, .value = 'J' };
     const action = widget.handleEvent(event, 10);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
     try std.testing.expectEqual(@as(usize, 7), widget.cursor);
-    try std.testing.expectEqual(@as(usize, 4), widget.scroll_offset);
+    try std.testing.expectEqual(@as(usize, 7), widget.scroll_offset);
 }
 
 test "ResultsWidget handleEvent K at cursor 0 does nothing" {

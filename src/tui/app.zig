@@ -41,6 +41,7 @@ const App = struct {
     state: State,
     running: bool,
     term_rows: u16,
+    term_cols: u16,
     terminal: []const u8,
 };
 
@@ -64,6 +65,7 @@ pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
         .state = .{ .search = .{ .query = "" } },
         .running = true,
         .term_rows = size.rows,
+        .term_cols = size.cols,
         .terminal = cfg.terminal,
     };
 
@@ -175,7 +177,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
     widget.setTorrents(torrents, torrents.len);
 
     while (true) {
-        widget.render(app.term_rows);
+        widget.render(app.term_rows, app.term_cols);
 
         const event = term.readKey() catch {
             app.state = .{ .err = .{ .message = "Failed to read input" } };
