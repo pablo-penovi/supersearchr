@@ -30,6 +30,11 @@ const ErrorState = struct {
     message: []const u8,
 };
 
+const SpinnerContext = struct {
+    message: []const u8,
+    stop: *std.atomic.Value(bool),
+};
+
 const App = struct {
     allocator: std.mem.Allocator,
     client: jackett.Client,
@@ -60,12 +65,7 @@ pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
         .term_rows = size.rows,
     };
 
-    defer {
-        if (app.state == .results) {
-            freeTorrents(allocator, app.state.results.torrents);
-        }
-        client.deinit();
-    }
+    defer client.deinit();
 
     while (app.running) {
         switch (app.state) {
@@ -113,26 +113,58 @@ fn runSearchState(app: *App) !void {
     }
 }
 
+fn spinnerThread(ctx: SpinnerContext) void {
+    const frames = [_]u8{ '|', '/', '-', '\\' };
+    var frame: usize = 0;
+    const stdout = std.fs.File.stdout();
+    var buf: [128]u8 = undefined;
+
+    while (!ctx.stop.load(.acquire)) {
+        const line = std.fmt.bufPrint(&buf, "\r{s} {c}", .{ ctx.message, frames[frame] }) catch break;
+        stdout.writeAll(line) catch break;
+        frame = (frame + 1) % frames.len;
+        std.Thread.sleep(100 * std.time.ns_per_ms);
+    }
+    const line = std.fmt.bufPrint(&buf, "\r{s}  ", .{ctx.message}) catch return;
+    stdout.writeAll(line) catch {};
+}
+
 fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
     const query = loading_state.query;
     defer app.allocator.free(query);
 
-    renderLoading(query);
+    var msg_buf: [64]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, "Searching for \"{s}\"...", .{query}) catch "Searching...";
+
+    term.moveCursor(1, 1);
+    term.clearScreen();
+    std.fs.File.stdout().writeAll(msg) catch {};
+
+    var stop = std.atomic.Value(bool).init(false);
+    const thread = try std.Thread.spawn(.{}, spinnerThread, .{SpinnerContext{ .message = msg, .stop = &stop }});
 
     const torrents = app.client.searchWithExecutor(query, jackett.defaultSearchExecutor) catch |err| {
+        stop.store(true, .release);
+        thread.join();
         const message = getErrorMessage(err);
         app.state = .{ .err = .{ .message = message } };
         return;
     };
 
+    stop.store(true, .release);
+    thread.join();
+
     app.state = .{ .results = .{ .torrents = torrents } };
 }
 
 fn runResultsState(app: *App, results_state: *ResultsState) !void {
+    const torrents = results_state.torrents;
+    defer freeTorrents(app.allocator, torrents);
+
     var widget = results_widget.ResultsWidget.init(app.allocator);
     defer widget.deinit();
 
-    widget.setTorrents(results_state.torrents, results_state.torrents.len);
+    widget.setTorrents(torrents, torrents.len);
 
     while (true) {
         widget.render(app.term_rows);
@@ -154,7 +186,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                 return;
             },
             .select => |idx| {
-                const torrent = results_state.torrents[idx];
+                const torrent = torrents[idx];
                 const result = superseedr.addLink(app.allocator, torrent.link);
 
                 if (result) |_| {
@@ -179,14 +211,6 @@ fn runErrorState(app: *App, error_state: *ErrorState) !void {
 
     _ = event;
     app.state = .{ .search = .{ .query = "" } };
-}
-
-fn renderLoading(query: []const u8) void {
-    term.moveCursor(1, 1);
-    term.clearScreen();
-    var buf: [64]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "Searching for \"{s}\"...", .{query}) catch return;
-    std.fs.File.stdout().writeAll(msg) catch {};
 }
 
 fn renderSuccess() void {

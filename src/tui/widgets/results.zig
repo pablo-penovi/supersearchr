@@ -59,17 +59,11 @@ pub const ResultsWidget = struct {
             std.fs.File.stdout().writeAll(msg) catch {};
         }
 
-        term.moveCursor(max_rows - 2, 1);
-        std.fs.File.stdout().writeAll("[Enter to confirm, ESC exit, n new search, j/k scroll]\r\n") catch {};
-
         term.moveCursor(max_rows - 1, 1);
-        std.fs.File.stdout().writeAll("Select #: ") catch {};
+        std.fs.File.stdout().writeAll("[Select #, Enter to confirm, ESC exit, n new search, j/k scroll]: ") catch {};
         if (self.input_buffer.items.len > 0) {
             std.fs.File.stdout().writeAll(self.input_buffer.items) catch {};
         }
-        term.setColor(.cyan);
-        std.fs.File.stdout().writeAll("█") catch {};
-        term.resetColor();
     }
 
     pub fn handleEvent(self: *ResultsWidget, event: term.Event, max_rows: u16) ResultsAction {
