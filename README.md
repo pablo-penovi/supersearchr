@@ -1,4 +1,5 @@
 # supersearchr
+v 0.1.0
 
 Supersearchr was born out of my necessity to have a way to search torrents that integrated with Superseedr in the terminal.
 
