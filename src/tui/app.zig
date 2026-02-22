@@ -152,7 +152,7 @@ fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
 
     const stdout = std.fs.File.stdout();
     const colors = theme.superseedr_like;
-    const border = theme.chooseBorderCharset();
+    const border = theme.unicode_border;
     const compact = app.term_cols < 56 or app.term_rows < 10;
     const panel_width = if (compact) @as(usize, 0) else @min(@as(usize, 74), @as(usize, @intCast(app.term_cols - 4)));
     const left_pad = if (compact) @as(usize, 0) else (@as(usize, @intCast(app.term_cols)) - panel_width) / 2;
@@ -300,7 +300,7 @@ fn renderError(message: []const u8) void {
 fn renderNoticePanel(title: []const u8, message: []const u8, title_color: u8) void {
     const stdout = std.fs.File.stdout();
     const colors = theme.superseedr_like;
-    const border = theme.chooseBorderCharset();
+    const border = theme.unicode_border;
     const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
 
     if (size.cols < 56 or size.rows < 10) {

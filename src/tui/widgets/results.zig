@@ -34,7 +34,7 @@ pub const ResultsWidget = struct {
     pub fn render(self: *ResultsWidget, max_rows: u16, max_cols: u16) void {
         const stdout = std.fs.File.stdout();
         const colors = theme.superseedr_like;
-        const border = theme.chooseBorderCharset();
+        const border = theme.unicode_border;
         term.moveCursor(1, 1);
         term.clearScreen();
 

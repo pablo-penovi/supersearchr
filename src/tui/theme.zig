@@ -37,58 +37,13 @@ pub const superseedr_like = Theme{
 };
 
 pub const unicode_border = BorderChars{
-    .top_left = "┌",
-    .top_right = "┐",
-    .bottom_left = "└",
-    .bottom_right = "┘",
-    .horizontal = "─",
-    .vertical = "│",
+    .top_left = "┏",
+    .top_right = "┓",
+    .bottom_left = "┗",
+    .bottom_right = "┛",
+    .horizontal = "━",
+    .vertical = "┃",
 };
-
-pub const ascii_border = BorderChars{
-    .top_left = "+",
-    .top_right = "+",
-    .bottom_left = "+",
-    .bottom_right = "+",
-    .horizontal = "-",
-    .vertical = "|",
-};
-
-pub fn chooseBorderCharset() BorderChars {
-    if (hasEnv("SUPERSEARCHR_ASCII")) return ascii_border;
-
-    if (!isUtf8Locale()) return ascii_border;
-
-    return unicode_border;
-}
-
-fn hasEnv(key: []const u8) bool {
-    const allocator = std.heap.page_allocator;
-    const value = std.process.getEnvVarOwned(allocator, key) catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => return false,
-        else => return false,
-    };
-    defer allocator.free(value);
-    return value.len >= 0;
-}
-
-fn envContainsUtf8(key: []const u8) bool {
-    const allocator = std.heap.page_allocator;
-    const value = std.process.getEnvVarOwned(allocator, key) catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => return false,
-        else => return false,
-    };
-    defer allocator.free(value);
-    return std.mem.indexOf(u8, value, "UTF-8") != null or
-        std.mem.indexOf(u8, value, "utf8") != null or
-        std.mem.indexOf(u8, value, "UTF8") != null;
-}
-
-fn isUtf8Locale() bool {
-    if (envContainsUtf8("LC_ALL")) return true;
-    if (envContainsUtf8("LC_CTYPE")) return true;
-    return envContainsUtf8("LANG");
-}
 
 pub fn drawPanelTop(writer: anytype, width: usize, border: BorderChars, colors: Theme) !void {
     if (width < 2) return;
@@ -166,7 +121,8 @@ test "truncateWithEllipsis long text adds dots" {
     try std.testing.expectEqualStrings("abc...", out);
 }
 
-test "chooseBorderCharset returns valid charset" {
-    const selected = chooseBorderCharset();
-    try std.testing.expect(selected.horizontal.len > 0);
+test "unicode border is heavy box drawing" {
+    try std.testing.expectEqualStrings("┏", unicode_border.top_left);
+    try std.testing.expectEqualStrings("━", unicode_border.horizontal);
+    try std.testing.expectEqualStrings("┃", unicode_border.vertical);
 }
