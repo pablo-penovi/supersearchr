@@ -108,6 +108,14 @@ pub fn clearScreen() void {
     std.fs.File.stdout().writeAll("\x1b[2J") catch {};
 }
 
+pub fn hideCursor() void {
+    std.fs.File.stdout().writeAll("\x1b[?25l") catch {};
+}
+
+pub fn showCursor() void {
+    std.fs.File.stdout().writeAll("\x1b[?25h") catch {};
+}
+
 pub fn moveCursor(row: u16, col: u16) void {
     const stdout = std.fs.File.stdout();
     var buf: [32]u8 = undefined;

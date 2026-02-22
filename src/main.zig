@@ -19,6 +19,7 @@ pub fn main() !void {
     defer {
         gpa.allocator().free(cfg.api_key);
         gpa.allocator().free(cfg.api_url);
+        gpa.allocator().free(cfg.terminal);
     }
 
     try app.run(gpa.allocator(), cfg);

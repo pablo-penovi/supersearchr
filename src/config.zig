@@ -4,6 +4,7 @@ pub const Config = struct {
     api_key: []const u8,
     api_url: []const u8,
     api_port: u16,
+    terminal: []const u8,
 };
 
 pub fn loadConfig(allocator: std.mem.Allocator) !Config {
@@ -22,7 +23,11 @@ pub fn loadConfig(allocator: std.mem.Allocator) !Config {
     const contents = try file.readToEndAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(contents);
 
-    return try parseConfig(allocator, contents);
+    const patched = try patchMissingDefaults(allocator, config_path, contents);
+    const effective_contents = patched orelse contents;
+    defer if (patched != null) allocator.free(patched.?);
+
+    return try parseConfig(allocator, effective_contents);
 }
 
 fn getConfigPath(allocator: std.mem.Allocator) ![]const u8 {
@@ -45,7 +50,8 @@ fn createConfigFile(config_path: []const u8) !void {
         \\{
         \\  "apiKey": "YOUR_JACKETT_API_KEY",
         \\  "apiUrl": "YOUR_JACKET_URL",
-        \\  "apiPort": 9117
+        \\  "apiPort": 9117,
+        \\  "terminal": "ghostty"
         \\}
     ;
 
@@ -55,6 +61,46 @@ fn createConfigFile(config_path: []const u8) !void {
     try file.writeAll(placeholder);
 
     std.debug.print("Config created at {s}. Please add your Jackett API key, URL and port.\n", .{config_path});
+}
+
+const OptionalDefault = struct { key: []const u8, json_value: []const u8 };
+const optional_defaults = [_]OptionalDefault{
+    .{ .key = "terminal", .json_value = "\"ghostty\"" },
+};
+
+fn patchMissingDefaults(
+    allocator: std.mem.Allocator,
+    config_path: []const u8,
+    contents: []const u8,
+) !?[]const u8 {
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, contents, .{}) catch return null;
+    defer parsed.deinit();
+
+    var patch_buf = std.ArrayList(u8){};
+    defer patch_buf.deinit(allocator);
+
+    for (optional_defaults) |def| {
+        if (parsed.value.object.get(def.key) == null) {
+            try patch_buf.appendSlice(allocator, ",\n  \"");
+            try patch_buf.appendSlice(allocator, def.key);
+            try patch_buf.appendSlice(allocator, "\": ");
+            try patch_buf.appendSlice(allocator, def.json_value);
+        }
+    }
+
+    if (patch_buf.items.len == 0) return null;
+
+    const last_brace = std.mem.lastIndexOfScalar(u8, contents, '}') orelse return null;
+    const patched = try std.fmt.allocPrint(allocator, "{s}{s}\n}}", .{
+        contents[0..last_brace],
+        patch_buf.items,
+    });
+
+    const file = try std.fs.createFileAbsolute(config_path, .{});
+    defer file.close();
+    try file.writeAll(patched);
+
+    return patched;
 }
 
 fn parseConfig(allocator: std.mem.Allocator, contents: []const u8) !Config {
@@ -74,6 +120,9 @@ fn parseConfig(allocator: std.mem.Allocator, contents: []const u8) !Config {
     const api_port = obj.get("apiPort") orelse {
         return error.MissingApiPort;
     };
+    const terminal = obj.get("terminal") orelse {
+        return error.MissingTerminal;
+    };
 
     const api_key_str = switch (api_key) {
         .string => |s| s,
@@ -90,6 +139,11 @@ fn parseConfig(allocator: std.mem.Allocator, contents: []const u8) !Config {
         else => return error.InvalidApiPort,
     };
 
+    const terminal_str = switch (terminal) {
+        .string => |s| s,
+        else => return error.InvalidTerminal,
+    };
+
     if (api_key_str.len == 0 or std.mem.eql(u8, api_key_str, "YOUR_JACKETT_API_KEY")) {
         return error.EmptyApiKey;
     }
@@ -102,10 +156,15 @@ fn parseConfig(allocator: std.mem.Allocator, contents: []const u8) !Config {
         return error.EmptyApiPort;
     }
 
+    if (terminal_str.len == 0) {
+        return error.EmptyTerminal;
+    }
+
     return .{
         .api_key = try allocator.dupe(u8, api_key_str),
         .api_url = try allocator.dupe(u8, api_url_str),
         .api_port = @intCast(api_port_num),
+        .terminal = try allocator.dupe(u8, terminal_str),
     };
 }
 
@@ -116,7 +175,8 @@ test "parse valid config JSON" {
         \\{
         \\  "apiKey": "test_api_key",
         \\  "apiUrl": "http://localhost",
-        \\  "apiPort": 9117
+        \\  "apiPort": 9117,
+        \\  "terminal": "ghostty"
         \\}
     ;
 
@@ -124,11 +184,13 @@ test "parse valid config JSON" {
     defer {
         allocator.free(config.api_key);
         allocator.free(config.api_url);
+        allocator.free(config.terminal);
     }
 
     try std.testing.expectEqualStrings("test_api_key", config.api_key);
     try std.testing.expectEqualStrings("http://localhost", config.api_url);
     try std.testing.expectEqual(@as(u16, 9117), config.api_port);
+    try std.testing.expectEqualStrings("ghostty", config.terminal);
 }
 
 test "missing apiKey returns error" {
@@ -137,7 +199,8 @@ test "missing apiKey returns error" {
     const json_no_key =
         \\{
         \\  "apiUrl": "http://localhost",
-        \\  "apiPort": 9117
+        \\  "apiPort": 9117,
+        \\  "terminal": "ghostty"
         \\}
     ;
 
@@ -150,7 +213,8 @@ test "missing apiUrl returns error" {
     const json_no_url =
         \\{
         \\  "apiKey": "test_key",
-        \\  "apiPort": 9117
+        \\  "apiPort": 9117,
+        \\  "terminal": "ghostty"
         \\}
     ;
 
@@ -163,7 +227,8 @@ test "missing apiPort returns error" {
     const json_no_port =
         \\{
         \\  "apiKey": "test_key",
-        \\  "apiUrl": "http://localhost"
+        \\  "apiUrl": "http://localhost",
+        \\  "terminal": "ghostty"
         \\}
     ;
 
@@ -177,7 +242,8 @@ test "default apiKey value returns error" {
         \\{
         \\  "apiKey": "YOUR_JACKETT_API_KEY",
         \\  "apiUrl": "http://localhost",
-        \\  "apiPort": 9117
+        \\  "apiPort": 9117,
+        \\  "terminal": "ghostty"
         \\}
     ;
 
@@ -191,7 +257,8 @@ test "default apiUrl value returns error" {
         \\{
         \\  "apiKey": "test_key",
         \\  "apiUrl": "YOUR_JACKET_URL",
-        \\  "apiPort": 9117
+        \\  "apiPort": 9117,
+        \\  "terminal": "ghostty"
         \\}
     ;
 
@@ -205,9 +272,39 @@ test "empty apiKey returns error" {
         \\{
         \\  "apiKey": "",
         \\  "apiUrl": "http://localhost",
-        \\  "apiPort": 9117
+        \\  "apiPort": 9117,
+        \\  "terminal": "ghostty"
         \\}
     ;
 
     try std.testing.expectError(error.EmptyApiKey, parseConfig(allocator, json_empty_key));
+}
+
+test "missing terminal returns error" {
+    const allocator = std.testing.allocator;
+
+    const json_no_terminal =
+        \\{
+        \\  "apiKey": "test_key",
+        \\  "apiUrl": "http://localhost",
+        \\  "apiPort": 9117
+        \\}
+    ;
+
+    try std.testing.expectError(error.MissingTerminal, parseConfig(allocator, json_no_terminal));
+}
+
+test "empty terminal returns error" {
+    const allocator = std.testing.allocator;
+
+    const json_empty_terminal =
+        \\{
+        \\  "apiKey": "test_key",
+        \\  "apiUrl": "http://localhost",
+        \\  "apiPort": 9117,
+        \\  "terminal": ""
+        \\}
+    ;
+
+    try std.testing.expectError(error.EmptyTerminal, parseConfig(allocator, json_empty_terminal));
 }

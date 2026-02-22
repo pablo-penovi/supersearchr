@@ -41,6 +41,7 @@ const App = struct {
     state: State,
     running: bool,
     term_rows: u16,
+    terminal: []const u8,
 };
 
 pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
@@ -63,6 +64,7 @@ pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
         .state = .{ .search = .{ .query = "" } },
         .running = true,
         .term_rows = size.rows,
+        .terminal = cfg.terminal,
     };
 
     defer client.deinit();
@@ -133,6 +135,9 @@ fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
     const query = loading_state.query;
     defer app.allocator.free(query);
 
+    term.hideCursor();
+    defer term.showCursor();
+
     var msg_buf: [64]u8 = undefined;
     const msg = std.fmt.bufPrint(&msg_buf, "Searching for \"{s}\"...", .{query}) catch "Searching...";
 
@@ -187,7 +192,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
             },
             .select => |idx| {
                 const torrent = torrents[idx];
-                const result = superseedr.addLink(app.allocator, torrent.link);
+                const result = superseedr.addLink(app.allocator, torrent.link, app.terminal);
 
                 if (result) |_| {
                     renderSuccess();
