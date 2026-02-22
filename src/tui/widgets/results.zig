@@ -33,7 +33,6 @@ pub const ResultsWidget = struct {
     pub fn render(self: *ResultsWidget, max_rows: u16, max_cols: u16) void {
         const stdout = std.fs.File.stdout();
         term.moveCursor(1, 1);
-        term.clearScreen();
 
         if (max_cols < 10) {
             stdout.writeAll("Terminal too narrow\r\n") catch {};
