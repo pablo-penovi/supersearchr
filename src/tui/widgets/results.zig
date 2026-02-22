@@ -65,17 +65,13 @@ pub const ResultsWidget = struct {
 
         drawBorder('=', max_cols);
 
-        term.setColor(.cyan);
         stdout.writeAll("||") catch {};
-        term.resetColor();
         {
             var buf: [64]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "Results ({d} found)", .{self.total_count}) catch return;
             centerText(stdout, msg, inner_width) catch {};
         }
-        term.setColor(.cyan);
         stdout.writeAll("     ||\r\n") catch {};
-        term.resetColor();
         drawBorder('=', max_cols);
 
         for (self.torrents[self.scroll_offset..end_idx], self.scroll_offset..) |torrent, abs_idx| {
