@@ -2,9 +2,12 @@
 
 Supersearchr was born out of my necessity to have a way to search torrents that integrated with Superseedr in the terminal.
 
-Supersearchr is a Linux-only TUI BitTorrent search tool written in Zig. It searches via Jackett and sends selected magnet or torrent links to Superseedr. This project uses Zig 0.15.2.
+Supersearchr is a Linux-only-guaranteed (actually not sure if it would be cross-platform) TUI BitTorrent search tool written in Zig. It searches via Jackett and sends selected magnet or torrent links to Superseedr. This project uses Zig 0.15.2.
 
 ## Build and Test
+
+Dependencies:
+Only the Zig standard library
 
 Build:
 ```bash
@@ -50,5 +53,5 @@ The config includes:
 
 1. Type your search query and press Enter.
 2. Use j/k or J/K keys to navigate results.
-3. Press Enter to select a result and send it to Superseedr.
-4. You can either choose many torrents from the same result list, press n to make a new search, or press ESC to exit the application.
+3. Press Enter to select a result and send it to Superseedr. If Superseedr is not running, a new terminal instance will be spawned with superseedr running on it.
+4. You can either select one or more torrents from the same result list, press n to make a new search, or press ESC to exit the application.
