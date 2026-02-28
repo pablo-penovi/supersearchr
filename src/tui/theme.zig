@@ -82,31 +82,79 @@ pub fn writeRepeat(writer: anytype, chunk: []const u8, count: usize) !void {
     for (0..count) |_| try writer.writeAll(chunk);
 }
 
+fn displayWidth(cp: u21) usize {
+    if (cp >= 0x1100 and cp <= 0x115F) return 2;
+    if (cp == 0x2329 or cp == 0x232A) return 2;
+    if (cp >= 0x2E80 and cp <= 0x303E) return 2;
+    if (cp >= 0x3041 and cp <= 0x33BF) return 2;
+    if (cp >= 0x33FF and cp <= 0xA4CF) return 2;
+    if (cp >= 0xA960 and cp <= 0xA97F) return 2;
+    if (cp >= 0xAC00 and cp <= 0xD7FF) return 2;
+    if (cp >= 0xF900 and cp <= 0xFAFF) return 2;
+    if (cp >= 0xFE10 and cp <= 0xFE1F) return 2;
+    if (cp >= 0xFE30 and cp <= 0xFE6F) return 2;
+    if (cp >= 0xFF00 and cp <= 0xFF60) return 2;
+    if (cp >= 0xFFE0 and cp <= 0xFFE6) return 2;
+    if (cp >= 0x1B000 and cp <= 0x1B0FF) return 2;
+    if (cp == 0x1F004 or cp == 0x1F0CF) return 2;
+    if (cp >= 0x1F300 and cp <= 0x1F9FF) return 2;
+    if (cp >= 0x20000 and cp <= 0x2FFFD) return 2;
+    if (cp >= 0x30000 and cp <= 0x3FFFD) return 2;
+    return 1;
+}
+
+fn displayWidthOf(text: []const u8) usize {
+    var view = std.unicode.Utf8View.init(text) catch return text.len;
+    var iter = view.iterator();
+    var width: usize = 0;
+    while (iter.nextCodepoint()) |cp| width += displayWidth(cp);
+    return width;
+}
+
+fn nthColumnByteOffset(text: []const u8, n: usize) usize {
+    var view = std.unicode.Utf8View.init(text) catch return @min(n, text.len);
+    var iter = view.iterator();
+    var byte_pos: usize = 0;
+    var cols: usize = 0;
+    while (cols < n) {
+        const slice = iter.nextCodepointSlice() orelse break;
+        const cp = std.unicode.utf8Decode(slice) catch break;
+        const w = displayWidth(cp);
+        if (cols + w > n) break;
+        byte_pos += slice.len;
+        cols += w;
+    }
+    return byte_pos;
+}
+
 pub fn writePadded(writer: anytype, text: []const u8, width: usize) !void {
     if (width == 0) return;
-    if (text.len >= width) {
-        try writer.writeAll(text[0..width]);
+    const disp_width = displayWidthOf(text);
+    if (disp_width >= width) {
+        try writer.writeAll(text);
         return;
     }
-
     try writer.writeAll(text);
-    for (0..(width - text.len)) |_| try writer.writeAll(" ");
+    for (0..(width - disp_width)) |_| try writer.writeAll(" ");
 }
 
 pub fn truncateWithEllipsis(text: []const u8, width: usize, scratch: []u8) []const u8 {
     if (width == 0) return "";
-    if (text.len <= width) return text;
-    if (scratch.len < width) return text[0..width];
+    const disp_width = displayWidthOf(text);
+    if (disp_width <= width) return text;
+    if (scratch.len < width) return text;
 
     if (width <= 3) {
-        @memcpy(scratch[0..width], text[0..width]);
-        return scratch[0..width];
+        const end = nthColumnByteOffset(text, width);
+        @memcpy(scratch[0..end], text[0..end]);
+        return scratch[0..end];
     }
 
     const keep = width - 3;
-    @memcpy(scratch[0..keep], text[0..keep]);
-    @memcpy(scratch[keep..width], "...");
-    return scratch[0..width];
+    const byte_end = nthColumnByteOffset(text, keep);
+    @memcpy(scratch[0..byte_end], text[0..byte_end]);
+    @memcpy(scratch[byte_end .. byte_end + 3], "...");
+    return scratch[0 .. byte_end + 3];
 }
 
 test "truncateWithEllipsis short text unchanged" {
@@ -125,4 +173,50 @@ test "unicode border is heavy box drawing" {
     try std.testing.expectEqualStrings("┏", unicode_border.top_left);
     try std.testing.expectEqualStrings("━", unicode_border.horizontal);
     try std.testing.expectEqualStrings("┃", unicode_border.vertical);
+}
+
+test "writePadded pads correctly with multi-byte char" {
+    var buf: [64]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    const writer = stream.writer();
+    // "⭐" is 3 bytes, 1 char. Total chars = 4. Pad to 6 → 2 spaces added.
+    try writePadded(writer, "abc⭐", 6);
+    try std.testing.expectEqualStrings("abc⭐  ", stream.getWritten());
+}
+
+test "truncateWithEllipsis handles multi-byte char in kept region" {
+    var buf: [32]u8 = undefined;
+    // "abc⭐xyz" = 7 chars, truncate to 6 → "abc..."
+    const out = truncateWithEllipsis("abc⭐xyz", 6, &buf);
+    try std.testing.expectEqualStrings("abc...", out);
+}
+
+test "truncateWithEllipsis short text with multi-byte char unchanged" {
+    var buf: [32]u8 = undefined;
+    const out = truncateWithEllipsis("abc⭐", 10, &buf);
+    try std.testing.expectEqualStrings("abc⭐", out);
+}
+
+test "displayWidth returns 2 for wide emoji" {
+    try std.testing.expectEqual(@as(usize, 2), displayWidth(0x1F31F)); // 🌟
+}
+
+test "displayWidth returns 1 for narrow char" {
+    try std.testing.expectEqual(@as(usize, 1), displayWidth('A'));
+}
+
+test "writePadded pads correctly with wide emoji" {
+    var buf: [64]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    const writer = stream.writer();
+    // "🌟" is 4 bytes, 1 codepoint, display width 2. "abc🌟" = 5 display cols. Pad to 8 → 3 spaces.
+    try writePadded(writer, "abc🌟", 8);
+    try std.testing.expectEqualStrings("abc🌟   ", stream.getWritten());
+}
+
+test "truncateWithEllipsis truncates wide emoji correctly" {
+    var buf: [32]u8 = undefined;
+    // "ab🌟cd" = 2+2+2 = 6 display cols. Truncate to 5 → "ab..." (wide 🌟 overshoots at col 4)
+    const out = truncateWithEllipsis("ab🌟cd", 5, &buf);
+    try std.testing.expectEqualStrings("ab...", out);
 }
