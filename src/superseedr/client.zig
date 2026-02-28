@@ -20,12 +20,26 @@ pub fn defaultExecutor(allocator: std.mem.Allocator, argv: []const []const u8) a
     const result = std.process.Child.run(.{
         .allocator = allocator,
         .argv = argv,
-    }) catch return error.SuperseedrNotFound;
+    }) catch |err| {
+        debug_log.writef(
+            allocator,
+            "superseedr",
+            "Failed to invoke command err={s} cmd=\"{s}\"",
+            .{ @errorName(err), argv[0] },
+        );
+        return error.SuperseedrNotFound;
+    };
     defer {
         allocator.free(result.stdout);
         allocator.free(result.stderr);
     }
     if (result.term != .Exited or result.term.Exited != 0) {
+        debug_log.writef(
+            allocator,
+            "superseedr",
+            "Command failed term={any} stderr=\"{s}\"",
+            .{ result.term, result.stderr },
+        );
         return error.SuperseedrFailed;
     }
 }
@@ -71,15 +85,55 @@ pub fn addLinkWithAllDeps(
         return error.InvalidLink;
     }
 
-    const running = checker(allocator) catch false;
+    const running = checker(allocator) catch |err| blk: {
+        debug_log.writef(
+            allocator,
+            "superseedr",
+            "Failed to check running process err={s}; assuming not running",
+            .{@errorName(err)},
+        );
+        break :blk false;
+    };
     if (!running) {
-        spawner(allocator, terminal) catch return error.SuperseedrLaunchFailed;
+        spawner(allocator, terminal) catch |err| {
+            debug_log.writef(
+                allocator,
+                "superseedr",
+                "Failed to spawn superseedr err={s} terminal=\"{s}\"",
+                .{ @errorName(err), terminal },
+            );
+            return error.SuperseedrLaunchFailed;
+        };
     }
 
     executor(allocator, &.{ "superseedr", "add", link }) catch |err| switch (err) {
-        error.SuperseedrNotFound => return error.SuperseedrNotFound,
-        error.SuperseedrFailed => return error.SuperseedrFailed,
-        else => return error.SuperseedrFailed,
+        error.SuperseedrNotFound => {
+            debug_log.writef(
+                allocator,
+                "superseedr",
+                "superseedr add failed err={s} link=\"{s}\"",
+                .{ @errorName(err), link },
+            );
+            return error.SuperseedrNotFound;
+        },
+        error.SuperseedrFailed => {
+            debug_log.writef(
+                allocator,
+                "superseedr",
+                "superseedr add failed err={s} link=\"{s}\"",
+                .{ @errorName(err), link },
+            );
+            return error.SuperseedrFailed;
+        },
+        else => {
+            debug_log.writef(
+                allocator,
+                "superseedr",
+                "superseedr add failed with unexpected error err={s} link=\"{s}\"",
+                .{ @errorName(err), link },
+            );
+            return error.SuperseedrFailed;
+        },
     };
 }
 

@@ -96,25 +96,81 @@ pub fn defaultSearchExecutor(allocator: std.mem.Allocator, url: []const u8) anye
     var http_client = std.http.Client{ .allocator = allocator };
     defer http_client.deinit();
 
-    const uri = try std.Uri.parse(url);
-    var request = try http_client.request(.GET, uri, .{});
+    const uri = std.Uri.parse(url) catch |err| {
+        debug_log.writef(
+            allocator,
+            "jackett",
+            "Failed to parse Jackett URL err={s} url=\"{s}\"",
+            .{ @errorName(err), url },
+        );
+        return err;
+    };
+    var request = http_client.request(.GET, uri, .{}) catch |err| {
+        debug_log.writef(
+            allocator,
+            "jackett",
+            "Failed to create Jackett request err={s} url=\"{s}\"",
+            .{ @errorName(err), url },
+        );
+        return err;
+    };
     defer request.deinit();
 
-    try request.sendBodiless();
+    request.sendBodiless() catch |err| {
+        debug_log.writef(
+            allocator,
+            "jackett",
+            "Failed to send Jackett request err={s} url=\"{s}\"",
+            .{ @errorName(err), url },
+        );
+        return err;
+    };
     var header_buf: [1024]u8 = undefined;
-    var response = try request.receiveHead(&header_buf);
+    var response = request.receiveHead(&header_buf) catch |err| {
+        debug_log.writef(
+            allocator,
+            "jackett",
+            "Failed to receive Jackett response head err={s} url=\"{s}\"",
+            .{ @errorName(err), url },
+        );
+        return err;
+    };
 
     const status = response.head.status;
     if (status != .ok) {
+        debug_log.writef(
+            allocator,
+            "jackett",
+            "Jackett returned non-OK status status={s} url=\"{s}\"",
+            .{ @tagName(status), url },
+        );
         return error.HttpError;
     }
 
     var read_buf: [4096]u8 = undefined;
     const reader = response.reader(&read_buf);
-    const body = try reader.allocRemaining(allocator, .unlimited);
+    const body = reader.allocRemaining(allocator, .unlimited) catch |err| {
+        debug_log.writef(
+            allocator,
+            "jackett",
+            "Failed to read Jackett response body err={s} url=\"{s}\"",
+            .{ @errorName(err), url },
+        );
+        return err;
+    };
     defer allocator.free(body);
 
-    return try parseTorrents(allocator, body);
+    const torrents = parseTorrents(allocator, body) catch |err| {
+        debug_log.writef(
+            allocator,
+            "jackett",
+            "Failed to parse Jackett response err={s} url=\"{s}\"",
+            .{ @errorName(err), url },
+        );
+        return err;
+    };
+
+    return torrents;
 }
 
 pub const Client = struct {

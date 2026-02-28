@@ -1,5 +1,5 @@
 # supersearchr
-v 0.2.0
+v 0.2.1
 
 Supersearchr was born out of my necessity to have a way to search torrents that integrated with Superseedr in the terminal.
 
@@ -57,12 +57,17 @@ The config includes:
 
 ## Debug mode
 
-To troubleshoot parsing/selection issues, you can enable debug logging with environment variables:
+To troubleshoot parsing, API, and selection issues, you can enable debug logging with environment variables:
 
 - `SUPERSEARCHR_DEBUG=1` enables debug logs.
 - `SUPERSEARCHR_DEBUG_PATH=/path/to/file.log` overrides log file location.
 
 If `SUPERSEARCHR_DEBUG_PATH` is not set, logs are written to `/tmp/supersearchr-debug.log`.
+
+When enabled, debug logs include:
+- Jackett API/connection failures (request setup, send/receive failures, non-OK HTTP status, response parsing errors).
+- Superseedr invocation failures (process check/spawn issues, `superseedr add` execution failures).
+- Parsed/selected torrent information used during result handling.
 
 Example:
 ```bash
