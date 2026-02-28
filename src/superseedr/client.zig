@@ -68,12 +68,76 @@ pub fn defaultProcessChecker(allocator: std.mem.Allocator) anyerror!bool {
 }
 
 pub fn defaultSpawner(allocator: std.mem.Allocator, terminal: []const u8) anyerror!void {
-    _ = terminal;
-    var child = std.process.Child.init(&.{"superseedr"}, allocator);
+    var argv = try buildSpawnArgv(allocator, terminal);
+    defer argv.deinit(allocator);
+
+    var child = std.process.Child.init(argv.items, allocator);
+    configureSpawnerChild(&child);
+    try child.spawn();
+    const reaper = try std.Thread.spawn(.{}, reapChildWhenDone, .{child});
+    reaper.detach();
+    std.Thread.sleep(500 * std.time.ns_per_ms);
+}
+
+fn configureSpawnerChild(child: *std.process.Child) void {
+    child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
-    try child.spawn();
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    if (builtin.os.tag != .windows and builtin.os.tag != .wasi) {
+        // Put the launcher in a separate process group to avoid parent-terminal HUP propagation.
+        child.pgid = 0;
+    }
+}
+
+fn reapChildWhenDone(child: std.process.Child) void {
+    var mutable_child = child;
+    _ = mutable_child.wait() catch {};
+}
+
+fn buildSpawnArgv(allocator: std.mem.Allocator, terminal: []const u8) !std.ArrayList([]const u8) {
+    var argv: std.ArrayList([]const u8) = .{};
+    errdefer argv.deinit(allocator);
+
+    switch (builtin.os.tag) {
+        .windows => {
+            if (std.mem.eql(u8, terminal, "wt")) {
+                try argv.append(allocator, "wt");
+                try argv.append(allocator, "-w");
+                try argv.append(allocator, "new");
+                try argv.append(allocator, "new-tab");
+                try argv.append(allocator, "superseedr");
+                return argv;
+            }
+
+            try argv.append(allocator, "cmd");
+            try argv.append(allocator, "/c");
+            try argv.append(allocator, "start");
+            try argv.append(allocator, "");
+            try argv.append(allocator, terminal);
+            try argv.append(allocator, "superseedr");
+            return argv;
+        },
+        .macos => {
+            if (std.mem.eql(u8, terminal, "Terminal")) {
+                try argv.append(allocator, "osascript");
+                try argv.append(allocator, "-e");
+                try argv.append(allocator, "tell application \"Terminal\" to do script \"superseedr\"");
+                try argv.append(allocator, "-e");
+                try argv.append(allocator, "tell application \"Terminal\" to activate");
+                return argv;
+            }
+        },
+        else => {},
+    }
+
+    try argv.append(allocator, terminal);
+    if (std.mem.eql(u8, terminal, "gnome-terminal")) {
+        try argv.append(allocator, "--");
+    } else {
+        try argv.append(allocator, "-e");
+    }
+    try argv.append(allocator, "superseedr");
+    return argv;
 }
 
 pub fn addLinkWithAllDeps(
@@ -315,4 +379,41 @@ test "spawner failure returns SuperseedrLaunchFailed" {
     };
 
     try std.testing.expectError(error.SuperseedrLaunchFailed, addLinkWithAllDeps(std.testing.allocator, "magnet:?xt=urn:btih:abc", "ghostty", mock.exec, mock.checker, mock.spawner));
+}
+
+test "buildSpawnArgv uses standard -e mode on unix terminals" {
+    if (builtin.os.tag == .windows or builtin.os.tag == .macos) return error.SkipZigTest;
+
+    var argv = try buildSpawnArgv(std.testing.allocator, "ghostty");
+    defer argv.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), argv.items.len);
+    try std.testing.expectEqualStrings("ghostty", argv.items[0]);
+    try std.testing.expectEqualStrings("-e", argv.items[1]);
+    try std.testing.expectEqualStrings("superseedr", argv.items[2]);
+}
+
+test "buildSpawnArgv uses -- mode for gnome-terminal" {
+    if (builtin.os.tag == .windows or builtin.os.tag == .macos) return error.SkipZigTest;
+
+    var argv = try buildSpawnArgv(std.testing.allocator, "gnome-terminal");
+    defer argv.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 3), argv.items.len);
+    try std.testing.expectEqualStrings("gnome-terminal", argv.items[0]);
+    try std.testing.expectEqualStrings("--", argv.items[1]);
+    try std.testing.expectEqualStrings("superseedr", argv.items[2]);
+}
+
+test "configureSpawnerChild sets detached spawn behaviors" {
+    var child = std.process.Child.init(&.{"superseedr"}, std.testing.allocator);
+    configureSpawnerChild(&child);
+
+    try std.testing.expect(child.stdin_behavior == .Ignore);
+    try std.testing.expect(child.stdout_behavior == .Ignore);
+    try std.testing.expect(child.stderr_behavior == .Ignore);
+    if (builtin.os.tag != .windows and builtin.os.tag != .wasi) {
+        try std.testing.expect(child.pgid != null);
+        try std.testing.expectEqual(@as(std.posix.pid_t, 0), child.pgid.?);
+    }
 }
