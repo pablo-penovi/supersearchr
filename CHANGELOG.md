@@ -10,6 +10,7 @@ All notable changes to this project are documented in this file.
 - Restored launching Superseedr in an independent terminal process using the configured terminal command.
 - Fixed child-process reaping for the launcher process to avoid zombie children while `supersearchr` remains open.
 - Added terminal-launch argument handling for common platform behaviors (`wt`/`cmd start` on Windows, `Terminal` via `osascript` on macOS, and Unix terminal exec modes).
+- On Linux/macOS, detached launcher processes into their own process group so closing the `supersearchr` terminal does not terminate the spawned Superseedr terminal.
 
 ## 0.3.0
 

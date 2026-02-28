@@ -59,6 +59,7 @@ After building, copy `zig-out/bin/supersearchr` to a directory in your `PATH`, f
 - macOS: run from Terminal.app or iTerm2.
 - Windows: run from Windows Terminal (PowerShell or cmd), not legacy `conhost` shells.
 - `superseedr` must be available in `PATH` on all platforms.
+- Spawned Superseedr terminals are launched independently; on Linux/macOS they are detached from the `supersearchr` process group, so closing `supersearchr` does not terminate them.
 
 ## Configuration
 

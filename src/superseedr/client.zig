@@ -72,13 +72,21 @@ pub fn defaultSpawner(allocator: std.mem.Allocator, terminal: []const u8) anyerr
     defer argv.deinit(allocator);
 
     var child = std.process.Child.init(argv.items, allocator);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
+    configureSpawnerChild(&child);
     try child.spawn();
     const reaper = try std.Thread.spawn(.{}, reapChildWhenDone, .{child});
     reaper.detach();
     std.Thread.sleep(500 * std.time.ns_per_ms);
+}
+
+fn configureSpawnerChild(child: *std.process.Child) void {
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    if (builtin.os.tag != .windows and builtin.os.tag != .wasi) {
+        // Put the launcher in a separate process group to avoid parent-terminal HUP propagation.
+        child.pgid = 0;
+    }
 }
 
 fn reapChildWhenDone(child: std.process.Child) void {
@@ -395,4 +403,17 @@ test "buildSpawnArgv uses -- mode for gnome-terminal" {
     try std.testing.expectEqualStrings("gnome-terminal", argv.items[0]);
     try std.testing.expectEqualStrings("--", argv.items[1]);
     try std.testing.expectEqualStrings("superseedr", argv.items[2]);
+}
+
+test "configureSpawnerChild sets detached spawn behaviors" {
+    var child = std.process.Child.init(&.{"superseedr"}, std.testing.allocator);
+    configureSpawnerChild(&child);
+
+    try std.testing.expect(child.stdin_behavior == .Ignore);
+    try std.testing.expect(child.stdout_behavior == .Ignore);
+    try std.testing.expect(child.stderr_behavior == .Ignore);
+    if (builtin.os.tag != .windows and builtin.os.tag != .wasi) {
+        try std.testing.expect(child.pgid != null);
+        try std.testing.expectEqual(@as(std.posix.pid_t, 0), child.pgid.?);
+    }
 }
