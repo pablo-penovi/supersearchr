@@ -89,90 +89,19 @@ jobs:
           sudo apt-get install -y kcov
 
       - name: Build test binaries
-        run: |
-          set -euo pipefail
-          mkdir -p coverage
-
-          zig test src/config.zig \
-            --test-no-exec -femit-bin=coverage/test-config
-
-          zig test src/jackett/client.zig \
-            --dep torrent \
-            --dep debug_log \
-            --mod torrent::src/structs/torrent.zig \
-            --mod debug_log::src/debug/log.zig \
-            --test-no-exec -femit-bin=coverage/test-jackett
-
-          zig test src/superseedr/client.zig \
-            --dep debug_log \
-            --mod debug_log::src/debug/log.zig \
-            --test-no-exec -femit-bin=coverage/test-superseedr
-
-          zig test src/tui/theme.zig \
-            --dep term \
-            --mod term::src/tui/term.zig \
-            --test-no-exec -femit-bin=coverage/test-theme
-
-          zig test src/tui/widgets/search.zig \
-            --dep term \
-            --dep theme \
-            --mod term::src/tui/term.zig \
-            --mod theme:term:src/tui/theme.zig \
-            --test-no-exec -femit-bin=coverage/test-search
-
-          zig test src/tui/widgets/results.zig \
-            --dep term \
-            --dep theme \
-            --dep torrent \
-            --mod term::src/tui/term.zig \
-            --mod theme:term:src/tui/theme.zig \
-            --mod torrent::src/structs/torrent.zig \
-            --test-no-exec -femit-bin=coverage/test-results
-
-          zig test src/tui/panels.zig \
-            --dep term \
-            --dep theme \
-            --dep results \
-            --mod term::src/tui/term.zig \
-            --mod theme:term:src/tui/theme.zig \
-            --mod torrent::src/structs/torrent.zig \
-            --mod results:term,theme,torrent:src/tui/widgets/results.zig \
-            --test-no-exec -femit-bin=coverage/test-panels
-
-          zig test src/tui/app.zig \
-            --dep config \
-            --dep jackett \
-            --dep superseedr \
-            --dep term \
-            --dep theme \
-            --dep panels \
-            --dep search \
-            --dep results \
-            --dep torrent \
-            --dep debug_log \
-            --mod config::src/config.zig \
-            --mod torrent::src/structs/torrent.zig \
-            --mod debug_log::src/debug/log.zig \
-            --mod term::src/tui/term.zig \
-            --mod theme:term:src/tui/theme.zig \
-            --mod jackett:torrent,debug_log:src/jackett/client.zig \
-            --mod superseedr:debug_log:src/superseedr/client.zig \
-            --mod results:term,theme,torrent:src/tui/widgets/results.zig \
-            --mod search:term,theme:src/tui/widgets/search.zig \
-            --mod panels:term,theme,results:src/tui/panels.zig \
-            --test-no-exec -femit-bin=coverage/test-app
+        run: zig build build-coverage
 
       - name: Run coverage
         run: |
           set -euo pipefail
-          kcov --include-path=src coverage/config    ./coverage/test-config
-          kcov --include-path=src coverage/jackett   ./coverage/test-jackett
-          kcov --include-path=src coverage/superseedr ./coverage/test-superseedr
-          kcov --include-path=src coverage/theme     ./coverage/test-theme
-          kcov --include-path=src coverage/search    ./coverage/test-search
-          kcov --include-path=src coverage/results   ./coverage/test-results
-          kcov --include-path=src coverage/panels    ./coverage/test-panels
-          kcov --include-path=src coverage/app       ./coverage/test-app
+          kcov --include-path=src coverage/config     ./zig-out/bin/test-config
+          kcov --include-path=src coverage/jackett    ./zig-out/bin/test-jackett
+          kcov --include-path=src coverage/superseedr ./zig-out/bin/test-superseedr
+          kcov --include-path=src coverage/theme      ./zig-out/bin/test-theme
+          kcov --include-path=src coverage/search     ./zig-out/bin/test-search
+          kcov --include-path=src coverage/results    ./zig-out/bin/test-results
+          kcov --include-path=src coverage/panels     ./zig-out/bin/test-panels
+          kcov --include-path=src coverage/app        ./zig-out/bin/test-app
           kcov --merge coverage/merged \
             coverage/config coverage/jackett coverage/superseedr \
             coverage/theme coverage/search coverage/results \
