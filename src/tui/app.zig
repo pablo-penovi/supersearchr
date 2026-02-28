@@ -563,3 +563,71 @@ test "consumeMarqueeTick spends only one interval per loop" {
     try std.testing.expectEqual(@as(i64, 56), budget);
     try std.testing.expect(!consumeMarqueeTick(&budget, 104));
 }
+
+test "getErrorMessage maps known jackett errors and fallback" {
+    try std.testing.expectEqualStrings(
+        "Cannot connect to Jackett. Is it running?",
+        getErrorMessage(error.ConnectionRefused),
+    );
+    try std.testing.expectEqualStrings(
+        "Jackett returned error",
+        getErrorMessage(error.HttpError),
+    );
+    try std.testing.expectEqualStrings(
+        "Failed to parse Jackett response",
+        getErrorMessage(error.Unexpected),
+    );
+}
+
+test "getSuperseedrErrorMessage maps all AddLinkError values" {
+    try std.testing.expectEqualStrings("Invalid link", getSuperseedrErrorMessage(error.InvalidLink));
+    try std.testing.expectEqualStrings(
+        "superseedr not found in PATH",
+        getSuperseedrErrorMessage(error.SuperseedrNotFound),
+    );
+    try std.testing.expectEqualStrings(
+        "Failed to add to superseedr",
+        getSuperseedrErrorMessage(error.SuperseedrFailed),
+    );
+    try std.testing.expectEqualStrings(
+        "Failed to launch superseedr",
+        getSuperseedrErrorMessage(error.SuperseedrLaunchFailed),
+    );
+}
+
+test "refreshTerminalSize returns false and keeps values when unchanged" {
+    const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = size.rows,
+        .term_cols = size.cols,
+        .terminal = "xterm",
+    };
+
+    try std.testing.expect(!refreshTerminalSize(&app));
+    try std.testing.expectEqual(size.rows, app.term_rows);
+    try std.testing.expectEqual(size.cols, app.term_cols);
+}
+
+test "refreshTerminalSize returns true and updates values when changed" {
+    const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
+    const initial_rows: u16 = if (size.rows == 1) 2 else 1;
+    const initial_cols: u16 = if (size.cols == 1) 2 else 1;
+
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = initial_rows,
+        .term_cols = initial_cols,
+        .terminal = "xterm",
+    };
+
+    try std.testing.expect(refreshTerminalSize(&app));
+    try std.testing.expectEqual(size.rows, app.term_rows);
+    try std.testing.expectEqual(size.cols, app.term_cols);
+}
