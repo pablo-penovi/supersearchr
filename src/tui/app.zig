@@ -289,8 +289,14 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                             "Added torrent to superseedr title=\"{s}\" link=\"{s}\"",
                             .{ torrent.title, torrent.link },
                         );
-                        term.discardPendingInput();
-                        renderSuccess();
+                        renderResultNoticeOverlay(
+                            &widget,
+                            app.term_rows,
+                            app.term_cols,
+                            "Success",
+                            "Added to superseedr!",
+                            theme.superseedr_like.ok,
+                        );
                         widget.force_full_redraw = true;
                     } else |err| {
                         debug_log.writef(
@@ -299,9 +305,8 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                             "Failed to add torrent err={s} title=\"{s}\" link=\"{s}\"",
                             .{ @errorName(err), torrent.title, torrent.link },
                         );
-                        const message = getSuperseedrErrorMessage(err);
-                        app.state = .{ .err = .{ .message = message } };
-                        return;
+                        renderResultErrorOverlay(&widget, app.term_rows, app.term_cols, getSuperseedrErrorMessage(err));
+                        widget.force_full_redraw = true;
                     }
                 },
             }
@@ -323,36 +328,58 @@ fn runErrorState(app: *App, error_state: *ErrorState) !void {
     app.state = .{ .search = .{ .query = "" } };
 }
 
-fn renderSuccess() void {
-    renderNoticePanel("Success", "Added to superseedr!", theme.superseedr_like.ok);
+fn renderResultNoticeOverlay(
+    widget: *results_widget.ResultsWidget,
+    rows: u16,
+    cols: u16,
+    title: []const u8,
+    message: []const u8,
+    title_color: u8,
+) void {
+    term.discardPendingInput();
+    term.setDimPersistent(true);
+    widget.force_full_redraw = true;
+    widget.render(rows, cols);
+    term.setDimPersistent(false);
 
+    renderNoticePanel(title, message, title_color, false);
     const event = term.readKey() catch return;
     _ = event;
     term.discardPendingInput();
 }
 
+fn renderResultErrorOverlay(widget: *results_widget.ResultsWidget, rows: u16, cols: u16, message: []const u8) void {
+    var buf: [256]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "Error: {s}", .{message}) catch "Error";
+    renderResultNoticeOverlay(widget, rows, cols, "Error", msg, theme.superseedr_like.err);
+}
+
 fn renderError(message: []const u8) void {
     var buf: [256]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "Error: {s}", .{message}) catch "Error";
-    renderNoticePanel("Error", msg, theme.superseedr_like.err);
+    renderNoticePanel("Error", msg, theme.superseedr_like.err, true);
 }
 
-fn renderNoticePanel(title: []const u8, message: []const u8, title_color: u8) void {
+fn renderNoticePanel(title: []const u8, message: []const u8, title_color: u8, clear_backdrop: bool) void {
     const stdout = std.fs.File.stdout();
     const colors = theme.superseedr_like;
     const border = theme.unicode_border;
     const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
 
     if (size.cols < 56 or size.rows < 10) {
+        if (clear_backdrop) {
+            term.moveCursor(1, 1);
+            term.clearScreen();
+        }
         term.moveCursor(1, 1);
-        term.clearScreen();
+        var compact_buf: [256]u8 = undefined;
+        const compact_line = std.fmt.bufPrint(&compact_buf, "{s}: {s}", .{ title, message }) catch title;
+        var trunc_buf: [256]u8 = undefined;
+        const shown = theme.truncateWithEllipsis(compact_line, @max(@as(usize, 1), @as(usize, @intCast(size.cols))), trunc_buf[0..]);
         term.setFg256(title_color);
         term.setBold(true);
-        stdout.writeAll(title) catch {};
+        stdout.writeAll(shown) catch {};
         term.setBold(false);
-        stdout.writeAll(": ") catch {};
-        term.setFg256(colors.text);
-        stdout.writeAll(message) catch {};
         stdout.writeAll("\r\n") catch {};
         term.setFg256(colors.muted);
         stdout.writeAll("Press any key to continue...") catch {};
@@ -366,14 +393,16 @@ fn renderNoticePanel(title: []const u8, message: []const u8, title_color: u8) vo
     var trunc_buf: [320]u8 = undefined;
     const shown = theme.truncateWithEllipsis(message, panel_width - 4, trunc_buf[0..]);
 
-    term.moveCursor(1, 1);
-    term.clearScreen();
-    term.moveCursor(@as(u16, @intCast(top_pad)), 1);
-
-    writeSpaces(stdout, left_pad) catch {};
+    if (clear_backdrop) {
+        term.moveCursor(1, 1);
+        term.clearScreen();
+    }
+    const panel_col: u16 = @as(u16, @intCast(left_pad + 1));
+    const top_row: u16 = @as(u16, @intCast(top_pad));
+    term.moveCursor(top_row, panel_col);
     theme.drawPanelTop(stdout, panel_width, border, colors) catch {};
 
-    writeSpaces(stdout, left_pad) catch {};
+    term.moveCursor(top_row + 1, panel_col);
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.setFg256(title_color);
@@ -387,12 +416,12 @@ fn renderNoticePanel(title: []const u8, message: []const u8, title_color: u8) vo
     term.resetColor();
     stdout.writeAll("\r\n") catch {};
 
-    writeSpaces(stdout, left_pad) catch {};
+    term.moveCursor(top_row + 2, panel_col);
     var msg_buf: [352]u8 = undefined;
     const message_line = std.fmt.bufPrint(&msg_buf, " {s}", .{shown}) catch shown;
     theme.drawPanelRow(stdout, panel_width, message_line, border, colors) catch {};
 
-    writeSpaces(stdout, left_pad) catch {};
+    term.moveCursor(top_row + 3, panel_col);
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.setFg256(colors.muted);
@@ -402,7 +431,7 @@ fn renderNoticePanel(title: []const u8, message: []const u8, title_color: u8) vo
     term.resetColor();
     stdout.writeAll("\r\n") catch {};
 
-    writeSpaces(stdout, left_pad) catch {};
+    term.moveCursor(top_row + 4, panel_col);
     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 }
 

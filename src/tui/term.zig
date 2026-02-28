@@ -35,11 +35,13 @@ pub const Color = enum {
 
 var original_termios: std.posix.termios = undefined;
 var term_initialized: bool = false;
+var dim_persistent: bool = false;
 
 pub fn init() !void {
     const stdin = std.fs.File.stdin();
     original_termios = try std.posix.tcgetattr(stdin.handle);
     term_initialized = true;
+    dim_persistent = false;
 
     var raw = original_termios;
     raw.lflag.ICANON = false;
@@ -66,6 +68,7 @@ pub fn init() !void {
 pub fn deinit() void {
     if (!term_initialized) return;
     term_initialized = false;
+    dim_persistent = false;
 
     clearScreen();
     std.fs.File.stdout().writeAll("\x1b[1;1H") catch {};
@@ -213,8 +216,16 @@ pub fn setDim(on: bool) void {
     }
 }
 
+pub fn setDimPersistent(on: bool) void {
+    dim_persistent = on;
+    setDim(on);
+}
+
 pub fn resetColor() void {
     std.fs.File.stdout().writeAll("\x1b[0m") catch {};
+    if (dim_persistent) {
+        setDim(true);
+    }
 }
 
 pub fn reverseVideo(writer: anytype) !void {

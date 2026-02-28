@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.2.2
+
+### Changed
+- Kept the results list visible while showing send-status modals in the TUI.
+- Improved terminal rendering utilities used by modal overlays.
+
 ## 0.2.1
 
 ### Added
