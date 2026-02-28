@@ -1,86 +1,115 @@
 # supersearchr
-v 0.2.1
 
-Supersearchr was born out of my necessity to have a way to search torrents that integrated with Superseedr in the terminal.
+Terminal-first BitTorrent search for Jackett + Superseedr, written in Zig 0.15.2.
 
-Supersearchr is a Linux-only-guaranteed (actually not sure if it would be cross-platform) TUI BitTorrent search tool written in Zig. It searches via Jackett and sends selected magnet or torrent links to Superseedr. This project uses Zig 0.15.2.
+`supersearchr` lets you search Jackett from a TUI, browse sorted results, and send a selected magnet/torrent link to `superseedr add`.
 
-## Build and Test
+## Requirements
 
-> [!NOTE]
-> This app has no other dependency than the Zig standard library
+- Linux (this is the only platform currently guaranteed)
+- Zig `0.15.2`
+- A running Jackett instance with API key
+- `superseedr` CLI in your `PATH`
+- A terminal emulator in your `PATH` (used to launch `superseedr` if not already running)
 
-Basic build:
+## Quick Start
+
 ```bash
 zig build
-```
-
-Build a Linux executable:
-```bash
-zig build -Dtarget=x86_64-linux
-```
-
-Recommended build (safe optimization, specific to CPU architecture running the build command):
-```bash
-zig build -Doptimize=ReleaseSafe -Dtarget=native-native
-```
-
-Run (from project folder):
-```bash
 zig build run
 ```
 
-Run (compiled executable):
-```bash
-./zig-out/bin/supersearchr
-```
-or if the binary is in your `PATH`:
-```bash
-supersearchr
-```
+On first run, `supersearchr` creates:
 
-Tests (detailed output):
+`~/.config/supersearchr/config.json`
+
+Then it exits so you can fill in real Jackett values.
+
+## Build, Run, Test
+
 ```bash
+# Build (installs artifact to zig-out/bin/supersearchr)
+zig build
+
+# Run
+zig build run
+
+# Build optimized for your current machine
+zig build -Doptimize=ReleaseSafe -Dtarget=native-native
+
+# Cross-compile Linux binary example
+zig build -Dtarget=x86_64-linux
+
+# Run all tests with detailed summary
 zig build test --summary all
 ```
 
-Install (typical):
-After building, copy the binary to a directory in your `PATH`, such as `~/.local/bin` or `/usr/local/bin`. If you are unsure, follow your Linux distribution's documentation for the conventional way to install user executables.
+## Installation
+
+After building, copy `zig-out/bin/supersearchr` to a directory in your `PATH`, for example `~/.local/bin`.
 
 ## Configuration
 
-On first run, the app creates a default config file at `~/.config/supersearchr/config.json` and then prompts you to fill in the required variables. The app will not run until the default Jackett URL and API key values are replaced.
+Config path:
 
-The config includes:
-- Jackett URL, port and API key
-- The executable of the terminal app you wish to use (default: ghostty)
+`~/.config/supersearchr/config.json`
 
-## Debug mode
+Expected format:
 
-To troubleshoot parsing, API, and selection issues, you can enable debug logging with environment variables:
-
-- `SUPERSEARCHR_DEBUG=1` enables debug logs.
-- `SUPERSEARCHR_DEBUG_PATH=/path/to/file.log` overrides log file location.
-
-If `SUPERSEARCHR_DEBUG_PATH` is not set, logs are written to `/tmp/supersearchr-debug.log`.
-
-When enabled, debug logs include:
-- Jackett API/connection failures (request setup, send/receive failures, non-OK HTTP status, response parsing errors).
-- Superseedr invocation failures (process check/spawn issues, `superseedr add` execution failures).
-- Parsed/selected torrent information used during result handling.
-
-Example:
-```bash
-SUPERSEARCHR_DEBUG=1 supersearchr
+```json
+{
+  "apiKey": "YOUR_JACKETT_API_KEY",
+  "apiUrl": "http://127.0.0.1",
+  "apiPort": 9117,
+  "terminal": "ghostty"
+}
 ```
 
-## Usage (Search and Download)
+Notes:
 
-1. Type your search query and press Enter.
-2. Use j/k or J/K keys to navigate results.
-3. Press Enter to select a result and send it to Superseedr. If Superseedr is not running, a new terminal instance will be spawned with superseedr running on it.
-4. You can either select one or more torrents from the same result list, press n to make a new search, or press ESC to exit the application.
+- `apiKey`, `apiUrl`, and `apiPort` are required.
+- `terminal` is used when `superseedr` is not running and the app needs to spawn it.
+- Placeholder values like `YOUR_JACKETT_API_KEY` / `YOUR_JACKET_URL` are rejected.
 
-## What's next
+## Usage
 
-This app is actually feature complete, taking into account its only purpose is to satisfy my own particular needs. If anything, I'd ask superseedr creator if they'd let me take a shot of adding this functionality to superseedr itself. Maybe I'll do that.
+Search screen:
+
+- Type query text
+- `Enter`: search
+- `Esc`: exit app
+
+Results screen:
+
+- `j` / `k`: move down/up one result
+- `J` / `K`: move down/up one page
+- `Enter`: send selected link to Superseedr
+- `n` or `N`: new search
+- `Esc`: exit app
+
+State flow: `SEARCH -> LOADING -> RESULTS -> ERROR`
+
+## Debug Logging
+
+```bash
+# Enable debug logs
+SUPERSEARCHR_DEBUG=1 supersearchr
+
+# Custom log path (default: /tmp/supersearchr-debug.log)
+SUPERSEARCHR_DEBUG=1 SUPERSEARCHR_DEBUG_PATH=/path/to/supersearchr.log supersearchr
+```
+
+Logs include Jackett request/parsing failures, Superseedr execution failures, and selected torrent metadata.
+
+## Troubleshooting
+
+- `Cannot connect to Jackett. Is it running?`
+  - Verify Jackett is running and `apiUrl`/`apiPort` are correct.
+- `superseedr not found in PATH`
+  - Install `superseedr` and ensure it is discoverable in your shell `PATH`.
+- Config file keeps failing validation
+  - Ensure `apiKey` and `apiUrl` are not placeholders and `apiPort` is a non-zero number.
+
+## Project Layout
+
+See `STRUCTURE.md` for a concise map of source files.
