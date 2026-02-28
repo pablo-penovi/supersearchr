@@ -243,52 +243,62 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
     defer widget.deinit();
 
     widget.setTorrents(torrents, torrents.len);
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
 
     while (true) {
-        widget.render(app.term_rows, app.term_cols);
+        if (needs_render) {
+            widget.render(app.term_rows, app.term_cols);
+            needs_render = false;
+        }
 
-        const event = term.readKey() catch {
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch {
             app.state = .{ .err = .{ .message = "Failed to read input" } };
             return;
         };
-        const action = widget.handleEvent(event, app.term_rows);
+        if (maybe_event) |event| {
+            const action = widget.handleEvent(event, app.term_rows);
+            needs_render = true;
 
-        switch (action) {
-            .continue_browsing => {},
-            .new_search => {
-                app.state = .{ .search = .{ .query = "" } };
-                return;
-            },
-            .cancel => {
-                app.running = false;
-                return;
-            },
-            .select => |idx| {
-                const torrent = torrents[idx];
-                const result = superseedr.addLink(app.allocator, torrent.link, app.terminal);
-
-                if (result) |_| {
-                    debug_log.writef(
-                        app.allocator,
-                        "app",
-                        "Added torrent to superseedr title=\"{s}\" link=\"{s}\"",
-                        .{ torrent.title, torrent.link },
-                    );
-                    term.discardPendingInput();
-                    renderSuccess();
-                    widget.force_full_redraw = true;
-                } else |err| {
-                    debug_log.writef(
-                        app.allocator,
-                        "app",
-                        "Failed to add torrent err={s} title=\"{s}\" link=\"{s}\"",
-                        .{ @errorName(err), torrent.title, torrent.link },
-                    );
-                    const message = getSuperseedrErrorMessage(err);
-                    app.state = .{ .err = .{ .message = message } };
+            switch (action) {
+                .continue_browsing => {},
+                .new_search => {
+                    app.state = .{ .search = .{ .query = "" } };
                     return;
-                }
-            },
+                },
+                .cancel => {
+                    app.running = false;
+                    return;
+                },
+                .select => |idx| {
+                    const torrent = torrents[idx];
+                    const result = superseedr.addLink(app.allocator, torrent.link, app.terminal);
+
+                    if (result) |_| {
+                        debug_log.writef(
+                            app.allocator,
+                            "app",
+                            "Added torrent to superseedr title=\"{s}\" link=\"{s}\"",
+                            .{ torrent.title, torrent.link },
+                        );
+                        term.discardPendingInput();
+                        renderSuccess();
+                        widget.force_full_redraw = true;
+                    } else |err| {
+                        debug_log.writef(
+                            app.allocator,
+                            "app",
+                            "Failed to add torrent err={s} title=\"{s}\" link=\"{s}\"",
+                            .{ @errorName(err), torrent.title, torrent.link },
+                        );
+                        const message = getSuperseedrErrorMessage(err);
+                        app.state = .{ .err = .{ .message = message } };
+                        return;
+                    }
+                },
+            }
+        } else if (widget.advanceMarquee(app.term_rows, app.term_cols)) {
+            needs_render = true;
         }
     }
 }
