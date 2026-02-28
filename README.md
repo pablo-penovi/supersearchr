@@ -55,6 +55,20 @@ The config includes:
 - Jackett URL, port and API key
 - The executable of the terminal app you wish to use (default: ghostty)
 
+## Debug mode
+
+To troubleshoot parsing/selection issues, you can enable debug logging with environment variables:
+
+- `SUPERSEARCHR_DEBUG=1` enables debug logs.
+- `SUPERSEARCHR_DEBUG_PATH=/path/to/file.log` overrides log file location.
+
+If `SUPERSEARCHR_DEBUG_PATH` is not set, logs are written to `/tmp/supersearchr-debug.log`.
+
+Example:
+```bash
+SUPERSEARCHR_DEBUG=1 supersearchr
+```
+
 ## Usage (Search and Download)
 
 1. Type your search query and press Enter.
