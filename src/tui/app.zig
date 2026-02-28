@@ -180,7 +180,7 @@ fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
     const stdout = std.fs.File.stdout();
     const colors = theme.superseedr_like;
     const border = theme.unicode_border;
-    const compact = app.term_cols < 56 or app.term_rows < 10;
+    const compact = theme.isCompactViewport(app.term_rows, app.term_cols);
     const panel_width = if (compact) @as(usize, 0) else @min(@as(usize, 74), @as(usize, @intCast(app.term_cols - 4)));
     const left_pad = if (compact) @as(usize, 0) else (@as(usize, @intCast(app.term_cols)) - panel_width) / 2;
     const top_pad = if (compact) @as(usize, 1) else @max(@as(usize, 2), (@as(usize, @intCast(app.term_rows)) - 8) / 2);

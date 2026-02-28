@@ -13,7 +13,7 @@ pub const NoticePanelLayout = struct {
 };
 
 pub fn computeNoticePanelLayout(size: term.TerminalSize) NoticePanelLayout {
-    if (size.cols < 56 or size.rows < 10) {
+    if (theme.isCompactViewport(size.rows, size.cols)) {
         return .{
             .compact = true,
             .panel_width = 0,

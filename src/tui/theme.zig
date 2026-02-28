@@ -1,6 +1,9 @@
 const std = @import("std");
 const term = @import("term");
 
+pub const compact_cols: u16 = 56;
+pub const compact_rows: u16 = 10;
+
 pub const Theme = struct {
     panel_border: u8,
     panel_title: u8,
@@ -82,6 +85,10 @@ pub fn writeRepeat(writer: anytype, chunk: []const u8, count: usize) !void {
     for (0..count) |_| try writer.writeAll(chunk);
 }
 
+pub fn isCompactViewport(rows: u16, cols: u16) bool {
+    return cols < compact_cols or rows < compact_rows;
+}
+
 fn displayWidth(cp: u21) usize {
     if (cp >= 0x1100 and cp <= 0x115F) return 2;
     if (cp == 0x2329 or cp == 0x232A) return 2;
@@ -125,6 +132,21 @@ fn nthColumnByteOffset(text: []const u8, n: usize) usize {
         cols += w;
     }
     return byte_pos;
+}
+
+pub fn displayWidthOfText(text: []const u8) usize {
+    return displayWidthOf(text);
+}
+
+pub fn sliceByDisplayColumns(text: []const u8, start_col: usize, width: usize, scratch: []u8) []const u8 {
+    if (width == 0) return "";
+    const total_cols = displayWidthOf(text);
+    const clamped_start = @min(start_col, total_cols);
+    const start_byte = nthColumnByteOffset(text, clamped_start);
+    const end_rel = nthColumnByteOffset(text[start_byte..], width);
+    if (end_rel > scratch.len) return text[start_byte..start_byte];
+    @memcpy(scratch[0..end_rel], text[start_byte .. start_byte + end_rel]);
+    return scratch[0..end_rel];
 }
 
 pub fn writePadded(writer: anytype, text: []const u8, width: usize) !void {
@@ -219,4 +241,16 @@ test "truncateWithEllipsis truncates wide emoji correctly" {
     // "ab🌟cd" = 2+2+2 = 6 display cols. Truncate to 5 → "ab..." (wide 🌟 overshoots at col 4)
     const out = truncateWithEllipsis("ab🌟cd", 5, &buf);
     try std.testing.expectEqualStrings("ab...", out);
+}
+
+test "isCompactViewport uses shared compact breakpoint" {
+    try std.testing.expect(isCompactViewport(10, 55));
+    try std.testing.expect(isCompactViewport(9, 80));
+    try std.testing.expect(!isCompactViewport(10, 56));
+}
+
+test "sliceByDisplayColumns returns viewport window by display width" {
+    var buf: [32]u8 = undefined;
+    const out = sliceByDisplayColumns("ab🌟cd", 2, 3, &buf);
+    try std.testing.expectEqualStrings("🌟c", out);
 }
