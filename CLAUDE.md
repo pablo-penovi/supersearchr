@@ -70,4 +70,4 @@ When the user asks to finish/finalize a feature:
 2. If tests pass → ask the user for the new version number
 3. Update version references and docs as needed using that version, including `STRUCTURE.md`, `README.md`, and `CHANGELOG.md`
 4. Commit and push any uncommitted/unpushed changes
-5. Create a PR via GitHub CLI with a short but descriptive title and adequate description of changes
+5. Create a PR via GitHub CLI with a short but descriptive title and adequate description of changes. To prevent shell expansion from mangling the PR body, always write the description to a markdown file in `/tmp` and use `gh pr create --body-file /tmp/<name>.md` (or `gh pr edit --body-file /tmp/<name>.md`).

@@ -113,5 +113,6 @@ jobs:
       - name: Upload to Codecov
         uses: codecov/codecov-action@v4
         with:
-          files: coverage/merged/cobertura.xml
+          files: coverage/merged/kcov-merged/cobertura.xml
+          disable_search: true
           fail_ci_if_error: true

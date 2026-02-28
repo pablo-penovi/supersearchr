@@ -83,4 +83,4 @@ When the user asks you to start a new feature, he should tell you what the featu
 2. If tests pass, ask the user for the new version number.
 3. Update version references and documentation as needed using that version number, including `STRUCTURE.md`, `README.md`, and `CHANGELOG.md`.
 4. Commit and push any uncommitted changes and push any unpushed commits.
-5. Create a PR using GitHub CLI. Be sure to adequately describe the changes in the PR description. The PR title should be descriptive but short.
+5. Create a PR using GitHub CLI. Be sure to adequately describe the changes in the PR description. The PR title should be descriptive but short. To avoid shell expansion mangling the description, always write the PR body to a markdown file in `/tmp` and pass it with `gh pr create --body-file /tmp/<name>.md` (or `gh pr edit --body-file /tmp/<name>.md`).
