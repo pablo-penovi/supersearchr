@@ -67,5 +67,7 @@ These steps are **mandatory** before any new task:
 When the user asks to finish/finalize a feature:
 
 1. Run tests (`zig build test --summary all`). If they fail → investigate and diagnose, but **do not fix** — report findings and proposed fixes to the user
-2. If tests pass → commit and push any uncommitted/unpushed changes
-3. Create a PR via GitHub CLI with a short but descriptive title and adequate description of changes
+2. If tests pass → ask the user for the new version number
+3. Update version references and docs as needed using that version, including `STRUCTURE.md`, `README.md`, and `CHANGELOG.md`
+4. Commit and push any uncommitted/unpushed changes
+5. Create a PR via GitHub CLI with a short but descriptive title and adequate description of changes

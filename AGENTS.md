@@ -80,5 +80,7 @@ When the user asks you to start a new feature, he should tell you what the featu
 **MANDATORY**: At some point, the user will ask you to finish or finalize a feature. At this point, you should:
 
 1. Run corresponding day tests to ensure they pass. If they don't, investigate, diagnose, but DO NOT FIX. Inform the user of your findings and the changes that you think would fix the issue.
-2. If tests pass, commit and push any uncommitted changes and push any unpushed commits
-3. Create a PR using GitHub CLI. Be sure to adequately describe the changes in the PR description. The PR title should be descriptive but short
+2. If tests pass, ask the user for the new version number.
+3. Update version references and documentation as needed using that version number, including `STRUCTURE.md`, `README.md`, and `CHANGELOG.md`.
+4. Commit and push any uncommitted changes and push any unpushed commits.
+5. Create a PR using GitHub CLI. Be sure to adequately describe the changes in the PR description. The PR title should be descriptive but short.
