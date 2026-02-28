@@ -299,10 +299,6 @@ pub const ResultsWidget = struct {
         }
     }
 
-    pub fn getSelectedIndex(_: *ResultsWidget) ?usize {
-        return null;
-    }
-
     pub fn advanceMarquee(self: *ResultsWidget, max_rows: u16, max_cols: u16) bool {
         if (self.torrents.len == 0) return false;
         if (self.cursor >= self.torrents.len) return false;
@@ -470,8 +466,8 @@ fn drawCompact(
         stdout.writeAll("No results found\r\n") catch {};
     } else {
         const current = torrents[cursor];
-        var trunc_buf: [96]u8 = undefined;
-        const shown = theme.truncateWithEllipsis(current.title, 78, trunc_buf[0..]);
+        var trunc_buf: [512]u8 = undefined;
+        const shown = theme.truncateWithEllipsis(current.title, compactTitleWidth(max_cols), trunc_buf[0..]);
         stdout.writeAll("> ") catch {};
         stdout.writeAll(shown) catch {};
         stdout.writeAll("\r\n") catch {};
@@ -490,6 +486,12 @@ fn drawCompactDivider(stdout: std.fs.File, colors: theme.Theme, border: theme.Bo
     }
     term.resetColor();
     stdout.writeAll("\r\n") catch {};
+}
+
+fn compactTitleWidth(max_cols: u16) usize {
+    const cols: usize = @max(@as(usize, 1), @as(usize, @intCast(max_cols)));
+    if (cols <= 2) return 1;
+    return cols - 2;
 }
 
 fn drawPanelFrame(
@@ -692,8 +694,9 @@ fn buildDataCells(
 }
 
 fn writeRightAligned(writer: anytype, text: []const u8, width: usize) !void {
+    if (width == 0) return;
     if (text.len >= width) {
-        try writer.writeAll(text);
+        try writer.writeAll(text[text.len - width ..]);
         return;
     }
 
@@ -1273,4 +1276,19 @@ test "advanceMarquee does not animate when title fits" {
 
     try std.testing.expectEqual(false, widget.advanceMarquee(24, 120));
     try std.testing.expectEqual(@as(usize, 0), widget.marquee_offset_cols);
+}
+
+test "compactTitleWidth follows terminal width safely" {
+    try std.testing.expectEqual(@as(usize, 1), compactTitleWidth(1));
+    try std.testing.expectEqual(@as(usize, 1), compactTitleWidth(2));
+    try std.testing.expectEqual(@as(usize, 8), compactTitleWidth(10));
+}
+
+test "writeRightAligned clips overflowing values to preserve column width" {
+    const allocator = std.testing.allocator;
+    var out = std.ArrayList(u8){};
+    defer out.deinit(allocator);
+
+    try writeRightAligned(out.writer(allocator), "123456", 4);
+    try std.testing.expectEqualStrings("3456", out.items);
 }

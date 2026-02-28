@@ -186,7 +186,8 @@ fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
     const top_pad = if (compact) @as(usize, 1) else @max(@as(usize, 2), (@as(usize, @intCast(app.term_rows)) - 8) / 2);
 
     var query_trunc: [256]u8 = undefined;
-    const shown_query = theme.truncateWithEllipsis(query, panel_width - 13, query_trunc[0..]);
+    const query_width = loadingQueryWidth(app.term_cols, panel_width, compact);
+    const shown_query = theme.truncateWithEllipsis(query, query_width, query_trunc[0..]);
     var query_line_buf: [320]u8 = undefined;
     const query_line = std.fmt.bufPrint(&query_line_buf, " Query: {s}", .{shown_query}) catch " Query:";
 
@@ -455,6 +456,16 @@ fn refreshTerminalSizeValues(term_rows: *u16, term_cols: *u16) bool {
     term_rows.* = size.rows;
     term_cols.* = size.cols;
     return true;
+}
+
+fn loadingQueryWidth(term_cols: u16, panel_width: usize, compact: bool) usize {
+    if (compact) {
+        const cols: usize = @as(usize, @intCast(term_cols));
+        if (cols <= 8) return 1;
+        return cols - 8;
+    }
+    if (panel_width <= 13) return 1;
+    return panel_width - 13;
 }
 
 test "state transitions smoke path search -> loading -> results with injected deps" {
@@ -731,4 +742,14 @@ test "addLinkWithAppDeps uses injected superseedr dependencies" {
     try std.testing.expect(state.checker_called);
     try std.testing.expect(state.spawner_called);
     try std.testing.expect(state.executor_called);
+}
+
+test "loadingQueryWidth avoids underflow in compact mode" {
+    try std.testing.expectEqual(@as(usize, 1), loadingQueryWidth(4, 0, true));
+    try std.testing.expectEqual(@as(usize, 12), loadingQueryWidth(20, 0, true));
+}
+
+test "loadingQueryWidth uses panel width in regular mode" {
+    try std.testing.expectEqual(@as(usize, 61), loadingQueryWidth(80, 74, false));
+    try std.testing.expectEqual(@as(usize, 1), loadingQueryWidth(80, 13, false));
 }

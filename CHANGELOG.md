@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.3.2
+
+### Fixed
+- Prevented an integer underflow in loading-state query truncation on compact terminals.
+- Made compact results title truncation width follow the current terminal width instead of a hardcoded value.
+- Preserved results-table alignment when seeder/leecher values exceed column width by clipping to fixed-width cells.
+- Removed an unused dead `ResultsWidget` API (`getSelectedIndex`) to reduce misleading surface area.
+
 ## 0.3.1
 
 ### Fixed
