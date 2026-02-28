@@ -40,9 +40,17 @@ const SpinnerContext = struct {
     color: u8,
 };
 
+const AppDeps = struct {
+    jackett_search_executor: *const fn (allocator: std.mem.Allocator, url: []const u8) anyerror![]Torrent = jackett.defaultSearchExecutor,
+    superseedr_executor: *const fn (allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void = superseedr.defaultExecutor,
+    superseedr_process_checker: *const fn (allocator: std.mem.Allocator) anyerror!bool = superseedr.defaultProcessChecker,
+    superseedr_spawner: *const fn (allocator: std.mem.Allocator, terminal: []const u8) anyerror!void = superseedr.defaultSpawner,
+};
+
 const App = struct {
     allocator: std.mem.Allocator,
     client: jackett.Client,
+    deps: AppDeps,
     state: State,
     running: bool,
     term_rows: u16,
@@ -51,6 +59,10 @@ const App = struct {
 };
 
 pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
+    return runWithDeps(allocator, cfg, .{});
+}
+
+pub fn runWithDeps(allocator: std.mem.Allocator, cfg: config.Config, deps: AppDeps) !void {
     term.init() catch |err| {
         std.debug.print("Failed to initialize terminal: {}\n", .{err});
         return err;
@@ -67,6 +79,7 @@ pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
     var app = App{
         .allocator = allocator,
         .client = client,
+        .deps = deps,
         .state = .{ .search = .{ .query = "" } },
         .running = true,
         .term_rows = size.rows,
@@ -230,7 +243,7 @@ fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
         .color = colors.accent,
     }});
 
-    const torrents = app.client.searchWithExecutor(query, jackett.defaultSearchExecutor) catch |err| {
+    const torrents = searchWithAppDeps(app, query) catch |err| {
         stop.store(true, .release);
         thread.join();
         const message = getErrorMessage(err);
@@ -297,7 +310,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                 },
                 .select => |idx| {
                     const torrent = torrents[idx];
-                    const result = superseedr.addLink(app.allocator, torrent.link, app.terminal);
+                    const result = addLinkWithAppDeps(app, torrent.link);
 
                     if (result) |_| {
                         debug_log.writef(
@@ -330,6 +343,21 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
             needs_render = true;
         }
     }
+}
+
+fn searchWithAppDeps(app: *App, query: []const u8) ![]Torrent {
+    return app.client.searchWithExecutor(query, app.deps.jackett_search_executor);
+}
+
+fn addLinkWithAppDeps(app: *App, link: []const u8) superseedr.AddLinkError!void {
+    return superseedr.addLinkWithAllDeps(
+        app.allocator,
+        link,
+        app.terminal,
+        app.deps.superseedr_executor,
+        app.deps.superseedr_process_checker,
+        app.deps.superseedr_spawner,
+    );
 }
 
 fn runErrorState(app: *App, error_state: *ErrorState) !void {
@@ -600,6 +628,7 @@ test "refreshTerminalSize returns false and keeps values when unchanged" {
     var app = App{
         .allocator = std.testing.allocator,
         .client = undefined,
+        .deps = .{},
         .state = .{ .search = .{ .query = "" } },
         .running = true,
         .term_rows = size.rows,
@@ -620,6 +649,7 @@ test "refreshTerminalSize returns true and updates values when changed" {
     var app = App{
         .allocator = std.testing.allocator,
         .client = undefined,
+        .deps = .{},
         .state = .{ .search = .{ .query = "" } },
         .running = true,
         .term_rows = initial_rows,
@@ -630,4 +660,87 @@ test "refreshTerminalSize returns true and updates values when changed" {
     try std.testing.expect(refreshTerminalSize(&app));
     try std.testing.expectEqual(size.rows, app.term_rows);
     try std.testing.expectEqual(size.cols, app.term_cols);
+}
+
+test "searchWithAppDeps uses injected jackett search executor" {
+    const state = struct {
+        var called = false;
+    };
+    state.called = false;
+
+    const mock = struct {
+        fn exec(allocator: std.mem.Allocator, url: []const u8) anyerror![]Torrent {
+            state.called = true;
+            try std.testing.expect(std.mem.indexOf(u8, url, "/api/v2.0/indexers/all/results/torznab/api?apikey=test-key&q=ubuntu") != null);
+            return allocator.alloc(Torrent, 0);
+        }
+    };
+
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
+        .deps = .{
+            .jackett_search_executor = mock.exec,
+        },
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "xterm",
+    };
+
+    const torrents = try searchWithAppDeps(&app, "ubuntu");
+    defer std.testing.allocator.free(torrents);
+    try std.testing.expect(state.called);
+    try std.testing.expectEqual(@as(usize, 0), torrents.len);
+}
+
+test "addLinkWithAppDeps uses injected superseedr dependencies" {
+    const state = struct {
+        var checker_called = false;
+        var spawner_called = false;
+        var executor_called = false;
+    };
+    state.checker_called = false;
+    state.spawner_called = false;
+    state.executor_called = false;
+
+    const mock = struct {
+        fn checker(_: std.mem.Allocator) anyerror!bool {
+            state.checker_called = true;
+            return false;
+        }
+
+        fn spawner(_: std.mem.Allocator, terminal: []const u8) anyerror!void {
+            state.spawner_called = true;
+            try std.testing.expectEqualStrings("ghostty", terminal);
+        }
+
+        fn exec(_: std.mem.Allocator, argv: []const []const u8) anyerror!void {
+            state.executor_called = true;
+            try std.testing.expectEqualStrings("superseedr", argv[0]);
+            try std.testing.expectEqualStrings("add", argv[1]);
+            try std.testing.expectEqualStrings("magnet:?xt=urn:btih:abc", argv[2]);
+        }
+    };
+
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
+        .deps = .{
+            .superseedr_executor = mock.exec,
+            .superseedr_process_checker = mock.checker,
+            .superseedr_spawner = mock.spawner,
+        },
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "ghostty",
+    };
+
+    try addLinkWithAppDeps(&app, "magnet:?xt=urn:btih:abc");
+    try std.testing.expect(state.checker_called);
+    try std.testing.expect(state.spawner_called);
+    try std.testing.expect(state.executor_called);
 }

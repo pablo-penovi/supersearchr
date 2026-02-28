@@ -90,7 +90,7 @@ fn normalizeLink(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
-pub const SearchExecutor = fn (allocator: std.mem.Allocator, url: []const u8) anyerror![]Torrent;
+pub const SearchExecutor = *const fn (allocator: std.mem.Allocator, url: []const u8) anyerror![]Torrent;
 
 pub fn defaultSearchExecutor(allocator: std.mem.Allocator, url: []const u8) anyerror![]Torrent {
     var http_client = std.http.Client{ .allocator = allocator };

@@ -8,13 +8,13 @@ pub const AddLinkError = error{
     SuperseedrLaunchFailed,
 };
 
-pub const Executor = fn (allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void;
+pub const Executor = *const fn (allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void;
 
 /// Returns true if superseedr is already running.
-pub const ProcessChecker = fn (allocator: std.mem.Allocator) anyerror!bool;
+pub const ProcessChecker = *const fn (allocator: std.mem.Allocator) anyerror!bool;
 
 /// Spawns superseedr in the background (does not wait for it to exit).
-pub const Spawner = fn (allocator: std.mem.Allocator, terminal: []const u8) anyerror!void;
+pub const Spawner = *const fn (allocator: std.mem.Allocator, terminal: []const u8) anyerror!void;
 
 pub fn defaultExecutor(allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void {
     const result = std.process.Child.run(.{
