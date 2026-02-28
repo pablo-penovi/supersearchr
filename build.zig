@@ -7,6 +7,8 @@ const std = @import("std");
 // build runner to parallelize the build automatically (and the cache system to
 // know when a step doesn't need to be re-run).
 pub fn build(b: *std.Build) void {
+    const app_version = "0.3.4";
+
     // Standard target options allow the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -61,6 +63,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/debug/log.zig"),
     });
 
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", app_version);
+
     theme_mod.addImport("term", term_mod);
     jackett_mod.addImport("torrent", torrent_mod);
     jackett_mod.addImport("debug_log", debug_log_mod);
@@ -70,6 +75,7 @@ pub fn build(b: *std.Build) void {
     });
     search_widget_mod.addImport("term", term_mod);
     search_widget_mod.addImport("theme", theme_mod);
+    search_widget_mod.addImport("build_options", build_options.createModule());
     const results_widget_mod = b.createModule(.{
         .root_source_file = b.path("src/tui/widgets/results.zig"),
     });
@@ -185,6 +191,7 @@ pub fn build(b: *std.Build) void {
     });
     search_widget_tests.root_module.addImport("term", term_mod);
     search_widget_tests.root_module.addImport("theme", theme_mod);
+    search_widget_tests.root_module.addImport("build_options", build_options.createModule());
     const run_search_widget_tests = b.addRunArtifact(search_widget_tests);
 
     // Test for results widget

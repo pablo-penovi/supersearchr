@@ -1,6 +1,7 @@
 const std = @import("std");
 const term = @import("term");
 const theme = @import("theme");
+const build_options = @import("build_options");
 
 pub const SearchWidget = struct {
     allocator: std.mem.Allocator,
@@ -128,7 +129,8 @@ fn drawCompactFull(stdout: std.fs.File, colors: theme.Theme, query: []const u8) 
     stdout.writeAll(query) catch {};
     stdout.writeAll("\r\n") catch {};
     term.setFg256(colors.muted);
-    stdout.writeAll("ENTER search | ESC exit") catch {};
+    stdout.writeAll("ENTER search | ESC exit\r\n") catch {};
+    stdout.writeAll("v" ++ build_options.version) catch {};
     term.resetColor();
 }
 
@@ -183,6 +185,11 @@ fn drawPanelFrame(stdout: std.fs.File, colors: theme.Theme, border: theme.Border
 
     writeSpaces(stdout, layout.left_pad) catch {};
     theme.drawPanelBottom(stdout, layout.panel_width, border, colors) catch {};
+
+    term.moveCursor(@as(u16, @intCast(layout.top_pad + 6)), @as(u16, @intCast(layout.left_pad + 2)));
+    term.setFg256(colors.muted);
+    stdout.writeAll("v" ++ build_options.version) catch {};
+    term.resetColor();
 }
 
 fn drawPanelQueryRow(stdout: std.fs.File, size: term.TerminalSize, colors: theme.Theme, border: theme.BorderChars, layout: PanelLayout, query: []const u8) void {
