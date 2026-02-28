@@ -97,15 +97,26 @@ pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
 fn runSearchState(app: *App) !void {
     var widget = search_widget.SearchWidget.init(app.allocator);
     defer widget.deinit();
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
 
     while (true) {
-        widget.render();
+        if (refreshTerminalSize(app)) {
+            needs_render = true;
+        }
 
-        const event = term.readKey() catch {
+        if (needs_render) {
+            widget.render();
+            needs_render = false;
+        }
+
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch {
             app.state = .{ .err = .{ .message = "Failed to read input" } };
             return;
         };
+        const event = maybe_event orelse continue;
         const action = widget.handleEvent(event);
+        needs_render = true;
 
         switch (action) {
             .continue_search => {},
@@ -150,6 +161,7 @@ fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
 
     term.hideCursor();
     defer term.showCursor();
+    _ = refreshTerminalSize(app);
 
     const stdout = std.fs.File.stdout();
     const colors = theme.superseedr_like;
@@ -250,6 +262,11 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
     var last_loop_ms: i64 = std.time.milliTimestamp();
 
     while (true) {
+        if (refreshTerminalSize(app)) {
+            widget.force_full_redraw = true;
+            needs_render = true;
+        }
+
         const now_ms = std.time.milliTimestamp();
         const elapsed_ms = nonNegativeElapsedMs(last_loop_ms, now_ms);
         last_loop_ms = now_ms;
@@ -290,9 +307,8 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                             .{ torrent.title, torrent.link },
                         );
                         renderResultNoticeOverlay(
+                            app,
                             &widget,
-                            app.term_rows,
-                            app.term_cols,
                             "Success",
                             "Added to superseedr!",
                             theme.superseedr_like.ok,
@@ -305,7 +321,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                             "Failed to add torrent err={s} title=\"{s}\" link=\"{s}\"",
                             .{ @errorName(err), torrent.title, torrent.link },
                         );
-                        renderResultErrorOverlay(&widget, app.term_rows, app.term_cols, getSuperseedrErrorMessage(err));
+                        renderResultErrorOverlay(app, &widget, getSuperseedrErrorMessage(err));
                         widget.force_full_redraw = true;
                     }
                 },
@@ -317,41 +333,67 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
 }
 
 fn runErrorState(app: *App, error_state: *ErrorState) !void {
-    renderError(error_state.message);
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
 
-    const event = term.readKey() catch {
-        app.state = .{ .search = .{ .query = "" } };
-        return;
-    };
+    while (true) {
+        if (refreshTerminalSize(app)) {
+            needs_render = true;
+        }
 
-    _ = event;
-    app.state = .{ .search = .{ .query = "" } };
+        if (needs_render) {
+            renderError(error_state.message);
+            needs_render = false;
+        }
+
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch {
+            app.state = .{ .search = .{ .query = "" } };
+            return;
+        };
+        if (maybe_event != null) {
+            app.state = .{ .search = .{ .query = "" } };
+            return;
+        }
+    }
 }
 
 fn renderResultNoticeOverlay(
+    app: *App,
     widget: *results_widget.ResultsWidget,
-    rows: u16,
-    cols: u16,
     title: []const u8,
     message: []const u8,
     title_color: u8,
 ) void {
     term.discardPendingInput();
-    term.setDimPersistent(true);
-    widget.force_full_redraw = true;
-    widget.render(rows, cols);
-    term.setDimPersistent(false);
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
 
-    renderNoticePanel(title, message, title_color, false);
-    const event = term.readKey() catch return;
-    _ = event;
-    term.discardPendingInput();
+    while (true) {
+        if (refreshTerminalSize(app)) {
+            needs_render = true;
+        }
+
+        if (needs_render) {
+            term.setDimPersistent(true);
+            widget.force_full_redraw = true;
+            widget.render(app.term_rows, app.term_cols);
+            term.setDimPersistent(false);
+            renderNoticePanel(title, message, title_color, false);
+            needs_render = false;
+        }
+
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return;
+        if (maybe_event != null) {
+            term.discardPendingInput();
+            return;
+        }
+    }
 }
 
-fn renderResultErrorOverlay(widget: *results_widget.ResultsWidget, rows: u16, cols: u16, message: []const u8) void {
+fn renderResultErrorOverlay(app: *App, widget: *results_widget.ResultsWidget, message: []const u8) void {
     var buf: [256]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "Error: {s}", .{message}) catch "Error";
-    renderResultNoticeOverlay(widget, rows, cols, "Error", msg, theme.superseedr_like.err);
+    renderResultNoticeOverlay(app, widget, "Error", msg, theme.superseedr_like.err);
 }
 
 fn renderError(message: []const u8) void {
@@ -478,6 +520,14 @@ fn consumeMarqueeTick(budget_ms: *i64, interval_ms: i64) bool {
     if (interval_ms <= 0) return false;
     if (budget_ms.* < interval_ms) return false;
     budget_ms.* -= interval_ms;
+    return true;
+}
+
+fn refreshTerminalSize(app: *App) bool {
+    const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
+    if (size.rows == app.term_rows and size.cols == app.term_cols) return false;
+    app.term_rows = size.rows;
+    app.term_cols = size.cols;
     return true;
 }
 
