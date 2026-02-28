@@ -114,3 +114,4 @@ Logs include Jackett request/parsing failures, Superseedr execution failures, an
 ## Project Layout
 
 See `STRUCTURE.md` for a concise map of source files.
+See `CHANGELOG.md` for release history.
