@@ -7,6 +7,7 @@ const theme = @import("theme");
 const search_widget = @import("search");
 const results_widget = @import("results");
 const Torrent = @import("torrent").Torrent;
+const debug_log = @import("debug_log");
 
 const State = union(enum) {
     search: SearchState,
@@ -267,10 +268,22 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                 const result = superseedr.addLink(app.allocator, torrent.link, app.terminal);
 
                 if (result) |_| {
+                    debug_log.writef(
+                        app.allocator,
+                        "app",
+                        "Added torrent to superseedr title=\"{s}\" link=\"{s}\"",
+                        .{ torrent.title, torrent.link },
+                    );
                     term.discardPendingInput();
                     renderSuccess();
                     widget.force_full_redraw = true;
                 } else |err| {
+                    debug_log.writef(
+                        app.allocator,
+                        "app",
+                        "Failed to add torrent err={s} title=\"{s}\" link=\"{s}\"",
+                        .{ @errorName(err), torrent.title, torrent.link },
+                    );
                     const message = getSuperseedrErrorMessage(err);
                     app.state = .{ .err = .{ .message = message } };
                     return;

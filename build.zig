@@ -54,9 +54,14 @@ pub fn build(b: *std.Build) void {
     const torrent_mod = b.createModule(.{
         .root_source_file = b.path("src/structs/torrent.zig"),
     });
+    const debug_log_mod = b.createModule(.{
+        .root_source_file = b.path("src/debug/log.zig"),
+    });
 
     theme_mod.addImport("term", term_mod);
     jackett_mod.addImport("torrent", torrent_mod);
+    jackett_mod.addImport("debug_log", debug_log_mod);
+    superseedr_mod.addImport("debug_log", debug_log_mod);
     const search_widget_mod = b.createModule(.{
         .root_source_file = b.path("src/tui/widgets/search.zig"),
     });
@@ -80,6 +85,7 @@ pub fn build(b: *std.Build) void {
     app_mod.addImport("search", search_widget_mod);
     app_mod.addImport("results", results_widget_mod);
     app_mod.addImport("torrent", torrent_mod);
+    app_mod.addImport("debug_log", debug_log_mod);
 
     exe.root_module.addImport("config", config_mod);
     exe.root_module.addImport("jackett", jackett_mod);
@@ -143,6 +149,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     jackett_tests.root_module.addImport("torrent", torrent_mod);
+    jackett_tests.root_module.addImport("debug_log", debug_log_mod);
     const run_jackett_tests = b.addRunArtifact(jackett_tests);
 
     // Test for superseedr module
@@ -153,6 +160,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    superseedr_tests.root_module.addImport("debug_log", debug_log_mod);
     const run_superseedr_tests = b.addRunArtifact(superseedr_tests);
 
     // Test for search widget
@@ -201,16 +209,20 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    app_tests.root_module.addImport("config", config_mod);
-    app_tests.root_module.addImport("jackett", b.createModule(.{
+    const app_tests_jackett_mod = b.createModule(.{
         .root_source_file = b.path("src/jackett/client.zig"),
-    }));
+    });
+    app_tests_jackett_mod.addImport("torrent", torrent_mod);
+    app_tests_jackett_mod.addImport("debug_log", debug_log_mod);
+    app_tests.root_module.addImport("config", config_mod);
+    app_tests.root_module.addImport("jackett", app_tests_jackett_mod);
     app_tests.root_module.addImport("superseedr", superseedr_mod);
     app_tests.root_module.addImport("term", term_mod);
     app_tests.root_module.addImport("theme", theme_mod);
     app_tests.root_module.addImport("search", search_widget_mod);
     app_tests.root_module.addImport("results", results_widget_mod);
     app_tests.root_module.addImport("torrent", torrent_mod);
+    app_tests.root_module.addImport("debug_log", debug_log_mod);
     const run_app_tests = b.addRunArtifact(app_tests);
 
     // Creates an executable that will run `test` blocks from the executable's

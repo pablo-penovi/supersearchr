@@ -1,11 +1,16 @@
 const std = @import("std");
 const Torrent = @import("torrent").Torrent;
+const debug_log = @import("debug_log");
 
 const xml_tags = .{
     .item = "<item>",
     .item_end = "</item>",
     .title = "<title>",
     .link = "<link>",
+    .enclosure = "<enclosure ",
+    .magneturl_attr_name = "name=\"magneturl\"",
+    .attr_value = "value=\"",
+    .enclosure_url = "url=\"",
     .seeders_attr = "<torznab:attr name=\"seeders\" value=\"",
     .peers_attr = "<torznab:attr name=\"peers\" value=\"",
 };
@@ -26,6 +31,63 @@ fn extractIntField(xml: []const u8, i: usize, tag: []const u8, default: u32) ?st
         return .{ .value = std.fmt.parseInt(u32, xml[start..end], 10) catch default, .end = end };
     }
     return null;
+}
+
+fn extractMagnetUrlAttr(xml: []const u8, i: usize) ?struct { value: []const u8, end: usize } {
+    const attr_tag = "<torznab:attr ";
+    if (!std.mem.startsWith(u8, xml[i..], attr_tag)) return null;
+
+    const tag_end = std.mem.indexOfScalarPos(u8, xml, i, '>') orelse return null;
+    const tag = xml[i .. tag_end + 1];
+
+    if (std.mem.indexOf(u8, tag, xml_tags.magneturl_attr_name) == null) return null;
+
+    const value_pos = std.mem.indexOf(u8, tag, xml_tags.attr_value) orelse return null;
+    const value_start = i + value_pos + xml_tags.attr_value.len;
+    const value_end = std.mem.indexOfScalarPos(u8, xml, value_start, '"') orelse return null;
+    return .{ .value = xml[value_start..value_end], .end = tag_end + 1 };
+}
+
+fn extractEnclosureUrl(xml: []const u8, i: usize) ?struct { value: []const u8, end: usize } {
+    if (!std.mem.startsWith(u8, xml[i..], xml_tags.enclosure)) return null;
+
+    const tag_end = std.mem.indexOfScalarPos(u8, xml, i, '>') orelse return null;
+    const tag = xml[i .. tag_end + 1];
+    const url_pos = std.mem.indexOf(u8, tag, xml_tags.enclosure_url) orelse return null;
+    const url_start = i + url_pos + xml_tags.enclosure_url.len;
+    const url_end = std.mem.indexOfScalarPos(u8, xml, url_start, '"') orelse return null;
+    return .{ .value = xml[url_start..url_end], .end = tag_end + 1 };
+}
+
+fn normalizeLink(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    var out: std.ArrayList(u8) = .{};
+    errdefer out.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < trimmed.len) {
+        if (std.mem.startsWith(u8, trimmed[i..], "&amp;")) {
+            try out.append(allocator, '&');
+            i += 5;
+        } else if (std.mem.startsWith(u8, trimmed[i..], "&lt;")) {
+            try out.append(allocator, '<');
+            i += 4;
+        } else if (std.mem.startsWith(u8, trimmed[i..], "&gt;")) {
+            try out.append(allocator, '>');
+            i += 4;
+        } else if (std.mem.startsWith(u8, trimmed[i..], "&quot;")) {
+            try out.append(allocator, '"');
+            i += 6;
+        } else if (std.mem.startsWith(u8, trimmed[i..], "&apos;")) {
+            try out.append(allocator, '\'');
+            i += 6;
+        } else {
+            try out.append(allocator, trimmed[i]);
+            i += 1;
+        }
+    }
+
+    return out.toOwnedSlice(allocator);
 }
 
 pub const SearchExecutor = fn (allocator: std.mem.Allocator, url: []const u8) anyerror![]Torrent;
@@ -125,6 +187,7 @@ fn parseTorrents(allocator: std.mem.Allocator, xml: []const u8) ![]Torrent {
             i += xml_tags.item.len;
             var title: ?[]const u8 = null;
             var link: ?[]const u8 = null;
+            var link_source: []const u8 = "none";
             var seeders: u32 = 0;
             var peers: u32 = 0;
 
@@ -135,8 +198,21 @@ fn parseTorrents(allocator: std.mem.Allocator, xml: []const u8) ![]Torrent {
                 if (extractStringField(xml, i, xml_tags.title)) |result| {
                     title = result.value;
                     i = result.end;
-                } else if (extractStringField(xml, i, xml_tags.link)) |result| {
+                } else if (extractMagnetUrlAttr(xml, i)) |result| {
                     link = result.value;
+                    link_source = "torznab:attr magneturl";
+                    i = result.end;
+                } else if (extractStringField(xml, i, xml_tags.link)) |result| {
+                    if (link == null) {
+                        link = result.value;
+                        link_source = "link";
+                    }
+                    i = result.end;
+                } else if (extractEnclosureUrl(xml, i)) |result| {
+                    if (link == null) {
+                        link = result.value;
+                        link_source = "enclosure url";
+                    }
                     i = result.end;
                 } else if (extractIntField(xml, i, xml_tags.seeders_attr, 0)) |result| {
                     seeders = result.value;
@@ -151,13 +227,37 @@ fn parseTorrents(allocator: std.mem.Allocator, xml: []const u8) ![]Torrent {
 
             if (title != null and link != null) {
                 const title_copy = try allocator.dupe(u8, title.?);
-                const link_copy = try allocator.dupe(u8, link.?);
+                const link_copy = try normalizeLink(allocator, link.?);
+                if (link_copy.len == 0) {
+                    allocator.free(title_copy);
+                    allocator.free(link_copy);
+                    debug_log.writef(
+                        allocator,
+                        "jackett",
+                        "Skipping torrent with empty normalized link title=\"{s}\" source={s}",
+                        .{ title.?, link_source },
+                    );
+                    continue;
+                }
                 try torrents.append(allocator, .{
                     .title = title_copy,
                     .seeders = seeders,
                     .leechers = peers,
                     .link = link_copy,
                 });
+                debug_log.writef(
+                    allocator,
+                    "jackett",
+                    "Parsed torrent title=\"{s}\" source={s} link=\"{s}\"",
+                    .{ title.?, link_source, link_copy },
+                );
+            } else if (title != null) {
+                debug_log.writef(
+                    allocator,
+                    "jackett",
+                    "Skipping torrent without link title=\"{s}\"",
+                    .{title.?},
+                );
             }
         } else {
             i += 1;
@@ -233,4 +333,40 @@ test "sort by seeders descending" {
     try std.testing.expectEqual(@as(u32, 1000), torrents[0].seeders);
     try std.testing.expectEqual(@as(u32, 100), torrents[1].seeders);
     try std.testing.expectEqual(@as(u32, 10), torrents[2].seeders);
+}
+
+test "prefer torznab magneturl over link and decode entities" {
+    const allocator = std.testing.allocator;
+
+    const xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?><rss version=\"1.0\"><channel><item><title>Has Magnet Attr</title><link>https://example.com/download.php?id=42</link><torznab:attr name=\"magneturl\" value=\"magnet:?xt=urn:btih:abc123&amp;dn=Test\"/></item></channel></rss>";
+
+    const torrents = try parseTorrents(allocator, xml);
+    defer {
+        for (torrents) |t| {
+            allocator.free(t.title);
+            allocator.free(t.link);
+        }
+        allocator.free(torrents);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), torrents.len);
+    try std.testing.expectEqualStrings("magnet:?xt=urn:btih:abc123&dn=Test", torrents[0].link);
+}
+
+test "parse enclosure url when link tag is absent" {
+    const allocator = std.testing.allocator;
+
+    const xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?><rss version=\"1.0\"><channel><item><title>Enclosure Only</title><enclosure url=\"https://example.com/download.php?id=987\" type=\"application/x-bittorrent\"/></item></channel></rss>";
+
+    const torrents = try parseTorrents(allocator, xml);
+    defer {
+        for (torrents) |t| {
+            allocator.free(t.title);
+            allocator.free(t.link);
+        }
+        allocator.free(torrents);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), torrents.len);
+    try std.testing.expectEqualStrings("https://example.com/download.php?id=987", torrents[0].link);
 }
