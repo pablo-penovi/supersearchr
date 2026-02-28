@@ -245,8 +245,16 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
     widget.setTorrents(torrents, torrents.len);
     var needs_render = true;
     const input_poll_ms: i32 = 80;
+    const marquee_step_interval_ms: i64 = scaledMarqueeIntervalMs(input_poll_ms, 30);
+    var marquee_budget_ms: i64 = 0;
+    var last_loop_ms: i64 = std.time.milliTimestamp();
 
     while (true) {
+        const now_ms = std.time.milliTimestamp();
+        const elapsed_ms = nonNegativeElapsedMs(last_loop_ms, now_ms);
+        last_loop_ms = now_ms;
+        marquee_budget_ms += elapsed_ms;
+
         if (needs_render) {
             widget.render(app.term_rows, app.term_cols);
             needs_render = false;
@@ -297,7 +305,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                     }
                 },
             }
-        } else if (widget.advanceMarquee(app.term_rows, app.term_cols)) {
+        } else if (consumeMarqueeTick(&marquee_budget_ms, marquee_step_interval_ms) and widget.advanceMarquee(app.term_rows, app.term_cols)) {
             needs_render = true;
         }
     }
@@ -427,6 +435,23 @@ fn writeSpaces(writer: anytype, count: usize) !void {
     for (0..count) |_| try writer.writeAll(" ");
 }
 
+fn scaledMarqueeIntervalMs(base_ms: i32, slowdown_percent: u8) i64 {
+    const base: i64 = @as(i64, base_ms);
+    return @max(@as(i64, 1), base + @divTrunc(base * @as(i64, slowdown_percent), 100));
+}
+
+fn nonNegativeElapsedMs(previous_ms: i64, current_ms: i64) i64 {
+    if (current_ms <= previous_ms) return 0;
+    return current_ms - previous_ms;
+}
+
+fn consumeMarqueeTick(budget_ms: *i64, interval_ms: i64) bool {
+    if (interval_ms <= 0) return false;
+    if (budget_ms.* < interval_ms) return false;
+    budget_ms.* -= interval_ms;
+    return true;
+}
+
 test "state transitions: search -> loading -> results" {
     const Testing = @import("std").testing;
 
@@ -441,4 +466,21 @@ test "state transitions: search -> loading -> results" {
     try Testing.expect(search_called);
     try Testing.expect(loading_called);
     try Testing.expect(results_called);
+}
+
+test "scaledMarqueeIntervalMs slows base interval by percent" {
+    try std.testing.expectEqual(@as(i64, 104), scaledMarqueeIntervalMs(80, 30));
+    try std.testing.expectEqual(@as(i64, 1), scaledMarqueeIntervalMs(0, 30));
+}
+
+test "nonNegativeElapsedMs handles backwards clock safely" {
+    try std.testing.expectEqual(@as(i64, 0), nonNegativeElapsedMs(10, 8));
+    try std.testing.expectEqual(@as(i64, 5), nonNegativeElapsedMs(10, 15));
+}
+
+test "consumeMarqueeTick spends only one interval per loop" {
+    var budget: i64 = 160;
+    try std.testing.expect(consumeMarqueeTick(&budget, 104));
+    try std.testing.expectEqual(@as(i64, 56), budget);
+    try std.testing.expect(!consumeMarqueeTick(&budget, 104));
 }

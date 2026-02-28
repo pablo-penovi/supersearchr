@@ -10,6 +10,7 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 - Updated README debug mode documentation with the expanded error logging scope.
+- Slowed the selected-result title marquee animation by about 30% to improve readability while keeping results navigation responsive.
 
 ## 0.2.0
 
