@@ -270,63 +270,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_results_widget_tests.step);
     test_step.dependOn(&run_app_tests.step);
 
-    // Coverage step using kcov
-    const coverage_step = b.step("coverage", "Generate code coverage report");
-
-    const cov_config = b.addSystemCommand(&.{ "kcov", "--include-path=src", "coverage/config" });
-    cov_config.addFileArg(config_tests.getEmittedBin());
-    cov_config.step.dependOn(&config_tests.step);
-
-    const cov_jackett = b.addSystemCommand(&.{ "kcov", "--include-path=src", "coverage/jackett" });
-    cov_jackett.addFileArg(jackett_tests.getEmittedBin());
-    cov_jackett.step.dependOn(&jackett_tests.step);
-
-    const cov_superseedr = b.addSystemCommand(&.{ "kcov", "--include-path=src", "coverage/superseedr" });
-    cov_superseedr.addFileArg(superseedr_tests.getEmittedBin());
-    cov_superseedr.step.dependOn(&superseedr_tests.step);
-
-    const cov_search_widget = b.addSystemCommand(&.{ "kcov", "--include-path=src", "coverage/search_widget" });
-    cov_search_widget.addFileArg(search_widget_tests.getEmittedBin());
-    cov_search_widget.step.dependOn(&search_widget_tests.step);
-
-    const cov_results_widget = b.addSystemCommand(&.{ "kcov", "--include-path=src", "coverage/results_widget" });
-    cov_results_widget.addFileArg(results_widget_tests.getEmittedBin());
-    cov_results_widget.step.dependOn(&results_widget_tests.step);
-
-    const cov_theme = b.addSystemCommand(&.{ "kcov", "--include-path=src", "coverage/theme" });
-    cov_theme.addFileArg(theme_tests.getEmittedBin());
-    cov_theme.step.dependOn(&theme_tests.step);
-
-    const cov_panels = b.addSystemCommand(&.{ "kcov", "--include-path=src", "coverage/panels" });
-    cov_panels.addFileArg(panels_tests.getEmittedBin());
-    cov_panels.step.dependOn(&panels_tests.step);
-
-    const cov_app = b.addSystemCommand(&.{ "kcov", "--include-path=src", "coverage/app" });
-    cov_app.addFileArg(app_tests.getEmittedBin());
-    cov_app.step.dependOn(&app_tests.step);
-
-    const cov_exe = b.addSystemCommand(&.{ "kcov", "--include-path=src", "coverage/exe" });
-    cov_exe.addFileArg(exe_tests.getEmittedBin());
-    cov_exe.step.dependOn(&exe_tests.step);
-
-    const cov_merge = b.addSystemCommand(&.{
-        "kcov",                   "--merge",                 "coverage/merged",
-        "coverage/config",        "coverage/jackett",        "coverage/superseedr",
-        "coverage/search_widget", "coverage/results_widget", "coverage/theme",
-        "coverage/panels",        "coverage/app",            "coverage/exe",
-    });
-    cov_merge.step.dependOn(&cov_config.step);
-    cov_merge.step.dependOn(&cov_jackett.step);
-    cov_merge.step.dependOn(&cov_superseedr.step);
-    cov_merge.step.dependOn(&cov_search_widget.step);
-    cov_merge.step.dependOn(&cov_results_widget.step);
-    cov_merge.step.dependOn(&cov_theme.step);
-    cov_merge.step.dependOn(&cov_panels.step);
-    cov_merge.step.dependOn(&cov_app.step);
-    cov_merge.step.dependOn(&cov_exe.step);
-
-    coverage_step.dependOn(&cov_merge.step);
-
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
     // The Zig build system is entirely implemented in userland, which means
