@@ -82,7 +82,13 @@ jobs:
           tar -xf zig.tar.xz
           echo "$PWD/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
       - name: Install kcov
-        run: sudo apt-get install -y kcov
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y cmake libdw-dev libelf-dev zlib1g-dev binutils-dev
+          git clone --depth 1 https://github.com/SimonKagstrom/kcov.git kcov-src
+          cmake -S kcov-src -B kcov-build
+          cmake --build kcov-build --parallel
+          sudo cmake --install kcov-build
       - name: Run coverage
         run: zig build coverage
       - name: Upload to Codecov
