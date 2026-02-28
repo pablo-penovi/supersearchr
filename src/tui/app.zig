@@ -42,7 +42,7 @@ const SpinnerContext = struct {
 };
 
 const AppDeps = struct {
-    jackett_search_executor: *const fn (allocator: std.mem.Allocator, url: []const u8) anyerror![]Torrent = jackett.defaultSearchExecutor,
+    jackett_search_executor: *const fn (allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]Torrent = jackett.defaultSearchExecutor,
     superseedr_executor: *const fn (allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void = superseedr.defaultExecutor,
     superseedr_process_checker: *const fn (allocator: std.mem.Allocator) anyerror!bool = superseedr.defaultProcessChecker,
     superseedr_spawner: *const fn (allocator: std.mem.Allocator, terminal: []const u8) anyerror!void = superseedr.defaultSpawner,
@@ -345,7 +345,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
     }
 }
 
-fn searchWithAppDeps(app: *App, query: []const u8) ![]Torrent {
+fn searchWithAppDeps(app: *App, query: []const u8) jackett.JackettError![]Torrent {
     return app.client.searchWithExecutor(query, app.deps.jackett_search_executor);
 }
 
@@ -393,11 +393,17 @@ fn runErrorState(app: *App, error_state: *ErrorState) !void {
     }
 }
 
-fn getErrorMessage(err: anyerror) []const u8 {
+fn getErrorMessage(err: jackett.JackettError) []const u8 {
     return switch (err) {
         error.ConnectionRefused => "Cannot connect to Jackett. Is it running?",
+        error.InvalidUrl => "Invalid Jackett URL in config",
+        error.RequestCreateFailed => "Failed to create Jackett request",
+        error.RequestSendFailed => "Failed to send Jackett request",
+        error.ResponseHeadReadFailed => "Failed to read Jackett response headers",
         error.HttpError => "Jackett returned error",
-        else => "Failed to parse Jackett response",
+        error.ResponseReadFailed => "Failed to read Jackett response",
+        error.ParseFailed => "Failed to parse Jackett response",
+        error.OutOfMemory => "Out of memory while processing Jackett response",
     };
 }
 
@@ -453,8 +459,8 @@ fn refreshTerminalSizeValues(term_rows: *u16, term_cols: *u16) bool {
 
 test "state transitions smoke path search -> loading -> results with injected deps" {
     const mock = struct {
-        fn exec(allocator: std.mem.Allocator, url: []const u8) anyerror![]Torrent {
-            try std.testing.expect(std.mem.indexOf(u8, url, "q=ubuntu") != null);
+        fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]Torrent {
+            if (std.mem.indexOf(u8, url, "q=ubuntu") == null) return error.ParseFailed;
 
             var torrents: []Torrent = try allocator.alloc(Torrent, 1);
             torrents[0] = .{
@@ -498,7 +504,7 @@ test "state transitions smoke path search -> loading -> results with injected de
 
 test "state transitions smoke path loading failure goes to error" {
     const mock = struct {
-        fn exec(_: std.mem.Allocator, _: []const u8) anyerror![]Torrent {
+        fn exec(_: std.mem.Allocator, _: []const u8) jackett.JackettError![]Torrent {
             return error.ConnectionRefused;
         }
     };
@@ -548,18 +554,42 @@ test "consumeMarqueeTick spends only one interval per loop" {
     try std.testing.expect(!consumeMarqueeTick(&budget, 104));
 }
 
-test "getErrorMessage maps known jackett errors and fallback" {
+test "getErrorMessage exhaustively maps all jackett errors" {
     try std.testing.expectEqualStrings(
         "Cannot connect to Jackett. Is it running?",
         getErrorMessage(error.ConnectionRefused),
+    );
+    try std.testing.expectEqualStrings(
+        "Invalid Jackett URL in config",
+        getErrorMessage(error.InvalidUrl),
+    );
+    try std.testing.expectEqualStrings(
+        "Failed to create Jackett request",
+        getErrorMessage(error.RequestCreateFailed),
+    );
+    try std.testing.expectEqualStrings(
+        "Failed to send Jackett request",
+        getErrorMessage(error.RequestSendFailed),
+    );
+    try std.testing.expectEqualStrings(
+        "Failed to read Jackett response headers",
+        getErrorMessage(error.ResponseHeadReadFailed),
     );
     try std.testing.expectEqualStrings(
         "Jackett returned error",
         getErrorMessage(error.HttpError),
     );
     try std.testing.expectEqualStrings(
+        "Failed to read Jackett response",
+        getErrorMessage(error.ResponseReadFailed),
+    );
+    try std.testing.expectEqualStrings(
         "Failed to parse Jackett response",
-        getErrorMessage(error.Unexpected),
+        getErrorMessage(error.ParseFailed),
+    );
+    try std.testing.expectEqualStrings(
+        "Out of memory while processing Jackett response",
+        getErrorMessage(error.OutOfMemory),
     );
 }
 
@@ -625,9 +655,11 @@ test "searchWithAppDeps uses injected jackett search executor" {
     state.called = false;
 
     const mock = struct {
-        fn exec(allocator: std.mem.Allocator, url: []const u8) anyerror![]Torrent {
+        fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]Torrent {
             state.called = true;
-            try std.testing.expect(std.mem.indexOf(u8, url, "/api/v2.0/indexers/all/results/torznab/api?apikey=test-key&q=ubuntu") != null);
+            if (std.mem.indexOf(u8, url, "/api/v2.0/indexers/all/results/torznab/api?apikey=test-key&q=ubuntu") == null) {
+                return error.ParseFailed;
+            }
             return allocator.alloc(Torrent, 0);
         }
     };

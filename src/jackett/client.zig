@@ -2,6 +2,18 @@ const std = @import("std");
 const Torrent = @import("torrent").Torrent;
 const debug_log = @import("debug_log");
 
+pub const JackettError = error{
+    InvalidUrl,
+    ConnectionRefused,
+    RequestCreateFailed,
+    RequestSendFailed,
+    ResponseHeadReadFailed,
+    HttpError,
+    ResponseReadFailed,
+    ParseFailed,
+    OutOfMemory,
+};
+
 const xml_tags = .{
     .item = "<item>",
     .item_end = "</item>",
@@ -81,6 +93,20 @@ fn normalizeLink(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
         } else if (std.mem.startsWith(u8, trimmed[i..], "&apos;")) {
             try out.append(allocator, '\'');
             i += 6;
+        } else if (trimmed[i] == '&' and i + 3 < trimmed.len and trimmed[i + 1] == '#') {
+            if (decodeNumericEntity(trimmed[i..])) |decoded| {
+                var utf8_buf: [4]u8 = undefined;
+                const utf8_len = std.unicode.utf8Encode(decoded.codepoint, utf8_buf[0..]) catch {
+                    try out.append(allocator, trimmed[i]);
+                    i += 1;
+                    continue;
+                };
+                try out.appendSlice(allocator, utf8_buf[0..utf8_len]);
+                i += decoded.consumed;
+            } else {
+                try out.append(allocator, trimmed[i]);
+                i += 1;
+            }
         } else {
             try out.append(allocator, trimmed[i]);
             i += 1;
@@ -90,9 +116,38 @@ fn normalizeLink(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     return out.toOwnedSlice(allocator);
 }
 
-pub const SearchExecutor = *const fn (allocator: std.mem.Allocator, url: []const u8) anyerror![]Torrent;
+fn decodeNumericEntity(input: []const u8) ?struct { codepoint: u21, consumed: usize } {
+    if (input.len < 4) return null;
+    if (input[0] != '&' or input[1] != '#') return null;
 
-pub fn defaultSearchExecutor(allocator: std.mem.Allocator, url: []const u8) anyerror![]Torrent {
+    const semicolon_idx = std.mem.indexOfScalar(u8, input, ';') orelse return null;
+    if (semicolon_idx < 3) return null;
+
+    const number_slice = input[2..semicolon_idx];
+    if (number_slice.len == 0) return null;
+
+    const parsed: u21 = if ((number_slice[0] == 'x' or number_slice[0] == 'X') and number_slice.len > 1)
+        std.fmt.parseInt(u21, number_slice[1..], 16) catch return null
+    else
+        std.fmt.parseInt(u21, number_slice, 10) catch return null;
+
+    return .{
+        .codepoint = parsed,
+        .consumed = semicolon_idx + 1,
+    };
+}
+
+fn mapAnyToJackettError(err: anyerror, fallback: JackettError) JackettError {
+    return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.ConnectionRefused => error.ConnectionRefused,
+        else => fallback,
+    };
+}
+
+pub const SearchExecutor = *const fn (allocator: std.mem.Allocator, url: []const u8) JackettError![]Torrent;
+
+pub fn defaultSearchExecutor(allocator: std.mem.Allocator, url: []const u8) JackettError![]Torrent {
     var http_client = std.http.Client{ .allocator = allocator };
     defer http_client.deinit();
 
@@ -103,7 +158,7 @@ pub fn defaultSearchExecutor(allocator: std.mem.Allocator, url: []const u8) anye
             "Failed to parse Jackett URL err={s} url=\"{s}\"",
             .{ @errorName(err), url },
         );
-        return err;
+        return error.InvalidUrl;
     };
     var request = http_client.request(.GET, uri, .{}) catch |err| {
         debug_log.writef(
@@ -112,7 +167,7 @@ pub fn defaultSearchExecutor(allocator: std.mem.Allocator, url: []const u8) anye
             "Failed to create Jackett request err={s} url=\"{s}\"",
             .{ @errorName(err), url },
         );
-        return err;
+        return mapAnyToJackettError(err, error.RequestCreateFailed);
     };
     defer request.deinit();
 
@@ -123,7 +178,7 @@ pub fn defaultSearchExecutor(allocator: std.mem.Allocator, url: []const u8) anye
             "Failed to send Jackett request err={s} url=\"{s}\"",
             .{ @errorName(err), url },
         );
-        return err;
+        return mapAnyToJackettError(err, error.RequestSendFailed);
     };
     var header_buf: [1024]u8 = undefined;
     var response = request.receiveHead(&header_buf) catch |err| {
@@ -133,7 +188,7 @@ pub fn defaultSearchExecutor(allocator: std.mem.Allocator, url: []const u8) anye
             "Failed to receive Jackett response head err={s} url=\"{s}\"",
             .{ @errorName(err), url },
         );
-        return err;
+        return mapAnyToJackettError(err, error.ResponseHeadReadFailed);
     };
 
     const status = response.head.status;
@@ -156,7 +211,7 @@ pub fn defaultSearchExecutor(allocator: std.mem.Allocator, url: []const u8) anye
             "Failed to read Jackett response body err={s} url=\"{s}\"",
             .{ @errorName(err), url },
         );
-        return err;
+        return mapAnyToJackettError(err, error.ResponseReadFailed);
     };
     defer allocator.free(body);
 
@@ -167,7 +222,7 @@ pub fn defaultSearchExecutor(allocator: std.mem.Allocator, url: []const u8) anye
             "Failed to parse Jackett response err={s} url=\"{s}\"",
             .{ @errorName(err), url },
         );
-        return err;
+        return mapAnyToJackettError(err, error.ParseFailed);
     };
 
     return torrents;
@@ -190,11 +245,11 @@ pub const Client = struct {
         _ = self;
     }
 
-    pub fn search(self: *Client, query: []const u8) ![]Torrent {
+    pub fn search(self: *Client, query: []const u8) JackettError![]Torrent {
         return self.searchWithExecutor(query, defaultSearchExecutor);
     }
 
-    pub fn searchWithExecutor(self: *Client, query: []const u8, executor: SearchExecutor) ![]Torrent {
+    pub fn searchWithExecutor(self: *Client, query: []const u8, executor: SearchExecutor) JackettError![]Torrent {
         const encoded_query = try percentEncode(self.allocator, query);
         defer self.allocator.free(encoded_query);
 
@@ -425,4 +480,69 @@ test "parse enclosure url when link tag is absent" {
 
     try std.testing.expectEqual(@as(usize, 1), torrents.len);
     try std.testing.expectEqualStrings("https://example.com/download.php?id=987", torrents[0].link);
+}
+
+test "decode numeric entities in links" {
+    const allocator = std.testing.allocator;
+
+    const xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?><rss version=\"1.0\"><channel><item><title>Numeric Entities</title><link>magnet:?xt=urn:btih:abc123&#x26;dn=Hex&#38;tr=Dec</link></item></channel></rss>";
+
+    const torrents = try parseTorrents(allocator, xml);
+    defer {
+        for (torrents) |t| {
+            allocator.free(t.title);
+            allocator.free(t.link);
+        }
+        allocator.free(torrents);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), torrents.len);
+    try std.testing.expectEqualStrings("magnet:?xt=urn:btih:abc123&dn=Hex&tr=Dec", torrents[0].link);
+}
+
+test "parse tolerates malformed or partial xml entries without failing" {
+    const allocator = std.testing.allocator;
+
+    const xml = "<rss><channel><item><title>Broken One<title><link>magnet:?xt=urn:btih:broken</link></item><item><title>Good One</title><link>magnet:?xt=urn:btih:good</link></item><item><title>No End";
+
+    const torrents = try parseTorrents(allocator, xml);
+    defer {
+        for (torrents) |t| {
+            allocator.free(t.title);
+            allocator.free(t.link);
+        }
+        allocator.free(torrents);
+    }
+
+    try std.testing.expect(torrents.len >= 1);
+
+    var saw_good = false;
+    for (torrents) |t| {
+        if (std.mem.eql(u8, t.title, "Good One")) saw_good = true;
+    }
+    try std.testing.expect(saw_good);
+}
+
+test "parse works with mixed field ordering inside item" {
+    const allocator = std.testing.allocator;
+
+    const xml = "<?xml version=\"1.0\"?><rss><channel><item><torznab:attr name=\"peers\" value=\"3\"/><link>magnet:?xt=urn:btih:first</link><title>First</title><torznab:attr name=\"seeders\" value=\"2\"/></item><item><torznab:attr name=\"seeders\" value=\"40\"/><title>Second</title><enclosure type=\"application/x-bittorrent\" url=\"https://example.com/second.torrent\"/><torznab:attr name=\"peers\" value=\"11\"/></item></channel></rss>";
+
+    const torrents = try parseTorrents(allocator, xml);
+    defer {
+        for (torrents) |t| {
+            allocator.free(t.title);
+            allocator.free(t.link);
+        }
+        allocator.free(torrents);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), torrents.len);
+    try std.testing.expectEqualStrings("Second", torrents[0].title);
+    try std.testing.expectEqual(@as(u32, 40), torrents[0].seeders);
+    try std.testing.expectEqual(@as(u32, 11), torrents[0].leechers);
+    try std.testing.expectEqualStrings("https://example.com/second.torrent", torrents[0].link);
+    try std.testing.expectEqualStrings("First", torrents[1].title);
+    try std.testing.expectEqual(@as(u32, 2), torrents[1].seeders);
+    try std.testing.expectEqual(@as(u32, 3), torrents[1].leechers);
 }
