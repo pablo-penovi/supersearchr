@@ -24,6 +24,7 @@ Current project version: `v0.2.2`.
 - `src/superseedr/client.zig`: Superseedr integration, process checks, spawn/add flow.
 - `src/tui/term.zig`: Terminal raw mode, key reading, ANSI helpers, terminal size.
 - `src/tui/theme.zig`: Color palette, border styles, and rendering helpers.
-- `src/tui/app.zig`: App state machine (search/loading/results/error), rendering, and actions.
+- `src/tui/panels.zig`: Shared panel/overlay rendering helpers for notices and errors.
+- `src/tui/app.zig`: App state machine (search/loading/results/error) and orchestration.
 - `src/tui/widgets/search.zig`: Search input widget and tests.
 - `src/tui/widgets/results.zig`: Results list widget with navigation and tests.

@@ -51,6 +51,9 @@ pub fn build(b: *std.Build) void {
     const theme_mod = b.createModule(.{
         .root_source_file = b.path("src/tui/theme.zig"),
     });
+    const panels_mod = b.createModule(.{
+        .root_source_file = b.path("src/tui/panels.zig"),
+    });
     const torrent_mod = b.createModule(.{
         .root_source_file = b.path("src/structs/torrent.zig"),
     });
@@ -73,6 +76,9 @@ pub fn build(b: *std.Build) void {
     results_widget_mod.addImport("term", term_mod);
     results_widget_mod.addImport("theme", theme_mod);
     results_widget_mod.addImport("torrent", torrent_mod);
+    panels_mod.addImport("term", term_mod);
+    panels_mod.addImport("theme", theme_mod);
+    panels_mod.addImport("results", results_widget_mod);
     const app_mod = b.createModule(.{
         .root_source_file = b.path("src/tui/app.zig"),
     });
@@ -82,6 +88,7 @@ pub fn build(b: *std.Build) void {
     app_mod.addImport("superseedr", superseedr_mod);
     app_mod.addImport("term", term_mod);
     app_mod.addImport("theme", theme_mod);
+    app_mod.addImport("panels", panels_mod);
     app_mod.addImport("search", search_widget_mod);
     app_mod.addImport("results", results_widget_mod);
     app_mod.addImport("torrent", torrent_mod);
@@ -200,6 +207,19 @@ pub fn build(b: *std.Build) void {
     theme_tests.root_module.addImport("term", term_mod);
     const run_theme_tests = b.addRunArtifact(theme_tests);
 
+    // Test for panels module
+    const panels_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tui/panels.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    panels_tests.root_module.addImport("term", term_mod);
+    panels_tests.root_module.addImport("theme", theme_mod);
+    panels_tests.root_module.addImport("results", results_widget_mod);
+    const run_panels_tests = b.addRunArtifact(panels_tests);
+
     // Test for app module
     // Reuse modules defined above
     const app_tests = b.addTest(.{
@@ -219,6 +239,7 @@ pub fn build(b: *std.Build) void {
     app_tests.root_module.addImport("superseedr", superseedr_mod);
     app_tests.root_module.addImport("term", term_mod);
     app_tests.root_module.addImport("theme", theme_mod);
+    app_tests.root_module.addImport("panels", panels_mod);
     app_tests.root_module.addImport("search", search_widget_mod);
     app_tests.root_module.addImport("results", results_widget_mod);
     app_tests.root_module.addImport("torrent", torrent_mod);
@@ -244,6 +265,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_jackett_tests.step);
     test_step.dependOn(&run_superseedr_tests.step);
     test_step.dependOn(&run_theme_tests.step);
+    test_step.dependOn(&run_panels_tests.step);
     test_step.dependOn(&run_search_widget_tests.step);
     test_step.dependOn(&run_results_widget_tests.step);
     test_step.dependOn(&run_app_tests.step);
