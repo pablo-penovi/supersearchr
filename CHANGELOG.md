@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.3.4
+
+### Added
+- Display version number below the search box (compact and panel views), sourced from `build.zig.zon` via a compile-time build options module.
+
 ## 0.3.3
 
 ### Added
