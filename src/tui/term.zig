@@ -104,6 +104,22 @@ pub fn readKey() !Event {
     return Event{ .key = .unknown, .value = b };
 }
 
+pub fn readKeyWithTimeout(timeout_ms: i32) !?Event {
+    const stdin = std.fs.File.stdin();
+    var poll_fds = [_]std.posix.pollfd{
+        .{
+            .fd = stdin.handle,
+            .events = std.posix.POLL.IN,
+            .revents = 0,
+        },
+    };
+
+    const ready = try std.posix.poll(&poll_fds, timeout_ms);
+    if (ready == 0) return null;
+    if ((poll_fds[0].revents & std.posix.POLL.IN) == 0) return null;
+    return try readKey();
+}
+
 pub fn discardPendingInput() void {
     const stdin = std.fs.File.stdin();
     var poll_fds = [_]std.posix.pollfd{

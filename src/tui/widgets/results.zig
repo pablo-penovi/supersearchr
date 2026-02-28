@@ -12,7 +12,16 @@ pub const ResultsWidget = struct {
     display_count: usize,
     has_drawn_once: bool,
     force_full_redraw: bool,
+    force_selected_redraw: bool,
     last_snapshot: ?RenderSnapshot,
+    marquee_offset_cols: usize,
+    marquee_moving_right: bool,
+    marquee_edge_hold: u8,
+    marquee_target_set: bool,
+    marquee_cursor: usize,
+    marquee_title_col_width: usize,
+
+    const marquee_edge_hold_ticks: u8 = 2;
 
     pub fn init(allocator: std.mem.Allocator) ResultsWidget {
         return .{
@@ -24,7 +33,14 @@ pub const ResultsWidget = struct {
             .display_count = 0,
             .has_drawn_once = false,
             .force_full_redraw = true,
+            .force_selected_redraw = false,
             .last_snapshot = null,
+            .marquee_offset_cols = 0,
+            .marquee_moving_right = true,
+            .marquee_edge_hold = 0,
+            .marquee_target_set = false,
+            .marquee_cursor = 0,
+            .marquee_title_col_width = 0,
         };
     }
 
@@ -36,6 +52,7 @@ pub const ResultsWidget = struct {
         self.cursor = 0;
         self.scroll_offset = 0;
         self.force_full_redraw = true;
+        self.resetMarqueeState();
     }
 
     pub fn render(self: *ResultsWidget, max_rows: u16, max_cols: u16) void {
@@ -61,6 +78,7 @@ pub const ResultsWidget = struct {
         const redraw_mode = computeRedrawMode(
             self.has_drawn_once,
             self.force_full_redraw,
+            self.force_selected_redraw,
             self.last_snapshot,
             snapshot,
         );
@@ -84,6 +102,7 @@ pub const ResultsWidget = struct {
                                 layout,
                                 border,
                                 colors,
+                                self,
                                 self.torrents,
                                 abs_idx,
                                 self.cursor,
@@ -115,6 +134,7 @@ pub const ResultsWidget = struct {
                             layout,
                             border,
                             colors,
+                            self,
                             self.torrents,
                             abs_idx,
                             self.cursor,
@@ -132,37 +152,56 @@ pub const ResultsWidget = struct {
                 const prev_rel = prev.cursor - self.scroll_offset;
                 const curr_rel = self.cursor - self.scroll_offset;
 
-                term.moveCursor(contentRowFromRelative(prev_rel), 1);
-                drawContentRow(
-                    stdout,
-                    panel_width,
-                    inner_width,
-                    layout,
-                    border,
-                    colors,
-                    self.torrents,
-                    prev.cursor,
-                    self.cursor,
-                ) catch {};
+                if (prev.cursor == self.cursor) {
+                    term.moveCursor(contentRowFromRelative(curr_rel), 1);
+                    drawContentRow(
+                        stdout,
+                        panel_width,
+                        inner_width,
+                        layout,
+                        border,
+                        colors,
+                        self,
+                        self.torrents,
+                        self.cursor,
+                        self.cursor,
+                    ) catch {};
+                } else {
+                    term.moveCursor(contentRowFromRelative(prev_rel), 1);
+                    drawContentRow(
+                        stdout,
+                        panel_width,
+                        inner_width,
+                        layout,
+                        border,
+                        colors,
+                        self,
+                        self.torrents,
+                        prev.cursor,
+                        self.cursor,
+                    ) catch {};
 
-                term.moveCursor(contentRowFromRelative(curr_rel), 1);
-                drawContentRow(
-                    stdout,
-                    panel_width,
-                    inner_width,
-                    layout,
-                    border,
-                    colors,
-                    self.torrents,
-                    self.cursor,
-                    self.cursor,
-                ) catch {};
+                    term.moveCursor(contentRowFromRelative(curr_rel), 1);
+                    drawContentRow(
+                        stdout,
+                        panel_width,
+                        inner_width,
+                        layout,
+                        border,
+                        colors,
+                        self,
+                        self.torrents,
+                        self.cursor,
+                        self.cursor,
+                    ) catch {};
+                }
             },
             .none => {},
         }
 
         self.has_drawn_once = true;
         self.force_full_redraw = false;
+        self.force_selected_redraw = false;
         self.last_snapshot = snapshot;
     }
 
@@ -217,6 +256,7 @@ pub const ResultsWidget = struct {
                     if (self.cursor < self.torrents.len - 1) {
                         self.cursor += 1;
                         self.adjustScroll();
+                        self.resetMarqueeState();
                     }
                     return .continue_browsing;
                 }
@@ -224,6 +264,7 @@ pub const ResultsWidget = struct {
                     if (self.cursor > 0) {
                         self.cursor -= 1;
                         self.adjustScroll();
+                        self.resetMarqueeState();
                     }
                     return .continue_browsing;
                 }
@@ -231,12 +272,14 @@ pub const ResultsWidget = struct {
                     const step = @min(self.display_count, self.torrents.len - 1 - self.cursor);
                     self.cursor += step;
                     self.adjustScroll();
+                    if (step > 0) self.resetMarqueeState();
                     return .continue_browsing;
                 }
                 if (event.value == 'K') {
                     const step = @min(self.display_count, self.cursor);
                     self.cursor -= step;
                     self.adjustScroll();
+                    if (step > 0) self.resetMarqueeState();
                     return .continue_browsing;
                 }
                 if (event.value == 'n' or event.value == 'N') {
@@ -258,6 +301,67 @@ pub const ResultsWidget = struct {
 
     pub fn getSelectedIndex(_: *ResultsWidget) ?usize {
         return null;
+    }
+
+    pub fn advanceMarquee(self: *ResultsWidget, max_rows: u16, max_cols: u16) bool {
+        if (self.torrents.len == 0) return false;
+        if (self.cursor >= self.torrents.len) return false;
+
+        self.display_count = computeDisplayCount(max_rows, self.torrents.len);
+        const compact = max_cols < 48 or max_rows < 10;
+        if (compact) return false;
+
+        const panel_width = @as(usize, @intCast(max_cols - 2));
+        const inner_width = panel_width - 2;
+        const layout = TableLayout.forInnerWidth(inner_width);
+        if (layout.title_col_width == 0) return false;
+
+        self.ensureMarqueeTarget(layout.title_col_width);
+
+        const title = self.torrents[self.cursor].title;
+        const title_cols = displayWidthOfText(title);
+        if (title_cols <= layout.title_col_width) return false;
+
+        const overflow = title_cols - layout.title_col_width;
+        if (self.marquee_offset_cols > overflow) {
+            self.marquee_offset_cols = overflow;
+            self.force_selected_redraw = true;
+            return true;
+        }
+
+        if (stepMarqueeState(
+            &self.marquee_offset_cols,
+            &self.marquee_moving_right,
+            &self.marquee_edge_hold,
+            overflow,
+            marquee_edge_hold_ticks,
+        )) {
+            self.force_selected_redraw = true;
+            return true;
+        }
+        return false;
+    }
+
+    fn ensureMarqueeTarget(self: *ResultsWidget, title_col_width: usize) void {
+        if (self.marquee_target_set and self.marquee_cursor == self.cursor and self.marquee_title_col_width == title_col_width) {
+            return;
+        }
+        self.marquee_target_set = true;
+        self.marquee_cursor = self.cursor;
+        self.marquee_title_col_width = title_col_width;
+        self.marquee_offset_cols = 0;
+        self.marquee_moving_right = true;
+        self.marquee_edge_hold = marquee_edge_hold_ticks;
+    }
+
+    fn resetMarqueeState(self: *ResultsWidget) void {
+        self.marquee_target_set = false;
+        self.marquee_offset_cols = 0;
+        self.marquee_moving_right = true;
+        self.marquee_edge_hold = 0;
+        self.marquee_cursor = 0;
+        self.marquee_title_col_width = 0;
+        self.force_selected_redraw = false;
     }
 };
 
@@ -319,10 +423,12 @@ const TableLayout = struct {
 fn computeRedrawMode(
     has_drawn_once: bool,
     force_full_redraw: bool,
+    force_selected_redraw: bool,
     last_snapshot: ?RenderSnapshot,
     current: RenderSnapshot,
 ) RenderMode {
     if (!has_drawn_once or force_full_redraw) return .full;
+    if (force_selected_redraw) return .partial_cursor;
     const prev = last_snapshot orelse return .full;
 
     if (current.is_compact or prev.is_compact) return .full;
@@ -431,6 +537,7 @@ fn drawContentRow(
     layout: TableLayout,
     border: theme.BorderChars,
     colors: theme.Theme,
+    widget: *ResultsWidget,
     torrents: []const Torrent,
     abs_idx: usize,
     selected_idx: usize,
@@ -446,9 +553,13 @@ fn drawContentRow(
     try stdout.writeAll(border.vertical);
 
     var trunc_buf: [512]u8 = undefined;
+    var marquee_buf: [768]u8 = undefined;
     var cell_buf: [768]u8 = undefined;
     const torrent = torrents[abs_idx];
-    const row_title = theme.truncateWithEllipsis(torrent.title, layout.title_col_width, trunc_buf[0..]);
+    const row_title = if (abs_idx == selected_idx)
+        selectedTitleForRender(widget, torrent.title, layout.title_col_width, trunc_buf[0..], marquee_buf[0..])
+    else
+        theme.truncateWithEllipsis(torrent.title, layout.title_col_width, trunc_buf[0..]);
     const row = buildDataCells(&cell_buf, inner_width, layout, row_title, torrent.seeders, torrent.leechers);
 
     if (abs_idx == selected_idx) {
@@ -467,6 +578,116 @@ fn drawContentRow(
     try stdout.writeAll(border.vertical);
     term.resetColor();
     try stdout.writeAll("\r\n");
+}
+
+fn selectedTitleForRender(
+    widget: *ResultsWidget,
+    title: []const u8,
+    title_col_width: usize,
+    trunc_buf: []u8,
+    marquee_buf: []u8,
+) []const u8 {
+    if (title_col_width == 0) return "";
+
+    const title_cols = displayWidthOfText(title);
+    if (title_cols <= title_col_width) {
+        return theme.truncateWithEllipsis(title, title_col_width, trunc_buf);
+    }
+
+    const overflow = title_cols - title_col_width;
+    widget.ensureMarqueeTarget(title_col_width);
+    const offset_cols = @min(widget.marquee_offset_cols, overflow);
+    return sliceByDisplayColumns(title, offset_cols, title_col_width, marquee_buf);
+}
+
+fn stepMarqueeState(
+    offset_cols: *usize,
+    moving_right: *bool,
+    edge_hold: *u8,
+    max_offset: usize,
+    hold_ticks: u8,
+) bool {
+    if (max_offset == 0) return false;
+
+    if (edge_hold.* > 0) {
+        edge_hold.* -= 1;
+        return false;
+    }
+
+    if (moving_right.*) {
+        if (offset_cols.* < max_offset) {
+            offset_cols.* += 1;
+            return true;
+        }
+        moving_right.* = false;
+        edge_hold.* = hold_ticks;
+        return false;
+    }
+
+    if (offset_cols.* > 0) {
+        offset_cols.* -= 1;
+        return true;
+    }
+
+    moving_right.* = true;
+    edge_hold.* = hold_ticks;
+    return false;
+}
+
+fn displayWidth(cp: u21) usize {
+    if (cp >= 0x1100 and cp <= 0x115F) return 2;
+    if (cp == 0x2329 or cp == 0x232A) return 2;
+    if (cp >= 0x2E80 and cp <= 0x303E) return 2;
+    if (cp >= 0x3041 and cp <= 0x33BF) return 2;
+    if (cp >= 0x33FF and cp <= 0xA4CF) return 2;
+    if (cp >= 0xA960 and cp <= 0xA97F) return 2;
+    if (cp >= 0xAC00 and cp <= 0xD7FF) return 2;
+    if (cp >= 0xF900 and cp <= 0xFAFF) return 2;
+    if (cp >= 0xFE10 and cp <= 0xFE1F) return 2;
+    if (cp >= 0xFE30 and cp <= 0xFE6F) return 2;
+    if (cp >= 0xFF00 and cp <= 0xFF60) return 2;
+    if (cp >= 0xFFE0 and cp <= 0xFFE6) return 2;
+    if (cp >= 0x1B000 and cp <= 0x1B0FF) return 2;
+    if (cp == 0x1F004 or cp == 0x1F0CF) return 2;
+    if (cp >= 0x1F300 and cp <= 0x1F9FF) return 2;
+    if (cp >= 0x20000 and cp <= 0x2FFFD) return 2;
+    if (cp >= 0x30000 and cp <= 0x3FFFD) return 2;
+    return 1;
+}
+
+fn displayWidthOfText(text: []const u8) usize {
+    var view = std.unicode.Utf8View.init(text) catch return text.len;
+    var iter = view.iterator();
+    var width: usize = 0;
+    while (iter.nextCodepoint()) |cp| width += displayWidth(cp);
+    return width;
+}
+
+fn nthColumnByteOffset(text: []const u8, n: usize) usize {
+    var view = std.unicode.Utf8View.init(text) catch return @min(n, text.len);
+    var iter = view.iterator();
+    var byte_pos: usize = 0;
+    var cols: usize = 0;
+    while (cols < n) {
+        const slice = iter.nextCodepointSlice() orelse break;
+        const cp = std.unicode.utf8Decode(slice) catch break;
+        const w = displayWidth(cp);
+        if (cols + w > n) break;
+        byte_pos += slice.len;
+        cols += w;
+    }
+    return byte_pos;
+}
+
+fn sliceByDisplayColumns(text: []const u8, start_col: usize, width: usize, scratch: []u8) []const u8 {
+    if (width == 0) return "";
+    const total_cols = displayWidthOfText(text);
+    const clamped_start = @min(start_col, total_cols);
+    const start_byte = nthColumnByteOffset(text, clamped_start);
+    const end_rel = nthColumnByteOffset(text[start_byte..], width);
+    if (end_rel > scratch.len) return text[start_byte..start_byte];
+    @memcpy(scratch[0..end_rel], text[start_byte .. start_byte + end_rel]);
+    return scratch[0..end_rel];
 }
 
 fn writeHeaderCells(stdout: std.fs.File, inner_width: usize, layout: TableLayout) !void {
@@ -595,7 +816,7 @@ test "computeRedrawMode uses full on first draw" {
     };
     try std.testing.expectEqual(
         RenderMode.full,
-        computeRedrawMode(false, false, null, current),
+        computeRedrawMode(false, false, false, null, current),
     );
 }
 
@@ -622,7 +843,7 @@ test "computeRedrawMode returns partial_cursor on cursor movement" {
     };
     try std.testing.expectEqual(
         RenderMode.partial_cursor,
-        computeRedrawMode(true, false, prev, current),
+        computeRedrawMode(true, false, false, prev, current),
     );
 }
 
@@ -649,7 +870,7 @@ test "computeRedrawMode returns partial_window on scroll movement" {
     };
     try std.testing.expectEqual(
         RenderMode.partial_window,
-        computeRedrawMode(true, false, prev, current),
+        computeRedrawMode(true, false, false, prev, current),
     );
 }
 
@@ -676,7 +897,7 @@ test "computeRedrawMode uses full on size change" {
     };
     try std.testing.expectEqual(
         RenderMode.full,
-        computeRedrawMode(true, false, prev, current),
+        computeRedrawMode(true, false, false, prev, current),
     );
 }
 
@@ -703,7 +924,34 @@ test "computeRedrawMode uses full when forced" {
     };
     try std.testing.expectEqual(
         RenderMode.full,
-        computeRedrawMode(true, true, prev, current),
+        computeRedrawMode(true, true, false, prev, current),
+    );
+}
+
+test "computeRedrawMode returns partial_cursor when selected row redraw is forced" {
+    const prev = RenderSnapshot{
+        .rows = 24,
+        .cols = 80,
+        .is_compact = false,
+        .cursor = 2,
+        .scroll_offset = 0,
+        .display_count = 10,
+        .torrents_len = 20,
+        .total_count = 20,
+    };
+    const current = RenderSnapshot{
+        .rows = 24,
+        .cols = 80,
+        .is_compact = false,
+        .cursor = 2,
+        .scroll_offset = 0,
+        .display_count = 10,
+        .torrents_len = 20,
+        .total_count = 20,
+    };
+    try std.testing.expectEqual(
+        RenderMode.partial_cursor,
+        computeRedrawMode(true, false, true, prev, current),
     );
 }
 
@@ -1035,4 +1283,50 @@ test "ResultsWidget cursor resets on new search" {
 
     try std.testing.expectEqual(@as(usize, 0), widget.cursor);
     try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
+}
+
+test "stepMarqueeState bounces and flips direction" {
+    var offset: usize = 0;
+    var moving_right = true;
+    var hold: u8 = 0;
+    const max_offset: usize = 2;
+
+    try std.testing.expect(stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
+    try std.testing.expectEqual(@as(usize, 1), offset);
+    try std.testing.expectEqual(true, moving_right);
+
+    try std.testing.expect(stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
+    try std.testing.expectEqual(@as(usize, 2), offset);
+    try std.testing.expectEqual(true, moving_right);
+
+    try std.testing.expect(!stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
+    try std.testing.expectEqual(@as(usize, 2), offset);
+    try std.testing.expectEqual(false, moving_right);
+
+    try std.testing.expect(stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
+    try std.testing.expectEqual(@as(usize, 1), offset);
+    try std.testing.expectEqual(false, moving_right);
+
+    try std.testing.expect(stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
+    try std.testing.expectEqual(@as(usize, 0), offset);
+    try std.testing.expectEqual(false, moving_right);
+
+    try std.testing.expect(!stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
+    try std.testing.expectEqual(@as(usize, 0), offset);
+    try std.testing.expectEqual(true, moving_right);
+}
+
+test "advanceMarquee does not animate when title fits" {
+    const allocator = std.testing.allocator;
+    var widget = ResultsWidget.init(allocator);
+    defer widget.deinit();
+
+    const torrents = &[_]Torrent{
+        .{ .title = "Short", .seeders = 1, .leechers = 0, .link = "magnet:1" },
+    };
+    widget.setTorrents(torrents, 1);
+    widget.cursor = 0;
+
+    try std.testing.expectEqual(false, widget.advanceMarquee(24, 120));
+    try std.testing.expectEqual(@as(usize, 0), widget.marquee_offset_cols);
 }
