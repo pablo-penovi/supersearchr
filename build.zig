@@ -7,7 +7,7 @@ const std = @import("std");
 // build runner to parallelize the build automatically (and the cache system to
 // know when a step doesn't need to be re-run).
 pub fn build(b: *std.Build) void {
-    const app_version = "0.3.4";
+    const app_version = "0.3.5";
 
     // Standard target options allow the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which

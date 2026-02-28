@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.3.5
+
+### Fixed
+- Fixed the Codecov CI upload input to use the merged kcov Cobertura report path and disabled auto-discovery to prevent invalid coverage processing.
+
 ## 0.3.4
 
 ### Added
