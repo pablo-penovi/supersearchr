@@ -94,6 +94,9 @@ jobs:
       - name: Run coverage
         run: |
           set -euo pipefail
+          mkdir -p coverage/config coverage/jackett coverage/superseedr \
+            coverage/theme coverage/search coverage/results \
+            coverage/panels coverage/app coverage/merged
           kcov --include-path=src coverage/config     ./zig-out/bin/test-config
           kcov --include-path=src coverage/jackett    ./zig-out/bin/test-jackett
           kcov --include-path=src coverage/superseedr ./zig-out/bin/test-superseedr
