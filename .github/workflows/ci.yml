@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Zig 0.15.2
+        run: |
+          set -euo pipefail
+          curl -L "https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz" -o zig.tar.xz
+          tar -xf zig.tar.xz
+          echo "$PWD/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
+
+      - name: Verify Zig
+        run: zig version
+
+      - name: Run tests
+        run: zig build test --summary all
+
+  build-targets:
+    name: Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-linux
+          - x86_64-macos
+          - aarch64-macos
+          - x86_64-windows
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Zig 0.15.2
+        run: |
+          set -euo pipefail
+          curl -L "https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz" -o zig.tar.xz
+          tar -xf zig.tar.xz
+          echo "$PWD/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
+
+      - name: Verify Zig
+        run: zig version
+
+      - name: Cross-compile
+        run: zig build -Dtarget=${{ matrix.target }}

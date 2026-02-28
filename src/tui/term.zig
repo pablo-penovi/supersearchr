@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const Key = enum {
     escape,
@@ -33,36 +34,24 @@ pub const Color = enum {
     bright_white,
 };
 
+const windows = std.os.windows;
+
 var original_termios: std.posix.termios = undefined;
+var original_windows_input_mode: windows.DWORD = 0;
+var original_windows_output_mode: windows.DWORD = 0;
 var term_initialized: bool = false;
 var dim_persistent: bool = false;
 
 pub fn init() !void {
-    const stdin = std.fs.File.stdin();
-    original_termios = try std.posix.tcgetattr(stdin.handle);
     term_initialized = true;
     dim_persistent = false;
 
-    var raw = original_termios;
-    raw.lflag.ICANON = false;
-    raw.lflag.ECHO = false;
-    raw.iflag.IGNBRK = false;
-    raw.iflag.BRKINT = false;
-    raw.iflag.PARMRK = false;
-    raw.iflag.INPCK = false;
-    raw.iflag.ISTRIP = false;
-    raw.iflag.INLCR = false;
-    raw.iflag.IGNCR = false;
-    raw.iflag.ICRNL = false;
-    raw.iflag.IXON = false;
-    raw.iflag.IXANY = false;
-    raw.iflag.IXOFF = false;
-    raw.iflag.IMAXBEL = false;
-    raw.oflag.OPOST = false;
-    raw.cflag.PARENB = false;
-    raw.cflag.CSIZE = .CS8;
+    if (builtin.os.tag == .windows) {
+        try initWindows();
+        return;
+    }
 
-    try std.posix.tcsetattr(stdin.handle, .NOW, raw);
+    try initPosix();
 }
 
 pub fn deinit() void {
@@ -73,8 +62,11 @@ pub fn deinit() void {
     clearScreen();
     std.fs.File.stdout().writeAll("\x1b[1;1H") catch {};
 
-    const stdin = std.fs.File.stdin();
-    std.posix.tcsetattr(stdin.handle, .NOW, original_termios) catch {};
+    if (builtin.os.tag == .windows) {
+        deinitWindows();
+        return;
+    }
+    deinitPosix();
 }
 
 pub fn readKey() !Event {
@@ -108,6 +100,10 @@ pub fn readKey() !Event {
 }
 
 pub fn readKeyWithTimeout(timeout_ms: i32) !?Event {
+    if (builtin.os.tag == .windows) {
+        return try readKeyWithTimeoutWindows(timeout_ms);
+    }
+
     const stdin = std.fs.File.stdin();
     var poll_fds = [_]std.posix.pollfd{
         .{
@@ -124,6 +120,10 @@ pub fn readKeyWithTimeout(timeout_ms: i32) !?Event {
 }
 
 pub fn discardPendingInput() void {
+    if (builtin.os.tag == .windows) {
+        return;
+    }
+
     const stdin = std.fs.File.stdin();
     var poll_fds = [_]std.posix.pollfd{
         .{
@@ -239,6 +239,98 @@ pub fn reverseVideoOff(writer: anytype) !void {
 pub const TerminalSize = struct { rows: u16, cols: u16 };
 
 pub fn getTerminalSize() !TerminalSize {
+    if (builtin.os.tag == .windows) {
+        return try getTerminalSizeWindows();
+    }
+    if (builtin.os.tag == .linux) {
+        return getTerminalSizeLinux();
+    }
+    return try getTerminalSizePosixIoctl();
+}
+
+fn initPosix() !void {
+    const stdin = std.fs.File.stdin();
+    original_termios = try std.posix.tcgetattr(stdin.handle);
+
+    var raw = original_termios;
+    raw.lflag.ICANON = false;
+    raw.lflag.ECHO = false;
+    raw.iflag.IGNBRK = false;
+    raw.iflag.BRKINT = false;
+    raw.iflag.PARMRK = false;
+    raw.iflag.INPCK = false;
+    raw.iflag.ISTRIP = false;
+    raw.iflag.INLCR = false;
+    raw.iflag.IGNCR = false;
+    raw.iflag.ICRNL = false;
+    raw.iflag.IXON = false;
+    raw.iflag.IXANY = false;
+    raw.iflag.IXOFF = false;
+    raw.iflag.IMAXBEL = false;
+    raw.oflag.OPOST = false;
+    raw.cflag.PARENB = false;
+    raw.cflag.CSIZE = .CS8;
+
+    try std.posix.tcsetattr(stdin.handle, .NOW, raw);
+}
+
+fn deinitPosix() void {
+    const stdin = std.fs.File.stdin();
+    std.posix.tcsetattr(stdin.handle, .NOW, original_termios) catch {};
+}
+
+fn initWindows() !void {
+    const stdin_handle = try windows.GetStdHandle(windows.STD_INPUT_HANDLE);
+    const stdout_handle = try windows.GetStdHandle(windows.STD_OUTPUT_HANDLE);
+
+    if (windows.kernel32.GetConsoleMode(stdin_handle, &original_windows_input_mode) == 0) {
+        return error.Unexpected;
+    }
+    if (windows.kernel32.GetConsoleMode(stdout_handle, &original_windows_output_mode) == 0) {
+        return error.Unexpected;
+    }
+
+    const ENABLE_PROCESSED_INPUT: windows.DWORD = 0x0001;
+    const ENABLE_LINE_INPUT: windows.DWORD = 0x0002;
+    const ENABLE_ECHO_INPUT: windows.DWORD = 0x0004;
+    const ENABLE_QUICK_EDIT_MODE: windows.DWORD = 0x0040;
+    const ENABLE_EXTENDED_FLAGS: windows.DWORD = 0x0080;
+    const ENABLE_VIRTUAL_TERMINAL_INPUT: windows.DWORD = 0x0200;
+
+    var input_mode = original_windows_input_mode;
+    input_mode &= ~ENABLE_LINE_INPUT;
+    input_mode &= ~ENABLE_ECHO_INPUT;
+    input_mode &= ~ENABLE_PROCESSED_INPUT;
+    input_mode &= ~ENABLE_QUICK_EDIT_MODE;
+    input_mode |= ENABLE_EXTENDED_FLAGS;
+    input_mode |= ENABLE_VIRTUAL_TERMINAL_INPUT;
+
+    if (windows.kernel32.SetConsoleMode(stdin_handle, input_mode) == 0) {
+        return error.Unexpected;
+    }
+
+    _ = std.fs.File.stdout().getOrEnableAnsiEscapeSupport();
+}
+
+fn deinitWindows() void {
+    const stdin_handle = windows.GetStdHandle(windows.STD_INPUT_HANDLE) catch return;
+    const stdout_handle = windows.GetStdHandle(windows.STD_OUTPUT_HANDLE) catch return;
+    _ = windows.kernel32.SetConsoleMode(stdin_handle, original_windows_input_mode);
+    _ = windows.kernel32.SetConsoleMode(stdout_handle, original_windows_output_mode);
+}
+
+fn readKeyWithTimeoutWindows(timeout_ms: i32) !?Event {
+    const stdin_handle = try windows.GetStdHandle(windows.STD_INPUT_HANDLE);
+    const wait_ms: windows.DWORD = if (timeout_ms < 0) windows.INFINITE else @intCast(timeout_ms);
+    windows.WaitForSingleObject(stdin_handle, wait_ms) catch |err| switch (err) {
+        error.WaitAbandoned => return null,
+        error.WaitTimeOut => return null,
+        else => return err,
+    };
+    return try readKey();
+}
+
+fn getTerminalSizeLinux() !TerminalSize {
     const stdin = std.fs.File.stdin();
     var winsize: std.posix.winsize = undefined;
     const result = std.os.linux.ioctl(stdin.handle, std.os.linux.T.IOCGWINSZ, @intFromPtr(&winsize));
@@ -248,6 +340,33 @@ pub fn getTerminalSize() !TerminalSize {
     }
 
     return error.Unexpected;
+}
+
+fn getTerminalSizePosixIoctl() !TerminalSize {
+    const stdin = std.fs.File.stdin();
+    var winsize: std.posix.winsize = undefined;
+    const result = std.c.ioctl(stdin.handle, std.c.T.IOCGWINSZ, @intFromPtr(&winsize));
+    if (result == 0) {
+        return TerminalSize{ .rows = winsize.row, .cols = winsize.col };
+    }
+    return error.Unexpected;
+}
+
+fn getTerminalSizeWindows() !TerminalSize {
+    const stdout_handle = try windows.GetStdHandle(windows.STD_OUTPUT_HANDLE);
+    var info: windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
+    if (windows.kernel32.GetConsoleScreenBufferInfo(stdout_handle, &info) == 0) {
+        return error.Unexpected;
+    }
+
+    const width_i32 = @as(i32, info.srWindow.Right) - @as(i32, info.srWindow.Left) + 1;
+    const height_i32 = @as(i32, info.srWindow.Bottom) - @as(i32, info.srWindow.Top) + 1;
+    if (width_i32 <= 0 or height_i32 <= 0) return error.Unexpected;
+
+    return TerminalSize{
+        .rows = @as(u16, @intCast(height_i32)),
+        .cols = @as(u16, @intCast(width_i32)),
+    };
 }
 
 test "color escape codes" {

@@ -1,6 +1,7 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
-const default_log_path = "/tmp/supersearchr-debug.log";
+const default_log_filename = "supersearchr-debug.log";
 
 fn parseEnabled(raw: []const u8) bool {
     return std.ascii.eqlIgnoreCase(raw, "1") or
@@ -17,13 +18,43 @@ pub fn isEnabled(allocator: std.mem.Allocator) bool {
 
 fn getLogPath(allocator: std.mem.Allocator) ![]const u8 {
     const value = std.process.getEnvVarOwned(allocator, "SUPERSEARCHR_DEBUG_PATH") catch {
-        return allocator.dupe(u8, default_log_path);
+        return defaultLogPath(allocator);
     };
     if (value.len == 0) {
         allocator.free(value);
-        return allocator.dupe(u8, default_log_path);
+        return defaultLogPath(allocator);
     }
     return value;
+}
+
+fn defaultLogPath(allocator: std.mem.Allocator) ![]const u8 {
+    const temp_dir = try getTempDir(allocator);
+    defer allocator.free(temp_dir);
+    return std.fs.path.join(allocator, &.{ temp_dir, default_log_filename });
+}
+
+fn getTempDir(allocator: std.mem.Allocator) ![]const u8 {
+    if (std.process.getEnvVarOwned(allocator, "TMPDIR")) |value| {
+        if (value.len > 0) return value;
+        allocator.free(value);
+    } else |_| {}
+
+    if (builtin.os.tag == .windows) {
+        if (std.process.getEnvVarOwned(allocator, "TEMP")) |value| {
+            if (value.len > 0) return value;
+            allocator.free(value);
+        } else |_| {}
+        if (std.process.getEnvVarOwned(allocator, "TMP")) |value| {
+            if (value.len > 0) return value;
+            allocator.free(value);
+        } else |_| {}
+        if (std.process.getEnvVarOwned(allocator, "LOCALAPPDATA")) |value| {
+            if (value.len > 0) return value;
+            allocator.free(value);
+        } else |_| {}
+    }
+
+    return allocator.dupe(u8, "/tmp");
 }
 
 pub fn writef(
