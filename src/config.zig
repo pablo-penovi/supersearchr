@@ -44,7 +44,7 @@ fn getConfigPath(allocator: std.mem.Allocator) ![]const u8 {
 
 fn createConfigFile(config_path: []const u8) !void {
     const config_dir = std.fs.path.dirname(config_path) orelse ".";
-    try std.fs.makeDirAbsolute(config_dir);
+    try std.fs.cwd().makePath(config_dir);
 
     const placeholder =
         \\{
@@ -63,38 +63,26 @@ fn createConfigFile(config_path: []const u8) !void {
     std.debug.print("Config created at {s}. Please add your Jackett API key, URL and port.\n", .{config_path});
 }
 
-const OptionalDefault = struct { key: []const u8, json_value: []const u8 };
-const optional_defaults = [_]OptionalDefault{
-    .{ .key = "terminal", .json_value = "\"ghostty\"" },
-};
-
 fn patchMissingDefaults(
     allocator: std.mem.Allocator,
     config_path: []const u8,
     contents: []const u8,
 ) !?[]const u8 {
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, contents, .{}) catch return null;
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, contents, .{}) catch return null;
     defer parsed.deinit();
 
-    var patch_buf = std.ArrayList(u8){};
-    defer patch_buf.deinit(allocator);
+    if (parsed.value != .object) return null;
+    var config_obj = &parsed.value.object;
+    var did_patch = false;
 
-    for (optional_defaults) |def| {
-        if (parsed.value.object.get(def.key) == null) {
-            try patch_buf.appendSlice(allocator, ",\n  \"");
-            try patch_buf.appendSlice(allocator, def.key);
-            try patch_buf.appendSlice(allocator, "\": ");
-            try patch_buf.appendSlice(allocator, def.json_value);
-        }
+    if (config_obj.get("terminal") == null) {
+        try config_obj.put("terminal", .{ .string = "ghostty" });
+        did_patch = true;
     }
 
-    if (patch_buf.items.len == 0) return null;
+    if (!did_patch) return null;
 
-    const last_brace = std.mem.lastIndexOfScalar(u8, contents, '}') orelse return null;
-    const patched = try std.fmt.allocPrint(allocator, "{s}{s}\n}}", .{
-        contents[0..last_brace],
-        patch_buf.items,
-    });
+    const patched = try std.json.Stringify.valueAlloc(allocator, parsed.value, .{ .whitespace = .indent_2 });
 
     const file = try std.fs.createFileAbsolute(config_path, .{});
     defer file.close();
@@ -154,6 +142,9 @@ fn parseConfig(allocator: std.mem.Allocator, contents: []const u8) !Config {
 
     if (api_port_num == 0) {
         return error.EmptyApiPort;
+    }
+    if (api_port_num < 1 or api_port_num > std.math.maxInt(u16)) {
+        return error.InvalidApiPort;
     }
 
     if (terminal_str.len == 0) {
@@ -307,4 +298,63 @@ test "empty terminal returns error" {
     ;
 
     try std.testing.expectError(error.EmptyTerminal, parseConfig(allocator, json_empty_terminal));
+}
+
+test "apiPort above 65535 returns error" {
+    const allocator = std.testing.allocator;
+
+    const json_bad_port =
+        \\{
+        \\  "apiKey": "test_key",
+        \\  "apiUrl": "http://localhost",
+        \\  "apiPort": 65536,
+        \\  "terminal": "ghostty"
+        \\}
+    ;
+
+    try std.testing.expectError(error.InvalidApiPort, parseConfig(allocator, json_bad_port));
+}
+
+test "apiPort below 1 returns error" {
+    const allocator = std.testing.allocator;
+
+    const json_bad_port =
+        \\{
+        \\  "apiKey": "test_key",
+        \\  "apiUrl": "http://localhost",
+        \\  "apiPort": -1,
+        \\  "terminal": "ghostty"
+        \\}
+    ;
+
+    try std.testing.expectError(error.InvalidApiPort, parseConfig(allocator, json_bad_port));
+}
+
+test "patchMissingDefaults adds terminal by mutating object and reserializing" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_abs = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(dir_abs);
+
+    const config_path = try std.fs.path.join(allocator, &.{ dir_abs, "config.json" });
+    defer allocator.free(config_path);
+
+    const original =
+        \\{
+        \\  "apiKey": "test_key",
+        \\  "apiUrl": "http://localhost",
+        \\  "apiPort": 9117
+        \\}
+    ;
+
+    const patched = try patchMissingDefaults(allocator, config_path, original);
+    defer if (patched != null) allocator.free(patched.?);
+
+    try std.testing.expect(patched != null);
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, patched.?, .{});
+    defer parsed.deinit();
+    try std.testing.expect(parsed.value.object.get("terminal") != null);
 }

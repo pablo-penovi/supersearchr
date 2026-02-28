@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.2.3
+
+### Added
+- Added typed `JackettError` handling with exhaustive UI error-message mapping in the app state machine.
+- Expanded Jackett parser test coverage for malformed/partial XML, mixed field ordering, and numeric link entities.
+
+### Changed
+- Hardened config default patching by mutating parsed JSON objects and reserializing before writing.
+- Enforced `apiPort` bounds to valid TCP port range (`1..65535`) with explicit validation errors.
+- Replaced terminal-size ioctl magic number with named Linux constant `std.os.linux.T.IOCGWINSZ`.
+
 ## 0.2.2
 
 ### Changed

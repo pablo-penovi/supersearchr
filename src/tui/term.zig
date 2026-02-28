@@ -241,7 +241,7 @@ pub const TerminalSize = struct { rows: u16, cols: u16 };
 pub fn getTerminalSize() !TerminalSize {
     const stdin = std.fs.File.stdin();
     var winsize: std.posix.winsize = undefined;
-    const result = std.os.linux.ioctl(stdin.handle, 0x5413, @intFromPtr(&winsize));
+    const result = std.os.linux.ioctl(stdin.handle, std.os.linux.T.IOCGWINSZ, @intFromPtr(&winsize));
 
     if (result == 0) {
         return TerminalSize{ .rows = winsize.row, .cols = winsize.col };

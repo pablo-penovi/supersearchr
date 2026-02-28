@@ -29,7 +29,7 @@ pub const SearchWidget = struct {
         const redraw_mode = computeRedrawMode(self.has_drawn_once, self.last_size, size);
         term.hideCursor();
 
-        if (size.cols < 56 or size.rows < 12) {
+        if (theme.isCompactViewport(size.rows, size.cols)) {
             switch (redraw_mode) {
                 .full => drawCompactFull(stdout, colors, self.query.items),
                 .partial => drawCompactInputLine(stdout, size, colors, self.query.items),
@@ -216,7 +216,7 @@ fn clampCursorCoord(max: u16, value: usize) u16 {
 }
 
 fn computeSearchCursorPosition(size: term.TerminalSize, query_len: usize) CursorPosition {
-    if (size.cols < 56 or size.rows < 12) {
+    if (theme.isCompactViewport(size.rows, size.cols)) {
         return .{
             .row = clampCursorCoord(size.rows, 2),
             .col = clampCursorCoord(size.cols, 3 + query_len),

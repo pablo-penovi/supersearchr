@@ -59,7 +59,7 @@ pub const ResultsWidget = struct {
         const stdout = std.fs.File.stdout();
         const colors = theme.superseedr_like;
         const border = theme.unicode_border;
-        const compact = max_cols < 48 or max_rows < 10;
+        const compact = theme.isCompactViewport(max_rows, max_cols);
         const panel_width = if (compact) @as(usize, 0) else @as(usize, @intCast(max_cols - 2));
         const inner_width = if (compact) @as(usize, 0) else panel_width - 2;
         const layout = if (compact) TableLayout.compactFallback() else TableLayout.forInnerWidth(inner_width);
@@ -308,7 +308,7 @@ pub const ResultsWidget = struct {
         if (self.cursor >= self.torrents.len) return false;
 
         self.display_count = computeDisplayCount(max_rows, self.torrents.len);
-        const compact = max_cols < 48 or max_rows < 10;
+        const compact = theme.isCompactViewport(max_rows, max_cols);
         if (compact) return false;
 
         const panel_width = @as(usize, @intCast(max_cols - 2));
@@ -319,7 +319,7 @@ pub const ResultsWidget = struct {
         self.ensureMarqueeTarget(layout.title_col_width);
 
         const title = self.torrents[self.cursor].title;
-        const title_cols = displayWidthOfText(title);
+        const title_cols = theme.displayWidthOfText(title);
         if (title_cols <= layout.title_col_width) return false;
 
         const overflow = title_cols - layout.title_col_width;
@@ -589,7 +589,7 @@ fn selectedTitleForRender(
 ) []const u8 {
     if (title_col_width == 0) return "";
 
-    const title_cols = displayWidthOfText(title);
+    const title_cols = theme.displayWidthOfText(title);
     if (title_cols <= title_col_width) {
         return theme.truncateWithEllipsis(title, title_col_width, trunc_buf);
     }
@@ -597,7 +597,7 @@ fn selectedTitleForRender(
     const overflow = title_cols - title_col_width;
     widget.ensureMarqueeTarget(title_col_width);
     const offset_cols = @min(widget.marquee_offset_cols, overflow);
-    return sliceByDisplayColumns(title, offset_cols, title_col_width, marquee_buf);
+    return theme.sliceByDisplayColumns(title, offset_cols, title_col_width, marquee_buf);
 }
 
 fn stepMarqueeState(
@@ -632,62 +632,6 @@ fn stepMarqueeState(
     moving_right.* = true;
     edge_hold.* = hold_ticks;
     return false;
-}
-
-fn displayWidth(cp: u21) usize {
-    if (cp >= 0x1100 and cp <= 0x115F) return 2;
-    if (cp == 0x2329 or cp == 0x232A) return 2;
-    if (cp >= 0x2E80 and cp <= 0x303E) return 2;
-    if (cp >= 0x3041 and cp <= 0x33BF) return 2;
-    if (cp >= 0x33FF and cp <= 0xA4CF) return 2;
-    if (cp >= 0xA960 and cp <= 0xA97F) return 2;
-    if (cp >= 0xAC00 and cp <= 0xD7FF) return 2;
-    if (cp >= 0xF900 and cp <= 0xFAFF) return 2;
-    if (cp >= 0xFE10 and cp <= 0xFE1F) return 2;
-    if (cp >= 0xFE30 and cp <= 0xFE6F) return 2;
-    if (cp >= 0xFF00 and cp <= 0xFF60) return 2;
-    if (cp >= 0xFFE0 and cp <= 0xFFE6) return 2;
-    if (cp >= 0x1B000 and cp <= 0x1B0FF) return 2;
-    if (cp == 0x1F004 or cp == 0x1F0CF) return 2;
-    if (cp >= 0x1F300 and cp <= 0x1F9FF) return 2;
-    if (cp >= 0x20000 and cp <= 0x2FFFD) return 2;
-    if (cp >= 0x30000 and cp <= 0x3FFFD) return 2;
-    return 1;
-}
-
-fn displayWidthOfText(text: []const u8) usize {
-    var view = std.unicode.Utf8View.init(text) catch return text.len;
-    var iter = view.iterator();
-    var width: usize = 0;
-    while (iter.nextCodepoint()) |cp| width += displayWidth(cp);
-    return width;
-}
-
-fn nthColumnByteOffset(text: []const u8, n: usize) usize {
-    var view = std.unicode.Utf8View.init(text) catch return @min(n, text.len);
-    var iter = view.iterator();
-    var byte_pos: usize = 0;
-    var cols: usize = 0;
-    while (cols < n) {
-        const slice = iter.nextCodepointSlice() orelse break;
-        const cp = std.unicode.utf8Decode(slice) catch break;
-        const w = displayWidth(cp);
-        if (cols + w > n) break;
-        byte_pos += slice.len;
-        cols += w;
-    }
-    return byte_pos;
-}
-
-fn sliceByDisplayColumns(text: []const u8, start_col: usize, width: usize, scratch: []u8) []const u8 {
-    if (width == 0) return "";
-    const total_cols = displayWidthOfText(text);
-    const clamped_start = @min(start_col, total_cols);
-    const start_byte = nthColumnByteOffset(text, clamped_start);
-    const end_rel = nthColumnByteOffset(text[start_byte..], width);
-    if (end_rel > scratch.len) return text[start_byte..start_byte];
-    @memcpy(scratch[0..end_rel], text[start_byte .. start_byte + end_rel]);
-    return scratch[0..end_rel];
 }
 
 fn writeHeaderCells(stdout: std.fs.File, inner_width: usize, layout: TableLayout) !void {

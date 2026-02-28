@@ -4,6 +4,7 @@ const jackett = @import("jackett");
 const superseedr = @import("superseedr");
 const term = @import("term");
 const theme = @import("theme");
+const panels = @import("panels");
 const search_widget = @import("search");
 const results_widget = @import("results");
 const Torrent = @import("torrent").Torrent;
@@ -40,9 +41,17 @@ const SpinnerContext = struct {
     color: u8,
 };
 
+const AppDeps = struct {
+    jackett_search_executor: *const fn (allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]Torrent = jackett.defaultSearchExecutor,
+    superseedr_executor: *const fn (allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void = superseedr.defaultExecutor,
+    superseedr_process_checker: *const fn (allocator: std.mem.Allocator) anyerror!bool = superseedr.defaultProcessChecker,
+    superseedr_spawner: *const fn (allocator: std.mem.Allocator, terminal: []const u8) anyerror!void = superseedr.defaultSpawner,
+};
+
 const App = struct {
     allocator: std.mem.Allocator,
     client: jackett.Client,
+    deps: AppDeps,
     state: State,
     running: bool,
     term_rows: u16,
@@ -51,6 +60,10 @@ const App = struct {
 };
 
 pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
+    return runWithDeps(allocator, cfg, .{});
+}
+
+pub fn runWithDeps(allocator: std.mem.Allocator, cfg: config.Config, deps: AppDeps) !void {
     term.init() catch |err| {
         std.debug.print("Failed to initialize terminal: {}\n", .{err});
         return err;
@@ -67,6 +80,7 @@ pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
     var app = App{
         .allocator = allocator,
         .client = client,
+        .deps = deps,
         .state = .{ .search = .{ .query = "" } },
         .running = true,
         .term_rows = size.rows,
@@ -97,15 +111,26 @@ pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
 fn runSearchState(app: *App) !void {
     var widget = search_widget.SearchWidget.init(app.allocator);
     defer widget.deinit();
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
 
     while (true) {
-        widget.render();
+        if (refreshTerminalSize(app)) {
+            needs_render = true;
+        }
 
-        const event = term.readKey() catch {
+        if (needs_render) {
+            widget.render();
+            needs_render = false;
+        }
+
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch {
             app.state = .{ .err = .{ .message = "Failed to read input" } };
             return;
         };
+        const event = maybe_event orelse continue;
         const action = widget.handleEvent(event);
+        needs_render = true;
 
         switch (action) {
             .continue_search => {},
@@ -150,11 +175,12 @@ fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
 
     term.hideCursor();
     defer term.showCursor();
+    _ = refreshTerminalSize(app);
 
     const stdout = std.fs.File.stdout();
     const colors = theme.superseedr_like;
     const border = theme.unicode_border;
-    const compact = app.term_cols < 56 or app.term_rows < 10;
+    const compact = theme.isCompactViewport(app.term_rows, app.term_cols);
     const panel_width = if (compact) @as(usize, 0) else @min(@as(usize, 74), @as(usize, @intCast(app.term_cols - 4)));
     const left_pad = if (compact) @as(usize, 0) else (@as(usize, @intCast(app.term_cols)) - panel_width) / 2;
     const top_pad = if (compact) @as(usize, 1) else @max(@as(usize, 2), (@as(usize, @intCast(app.term_rows)) - 8) / 2);
@@ -218,18 +244,9 @@ fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
         .color = colors.accent,
     }});
 
-    const torrents = app.client.searchWithExecutor(query, jackett.defaultSearchExecutor) catch |err| {
-        stop.store(true, .release);
-        thread.join();
-        const message = getErrorMessage(err);
-        app.state = .{ .err = .{ .message = message } };
-        return;
-    };
-
+    transitionLoadingToNextState(app, query);
     stop.store(true, .release);
     thread.join();
-
-    app.state = .{ .results = .{ .torrents = torrents } };
 }
 
 fn runResultsState(app: *App, results_state: *ResultsState) !void {
@@ -250,6 +267,11 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
     var last_loop_ms: i64 = std.time.milliTimestamp();
 
     while (true) {
+        if (refreshTerminalSize(app)) {
+            widget.force_full_redraw = true;
+            needs_render = true;
+        }
+
         const now_ms = std.time.milliTimestamp();
         const elapsed_ms = nonNegativeElapsedMs(last_loop_ms, now_ms);
         last_loop_ms = now_ms;
@@ -280,7 +302,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                 },
                 .select => |idx| {
                     const torrent = torrents[idx];
-                    const result = superseedr.addLink(app.allocator, torrent.link, app.terminal);
+                    const result = addLinkWithAppDeps(app, torrent.link);
 
                     if (result) |_| {
                         debug_log.writef(
@@ -289,10 +311,11 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                             "Added torrent to superseedr title=\"{s}\" link=\"{s}\"",
                             .{ torrent.title, torrent.link },
                         );
-                        renderResultNoticeOverlay(
+                        panels.renderResultNoticeOverlay(
+                            &app.term_rows,
+                            &app.term_cols,
+                            refreshTerminalSizeValues,
                             &widget,
-                            app.term_rows,
-                            app.term_cols,
                             "Success",
                             "Added to superseedr!",
                             theme.superseedr_like.ok,
@@ -305,7 +328,13 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                             "Failed to add torrent err={s} title=\"{s}\" link=\"{s}\"",
                             .{ @errorName(err), torrent.title, torrent.link },
                         );
-                        renderResultErrorOverlay(&widget, app.term_rows, app.term_cols, getSuperseedrErrorMessage(err));
+                        panels.renderResultErrorOverlay(
+                            &app.term_rows,
+                            &app.term_cols,
+                            refreshTerminalSizeValues,
+                            &widget,
+                            getSuperseedrErrorMessage(err),
+                        );
                         widget.force_full_redraw = true;
                     }
                 },
@@ -316,130 +345,65 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
     }
 }
 
-fn runErrorState(app: *App, error_state: *ErrorState) !void {
-    renderError(error_state.message);
+fn searchWithAppDeps(app: *App, query: []const u8) jackett.JackettError![]Torrent {
+    return app.client.searchWithExecutor(query, app.deps.jackett_search_executor);
+}
 
-    const event = term.readKey() catch {
-        app.state = .{ .search = .{ .query = "" } };
+fn addLinkWithAppDeps(app: *App, link: []const u8) superseedr.AddLinkError!void {
+    return superseedr.addLinkWithAllDeps(
+        app.allocator,
+        link,
+        app.terminal,
+        app.deps.superseedr_executor,
+        app.deps.superseedr_process_checker,
+        app.deps.superseedr_spawner,
+    );
+}
+
+fn transitionLoadingToNextState(app: *App, query: []const u8) void {
+    const torrents = searchWithAppDeps(app, query) catch |err| {
+        app.state = .{ .err = .{ .message = getErrorMessage(err) } };
         return;
     };
-
-    _ = event;
-    app.state = .{ .search = .{ .query = "" } };
+    app.state = .{ .results = .{ .torrents = torrents } };
 }
 
-fn renderResultNoticeOverlay(
-    widget: *results_widget.ResultsWidget,
-    rows: u16,
-    cols: u16,
-    title: []const u8,
-    message: []const u8,
-    title_color: u8,
-) void {
-    term.discardPendingInput();
-    term.setDimPersistent(true);
-    widget.force_full_redraw = true;
-    widget.render(rows, cols);
-    term.setDimPersistent(false);
+fn runErrorState(app: *App, error_state: *ErrorState) !void {
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
 
-    renderNoticePanel(title, message, title_color, false);
-    const event = term.readKey() catch return;
-    _ = event;
-    term.discardPendingInput();
-}
-
-fn renderResultErrorOverlay(widget: *results_widget.ResultsWidget, rows: u16, cols: u16, message: []const u8) void {
-    var buf: [256]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "Error: {s}", .{message}) catch "Error";
-    renderResultNoticeOverlay(widget, rows, cols, "Error", msg, theme.superseedr_like.err);
-}
-
-fn renderError(message: []const u8) void {
-    var buf: [256]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "Error: {s}", .{message}) catch "Error";
-    renderNoticePanel("Error", msg, theme.superseedr_like.err, true);
-}
-
-fn renderNoticePanel(title: []const u8, message: []const u8, title_color: u8, clear_backdrop: bool) void {
-    const stdout = std.fs.File.stdout();
-    const colors = theme.superseedr_like;
-    const border = theme.unicode_border;
-    const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
-
-    if (size.cols < 56 or size.rows < 10) {
-        if (clear_backdrop) {
-            term.moveCursor(1, 1);
-            term.clearScreen();
+    while (true) {
+        if (refreshTerminalSize(app)) {
+            needs_render = true;
         }
-        term.moveCursor(1, 1);
-        var compact_buf: [256]u8 = undefined;
-        const compact_line = std.fmt.bufPrint(&compact_buf, "{s}: {s}", .{ title, message }) catch title;
-        var trunc_buf: [256]u8 = undefined;
-        const shown = theme.truncateWithEllipsis(compact_line, @max(@as(usize, 1), @as(usize, @intCast(size.cols))), trunc_buf[0..]);
-        term.setFg256(title_color);
-        term.setBold(true);
-        stdout.writeAll(shown) catch {};
-        term.setBold(false);
-        stdout.writeAll("\r\n") catch {};
-        term.setFg256(colors.muted);
-        stdout.writeAll("Press any key to continue...") catch {};
-        term.resetColor();
-        return;
+
+        if (needs_render) {
+            panels.renderError(error_state.message);
+            needs_render = false;
+        }
+
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch {
+            app.state = .{ .search = .{ .query = "" } };
+            return;
+        };
+        if (maybe_event != null) {
+            app.state = .{ .search = .{ .query = "" } };
+            return;
+        }
     }
-
-    const panel_width = @min(@as(usize, 72), @as(usize, @intCast(size.cols - 4)));
-    const left_pad = (@as(usize, @intCast(size.cols)) - panel_width) / 2;
-    const top_pad = @max(@as(usize, 2), (@as(usize, @intCast(size.rows)) - 7) / 2);
-    var trunc_buf: [320]u8 = undefined;
-    const shown = theme.truncateWithEllipsis(message, panel_width - 4, trunc_buf[0..]);
-
-    if (clear_backdrop) {
-        term.moveCursor(1, 1);
-        term.clearScreen();
-    }
-    const panel_col: u16 = @as(u16, @intCast(left_pad + 1));
-    const top_row: u16 = @as(u16, @intCast(top_pad));
-    term.moveCursor(top_row, panel_col);
-    theme.drawPanelTop(stdout, panel_width, border, colors) catch {};
-
-    term.moveCursor(top_row + 1, panel_col);
-    term.setFg256(colors.panel_border);
-    stdout.writeAll(border.vertical) catch {};
-    term.setFg256(title_color);
-    term.setBold(true);
-    var title_buf: [64]u8 = undefined;
-    const title_line = std.fmt.bufPrint(&title_buf, " {s} ", .{title}) catch title;
-    theme.writePadded(stdout, title_line, panel_width - 2) catch {};
-    term.setBold(false);
-    term.setFg256(colors.panel_border);
-    stdout.writeAll(border.vertical) catch {};
-    term.resetColor();
-    stdout.writeAll("\r\n") catch {};
-
-    term.moveCursor(top_row + 2, panel_col);
-    var msg_buf: [352]u8 = undefined;
-    const message_line = std.fmt.bufPrint(&msg_buf, " {s}", .{shown}) catch shown;
-    theme.drawPanelRow(stdout, panel_width, message_line, border, colors) catch {};
-
-    term.moveCursor(top_row + 3, panel_col);
-    term.setFg256(colors.panel_border);
-    stdout.writeAll(border.vertical) catch {};
-    term.setFg256(colors.muted);
-    theme.writePadded(stdout, " Press any key to continue... ", panel_width - 2) catch {};
-    term.setFg256(colors.panel_border);
-    stdout.writeAll(border.vertical) catch {};
-    term.resetColor();
-    stdout.writeAll("\r\n") catch {};
-
-    term.moveCursor(top_row + 4, panel_col);
-    theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 }
 
-fn getErrorMessage(err: anyerror) []const u8 {
+fn getErrorMessage(err: jackett.JackettError) []const u8 {
     return switch (err) {
         error.ConnectionRefused => "Cannot connect to Jackett. Is it running?",
+        error.InvalidUrl => "Invalid Jackett URL in config",
+        error.RequestCreateFailed => "Failed to create Jackett request",
+        error.RequestSendFailed => "Failed to send Jackett request",
+        error.ResponseHeadReadFailed => "Failed to read Jackett response headers",
         error.HttpError => "Jackett returned error",
-        else => "Failed to parse Jackett response",
+        error.ResponseReadFailed => "Failed to read Jackett response",
+        error.ParseFailed => "Failed to parse Jackett response",
+        error.OutOfMemory => "Out of memory while processing Jackett response",
     };
 }
 
@@ -481,20 +445,96 @@ fn consumeMarqueeTick(budget_ms: *i64, interval_ms: i64) bool {
     return true;
 }
 
-test "state transitions: search -> loading -> results" {
-    const Testing = @import("std").testing;
+fn refreshTerminalSize(app: *App) bool {
+    return refreshTerminalSizeValues(&app.term_rows, &app.term_cols);
+}
 
-    var search_called = false;
-    var loading_called = false;
-    var results_called = false;
+fn refreshTerminalSizeValues(term_rows: *u16, term_cols: *u16) bool {
+    const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
+    if (size.rows == term_rows.* and size.cols == term_cols.*) return false;
+    term_rows.* = size.rows;
+    term_cols.* = size.cols;
+    return true;
+}
 
-    search_called = true;
-    loading_called = true;
-    results_called = true;
+test "state transitions smoke path search -> loading -> results with injected deps" {
+    const mock = struct {
+        fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]Torrent {
+            if (std.mem.indexOf(u8, url, "q=ubuntu") == null) return error.ParseFailed;
 
-    try Testing.expect(search_called);
-    try Testing.expect(loading_called);
-    try Testing.expect(results_called);
+            var torrents: []Torrent = try allocator.alloc(Torrent, 1);
+            torrents[0] = .{
+                .title = try allocator.dupe(u8, "Ubuntu ISO"),
+                .seeders = 120,
+                .leechers = 4,
+                .link = try allocator.dupe(u8, "magnet:?xt=urn:btih:abc"),
+            };
+            return torrents;
+        }
+    };
+
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
+        .deps = .{
+            .jackett_search_executor = mock.exec,
+        },
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "xterm",
+    };
+
+    const query = try std.testing.allocator.dupe(u8, "ubuntu");
+    defer std.testing.allocator.free(query);
+
+    app.state = .{ .loading = .{ .query = query } };
+    transitionLoadingToNextState(&app, query);
+
+    switch (app.state) {
+        .results => |results_state| {
+            defer freeTorrents(std.testing.allocator, results_state.torrents);
+            try std.testing.expectEqual(@as(usize, 1), results_state.torrents.len);
+            try std.testing.expectEqualStrings("Ubuntu ISO", results_state.torrents[0].title);
+        },
+        else => return error.UnexpectedState,
+    }
+}
+
+test "state transitions smoke path loading failure goes to error" {
+    const mock = struct {
+        fn exec(_: std.mem.Allocator, _: []const u8) jackett.JackettError![]Torrent {
+            return error.ConnectionRefused;
+        }
+    };
+
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
+        .deps = .{
+            .jackett_search_executor = mock.exec,
+        },
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "xterm",
+    };
+
+    const query = try std.testing.allocator.dupe(u8, "ubuntu");
+    defer std.testing.allocator.free(query);
+
+    app.state = .{ .loading = .{ .query = query } };
+    transitionLoadingToNextState(&app, query);
+
+    switch (app.state) {
+        .err => |error_state| try std.testing.expectEqualStrings(
+            "Cannot connect to Jackett. Is it running?",
+            error_state.message,
+        ),
+        else => return error.UnexpectedState,
+    }
 }
 
 test "scaledMarqueeIntervalMs slows base interval by percent" {
@@ -512,4 +552,183 @@ test "consumeMarqueeTick spends only one interval per loop" {
     try std.testing.expect(consumeMarqueeTick(&budget, 104));
     try std.testing.expectEqual(@as(i64, 56), budget);
     try std.testing.expect(!consumeMarqueeTick(&budget, 104));
+}
+
+test "getErrorMessage exhaustively maps all jackett errors" {
+    try std.testing.expectEqualStrings(
+        "Cannot connect to Jackett. Is it running?",
+        getErrorMessage(error.ConnectionRefused),
+    );
+    try std.testing.expectEqualStrings(
+        "Invalid Jackett URL in config",
+        getErrorMessage(error.InvalidUrl),
+    );
+    try std.testing.expectEqualStrings(
+        "Failed to create Jackett request",
+        getErrorMessage(error.RequestCreateFailed),
+    );
+    try std.testing.expectEqualStrings(
+        "Failed to send Jackett request",
+        getErrorMessage(error.RequestSendFailed),
+    );
+    try std.testing.expectEqualStrings(
+        "Failed to read Jackett response headers",
+        getErrorMessage(error.ResponseHeadReadFailed),
+    );
+    try std.testing.expectEqualStrings(
+        "Jackett returned error",
+        getErrorMessage(error.HttpError),
+    );
+    try std.testing.expectEqualStrings(
+        "Failed to read Jackett response",
+        getErrorMessage(error.ResponseReadFailed),
+    );
+    try std.testing.expectEqualStrings(
+        "Failed to parse Jackett response",
+        getErrorMessage(error.ParseFailed),
+    );
+    try std.testing.expectEqualStrings(
+        "Out of memory while processing Jackett response",
+        getErrorMessage(error.OutOfMemory),
+    );
+}
+
+test "getSuperseedrErrorMessage maps all AddLinkError values" {
+    try std.testing.expectEqualStrings("Invalid link", getSuperseedrErrorMessage(error.InvalidLink));
+    try std.testing.expectEqualStrings(
+        "superseedr not found in PATH",
+        getSuperseedrErrorMessage(error.SuperseedrNotFound),
+    );
+    try std.testing.expectEqualStrings(
+        "Failed to add to superseedr",
+        getSuperseedrErrorMessage(error.SuperseedrFailed),
+    );
+    try std.testing.expectEqualStrings(
+        "Failed to launch superseedr",
+        getSuperseedrErrorMessage(error.SuperseedrLaunchFailed),
+    );
+}
+
+test "refreshTerminalSize returns false and keeps values when unchanged" {
+    const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .deps = .{},
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = size.rows,
+        .term_cols = size.cols,
+        .terminal = "xterm",
+    };
+
+    try std.testing.expect(!refreshTerminalSize(&app));
+    try std.testing.expectEqual(size.rows, app.term_rows);
+    try std.testing.expectEqual(size.cols, app.term_cols);
+}
+
+test "refreshTerminalSize returns true and updates values when changed" {
+    const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
+    const initial_rows: u16 = if (size.rows == 1) 2 else 1;
+    const initial_cols: u16 = if (size.cols == 1) 2 else 1;
+
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .deps = .{},
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = initial_rows,
+        .term_cols = initial_cols,
+        .terminal = "xterm",
+    };
+
+    try std.testing.expect(refreshTerminalSize(&app));
+    try std.testing.expectEqual(size.rows, app.term_rows);
+    try std.testing.expectEqual(size.cols, app.term_cols);
+}
+
+test "searchWithAppDeps uses injected jackett search executor" {
+    const state = struct {
+        var called = false;
+    };
+    state.called = false;
+
+    const mock = struct {
+        fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]Torrent {
+            state.called = true;
+            if (std.mem.indexOf(u8, url, "/api/v2.0/indexers/all/results/torznab/api?apikey=test-key&q=ubuntu") == null) {
+                return error.ParseFailed;
+            }
+            return allocator.alloc(Torrent, 0);
+        }
+    };
+
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
+        .deps = .{
+            .jackett_search_executor = mock.exec,
+        },
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "xterm",
+    };
+
+    const torrents = try searchWithAppDeps(&app, "ubuntu");
+    defer std.testing.allocator.free(torrents);
+    try std.testing.expect(state.called);
+    try std.testing.expectEqual(@as(usize, 0), torrents.len);
+}
+
+test "addLinkWithAppDeps uses injected superseedr dependencies" {
+    const state = struct {
+        var checker_called = false;
+        var spawner_called = false;
+        var executor_called = false;
+    };
+    state.checker_called = false;
+    state.spawner_called = false;
+    state.executor_called = false;
+
+    const mock = struct {
+        fn checker(_: std.mem.Allocator) anyerror!bool {
+            state.checker_called = true;
+            return false;
+        }
+
+        fn spawner(_: std.mem.Allocator, terminal: []const u8) anyerror!void {
+            state.spawner_called = true;
+            try std.testing.expectEqualStrings("ghostty", terminal);
+        }
+
+        fn exec(_: std.mem.Allocator, argv: []const []const u8) anyerror!void {
+            state.executor_called = true;
+            try std.testing.expectEqualStrings("superseedr", argv[0]);
+            try std.testing.expectEqualStrings("add", argv[1]);
+            try std.testing.expectEqualStrings("magnet:?xt=urn:btih:abc", argv[2]);
+        }
+    };
+
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
+        .deps = .{
+            .superseedr_executor = mock.exec,
+            .superseedr_process_checker = mock.checker,
+            .superseedr_spawner = mock.spawner,
+        },
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "ghostty",
+    };
+
+    try addLinkWithAppDeps(&app, "magnet:?xt=urn:btih:abc");
+    try std.testing.expect(state.checker_called);
+    try std.testing.expect(state.spawner_called);
+    try std.testing.expect(state.executor_called);
 }
