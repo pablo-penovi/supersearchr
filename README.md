@@ -3,7 +3,7 @@
 Terminal-first BitTorrent search for Jackett + Superseedr, written in Zig 0.15.2.
 
 `supersearchr` lets you search Jackett from a TUI, browse sorted results, and send a selected magnet/torrent link to `superseedr add`.
-Current project version: `v0.2.2`.
+Current project version: `v0.2.3`.
 
 ## Requirements
 
@@ -109,7 +109,7 @@ Logs include Jackett request/parsing failures, Superseedr execution failures, an
 - `superseedr not found in PATH`
   - Install `superseedr` and ensure it is discoverable in your shell `PATH`.
 - Config file keeps failing validation
-  - Ensure `apiKey` and `apiUrl` are not placeholders and `apiPort` is a non-zero number.
+- Ensure `apiKey` and `apiUrl` are not placeholders and `apiPort` is between `1` and `65535`.
 
 ## Project Layout
 
