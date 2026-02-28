@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const debug_log = @import("debug_log");
 
 pub const AddLinkError = error{
@@ -45,19 +46,30 @@ pub fn defaultExecutor(allocator: std.mem.Allocator, argv: []const []const u8) a
 }
 
 pub fn defaultProcessChecker(allocator: std.mem.Allocator) anyerror!bool {
+    const argv: []const []const u8 = switch (builtin.os.tag) {
+        .windows => &.{ "tasklist", "/FI", "IMAGENAME eq superseedr.exe" },
+        else => &.{ "pgrep", "-x", "superseedr" },
+    };
+
     const result = std.process.Child.run(.{
         .allocator = allocator,
-        .argv = &.{ "pgrep", "-x", "superseedr" },
+        .argv = argv,
     }) catch return false;
     defer {
         allocator.free(result.stdout);
         allocator.free(result.stderr);
     }
+
+    if (builtin.os.tag == .windows) {
+        if (!(result.term == .Exited and result.term.Exited == 0)) return false;
+        return std.mem.indexOf(u8, result.stdout, "superseedr.exe") != null;
+    }
     return result.term == .Exited and result.term.Exited == 0;
 }
 
 pub fn defaultSpawner(allocator: std.mem.Allocator, terminal: []const u8) anyerror!void {
-    var child = std.process.Child.init(&.{ terminal, "-e", "superseedr" }, allocator);
+    _ = terminal;
+    var child = std.process.Child.init(&.{"superseedr"}, allocator);
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
     try child.spawn();

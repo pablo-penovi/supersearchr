@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+## 0.3.0
+
+### Added
+- Added Windows console support in the TUI terminal layer (raw input mode, timed key waits, and console-size detection).
+- Added POSIX terminal-size fallback for non-Linux Unix targets (including macOS) using `ioctl(T.IOCGWINSZ)`.
+
+### Changed
+- Made config file location OS-aware: Linux (`~/.config`), macOS (`~/Library/Application Support`), Windows (`%LOCALAPPDATA%`).
+- Made debug-log default path OS-aware using temp-directory environment variables.
+- Made Superseedr process checks cross-platform (`pgrep` on Unix-like targets, `tasklist` on Windows) and switched default spawn to direct `superseedr` background launch.
+- Updated README platform requirements and cross-compilation/configuration guidance for Linux, macOS, and Windows.
+
 ## 0.2.3
 
 ### Added

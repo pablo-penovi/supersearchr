@@ -3,15 +3,14 @@
 Terminal-first BitTorrent search for Jackett + Superseedr, written in Zig 0.15.2.
 
 `supersearchr` lets you search Jackett from a TUI, browse sorted results, and send a selected magnet/torrent link to `superseedr add`.
-Current project version: `v0.2.3`.
+Current project version: `v0.3.0`.
 
 ## Requirements
 
-- Linux (this is the only platform currently guaranteed)
+- Linux, macOS, or Windows (Windows Terminal recommended on Windows)
 - Zig `0.15.2`
 - A running Jackett instance with API key
 - `superseedr` CLI in your `PATH`
-- A terminal emulator in your `PATH` (used to launch `superseedr` if not already running)
 
 ## Quick Start
 
@@ -22,7 +21,9 @@ zig build run
 
 On first run, `supersearchr` creates:
 
-`~/.config/supersearchr/config.json`
+- Linux: `~/.config/supersearchr/config.json`
+- macOS: `~/Library/Application Support/supersearchr/config.json`
+- Windows: `%LOCALAPPDATA%\supersearchr\config.json`
 
 Then it exits so you can fill in real Jackett values.
 
@@ -38,8 +39,11 @@ zig build run
 # Build optimized for your current machine
 zig build -Doptimize=ReleaseSafe -Dtarget=native-native
 
-# Cross-compile Linux binary example
+# Cross-compile examples
 zig build -Dtarget=x86_64-linux
+zig build -Dtarget=x86_64-macos
+zig build -Dtarget=aarch64-macos
+zig build -Dtarget=x86_64-windows
 
 # Run all tests with detailed summary
 zig build test --summary all
@@ -49,11 +53,20 @@ zig build test --summary all
 
 After building, copy `zig-out/bin/supersearchr` to a directory in your `PATH`, for example `~/.local/bin`.
 
+## Platform Notes
+
+- Linux: defaults should work in common ANSI-capable terminals.
+- macOS: run from Terminal.app or iTerm2.
+- Windows: run from Windows Terminal (PowerShell or cmd), not legacy `conhost` shells.
+- `superseedr` must be available in `PATH` on all platforms.
+
 ## Configuration
 
 Config path:
 
-`~/.config/supersearchr/config.json`
+- Linux: `~/.config/supersearchr/config.json`
+- macOS: `~/Library/Application Support/supersearchr/config.json`
+- Windows: `%LOCALAPPDATA%\supersearchr\config.json`
 
 Expected format:
 
@@ -69,7 +82,7 @@ Expected format:
 Notes:
 
 - `apiKey`, `apiUrl`, and `apiPort` are required.
-- `terminal` is used when `superseedr` is not running and the app needs to spawn it.
+- `terminal` is kept for compatibility and defaults by OS (`ghostty`/`Terminal`/`wt`).
 - Placeholder values like `YOUR_JACKETT_API_KEY` / `YOUR_JACKET_URL` are rejected.
 
 ## Usage
@@ -96,8 +109,19 @@ State flow: `SEARCH -> LOADING -> RESULTS -> ERROR`
 # Enable debug logs
 SUPERSEARCHR_DEBUG=1 supersearchr
 
-# Custom log path (default: /tmp/supersearchr-debug.log)
+# Custom log path (default: OS temp dir + supersearchr-debug.log)
 SUPERSEARCHR_DEBUG=1 SUPERSEARCHR_DEBUG_PATH=/path/to/supersearchr.log supersearchr
+```
+
+Windows PowerShell examples:
+
+```powershell
+$env:SUPERSEARCHR_DEBUG = "1"
+supersearchr
+
+$env:SUPERSEARCHR_DEBUG = "1"
+$env:SUPERSEARCHR_DEBUG_PATH = "C:\temp\supersearchr.log"
+supersearchr
 ```
 
 Logs include Jackett request/parsing failures, Superseedr execution failures, and selected torrent metadata.
@@ -108,6 +132,12 @@ Logs include Jackett request/parsing failures, Superseedr execution failures, an
   - Verify Jackett is running and `apiUrl`/`apiPort` are correct.
 - `superseedr not found in PATH`
   - Install `superseedr` and ensure it is discoverable in your shell `PATH`.
+- On Windows, `superseedr` process check fails unexpectedly
+  - Confirm `tasklist` is available and `superseedr.exe` is the running process name.
+- UI does not render correctly on Windows
+  - Use Windows Terminal and avoid shells that do not support ANSI/VT sequences.
+- Terminal size/layout issues on macOS
+  - Use Terminal.app or iTerm2 and avoid launching from non-interactive contexts.
 - Config file keeps failing validation
 - Ensure `apiKey` and `apiUrl` are not placeholders and `apiPort` is between `1` and `65535`.
 

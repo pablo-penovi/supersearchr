@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const Config = struct {
     api_key: []const u8,
@@ -31,29 +32,27 @@ pub fn loadConfig(allocator: std.mem.Allocator) !Config {
 }
 
 fn getConfigPath(allocator: std.mem.Allocator) ![]const u8 {
-    const home = std.process.getEnvVarOwned(allocator, "HOME") catch |err| {
-        if (err == error.EnvironmentVariableNotFound) {
-            return error.HomeNotFound;
-        }
-        return err;
-    };
-    defer allocator.free(home);
-
-    return std.fmt.allocPrint(allocator, "{s}/.config/supersearchr/config.json", .{home});
+    const config_dir = try getConfigDir(allocator);
+    defer allocator.free(config_dir);
+    return std.fs.path.join(allocator, &.{ config_dir, "supersearchr", "config.json" });
 }
 
 fn createConfigFile(config_path: []const u8) !void {
     const config_dir = std.fs.path.dirname(config_path) orelse ".";
     try std.fs.cwd().makePath(config_dir);
 
-    const placeholder =
-        \\{
+    var placeholder_buf: [256]u8 = undefined;
+    const placeholder = try std.fmt.bufPrint(
+        &placeholder_buf,
+        \\{{
         \\  "apiKey": "YOUR_JACKETT_API_KEY",
         \\  "apiUrl": "YOUR_JACKET_URL",
         \\  "apiPort": 9117,
-        \\  "terminal": "ghostty"
-        \\}
-    ;
+        \\  "terminal": "{s}"
+        \\}}
+    ,
+        .{defaultTerminal()},
+    );
 
     const file = try std.fs.createFileAbsolute(config_path, .{});
     defer file.close();
@@ -61,6 +60,51 @@ fn createConfigFile(config_path: []const u8) !void {
     try file.writeAll(placeholder);
 
     std.debug.print("Config created at {s}. Please add your Jackett API key, URL and port.\n", .{config_path});
+}
+
+fn getConfigDir(allocator: std.mem.Allocator) ![]const u8 {
+    switch (builtin.os.tag) {
+        .windows => {
+            if (std.process.getEnvVarOwned(allocator, "LOCALAPPDATA")) |value| {
+                return value;
+            } else |_| {}
+            if (std.process.getEnvVarOwned(allocator, "APPDATA")) |value| {
+                return value;
+            } else |_| {}
+            return error.HomeNotFound;
+        },
+        .macos => {
+            const home = std.process.getEnvVarOwned(allocator, "HOME") catch |err| {
+                if (err == error.EnvironmentVariableNotFound) return error.HomeNotFound;
+                return err;
+            };
+            defer allocator.free(home);
+            return std.fs.path.join(allocator, &.{ home, "Library", "Application Support" });
+        },
+        else => {
+            if (std.process.getEnvVarOwned(allocator, "XDG_CONFIG_HOME")) |xdg| {
+                if (xdg.len > 0) {
+                    return xdg;
+                }
+                allocator.free(xdg);
+            } else |_| {}
+
+            const home = std.process.getEnvVarOwned(allocator, "HOME") catch |err| {
+                if (err == error.EnvironmentVariableNotFound) return error.HomeNotFound;
+                return err;
+            };
+            defer allocator.free(home);
+            return std.fs.path.join(allocator, &.{ home, ".config" });
+        },
+    }
+}
+
+fn defaultTerminal() []const u8 {
+    return switch (builtin.os.tag) {
+        .windows => "wt",
+        .macos => "Terminal",
+        else => "ghostty",
+    };
 }
 
 fn patchMissingDefaults(
@@ -76,7 +120,7 @@ fn patchMissingDefaults(
     var did_patch = false;
 
     if (config_obj.get("terminal") == null) {
-        try config_obj.put("terminal", .{ .string = "ghostty" });
+        try config_obj.put("terminal", .{ .string = defaultTerminal() });
         did_patch = true;
     }
 
