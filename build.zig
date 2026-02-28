@@ -138,6 +138,7 @@ pub fn build(b: *std.Build) void {
 
     // Test for config module
     const config_tests = b.addTest(.{
+        .name = "test-config",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/config.zig"),
             .target = target,
@@ -149,6 +150,7 @@ pub fn build(b: *std.Build) void {
     // Test for jackett module
     // Reuse torrent_mod defined above
     const jackett_tests = b.addTest(.{
+        .name = "test-jackett",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/jackett/client.zig"),
             .target = target,
@@ -161,6 +163,7 @@ pub fn build(b: *std.Build) void {
 
     // Test for superseedr module
     const superseedr_tests = b.addTest(.{
+        .name = "test-superseedr",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/superseedr/client.zig"),
             .target = target,
@@ -173,6 +176,7 @@ pub fn build(b: *std.Build) void {
     // Test for search widget
     // Reuse term_mod defined above
     const search_widget_tests = b.addTest(.{
+        .name = "test-search",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tui/widgets/search.zig"),
             .target = target,
@@ -185,6 +189,7 @@ pub fn build(b: *std.Build) void {
 
     // Test for results widget
     const results_widget_tests = b.addTest(.{
+        .name = "test-results",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tui/widgets/results.zig"),
             .target = target,
@@ -198,6 +203,7 @@ pub fn build(b: *std.Build) void {
 
     // Test for theme module
     const theme_tests = b.addTest(.{
+        .name = "test-theme",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tui/theme.zig"),
             .target = target,
@@ -209,6 +215,7 @@ pub fn build(b: *std.Build) void {
 
     // Test for panels module
     const panels_tests = b.addTest(.{
+        .name = "test-panels",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tui/panels.zig"),
             .target = target,
@@ -223,6 +230,7 @@ pub fn build(b: *std.Build) void {
     // Test for app module
     // Reuse modules defined above
     const app_tests = b.addTest(.{
+        .name = "test-app",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/tui/app.zig"),
             .target = target,
@@ -269,6 +277,19 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_search_widget_tests.step);
     test_step.dependOn(&run_results_widget_tests.step);
     test_step.dependOn(&run_app_tests.step);
+
+    // Build step that installs all test binaries for kcov coverage collection.
+    // Run with: zig build build-coverage
+    // Binaries are emitted to zig-out/bin/test-{module}.
+    const coverage_step = b.step("build-coverage", "Build test binaries for kcov coverage");
+    coverage_step.dependOn(&b.addInstallArtifact(config_tests, .{}).step);
+    coverage_step.dependOn(&b.addInstallArtifact(jackett_tests, .{}).step);
+    coverage_step.dependOn(&b.addInstallArtifact(superseedr_tests, .{}).step);
+    coverage_step.dependOn(&b.addInstallArtifact(theme_tests, .{}).step);
+    coverage_step.dependOn(&b.addInstallArtifact(search_widget_tests, .{}).step);
+    coverage_step.dependOn(&b.addInstallArtifact(results_widget_tests, .{}).step);
+    coverage_step.dependOn(&b.addInstallArtifact(panels_tests, .{}).step);
+    coverage_step.dependOn(&b.addInstallArtifact(app_tests, .{}).step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

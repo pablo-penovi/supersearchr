@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.3.3
+
+### Added
+- Added `zig build coverage` step using `kcov` to generate per-suite and merged HTML/Cobertura coverage reports.
+- Added `fmt` CI job to enforce `zig fmt` formatting on all source files.
+- Added `coverage` CI job that runs `kcov`, merges results, and uploads Cobertura XML to Codecov.
+
 ## 0.3.2
 
 ### Fixed

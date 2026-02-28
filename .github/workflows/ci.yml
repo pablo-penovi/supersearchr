@@ -54,3 +54,64 @@ jobs:
 
       - name: Cross-compile
         run: zig build -Dtarget=${{ matrix.target }}
+
+  fmt:
+    name: Format check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Zig 0.15.2
+        run: |
+          set -euo pipefail
+          curl -L "https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz" -o zig.tar.xz
+          tar -xf zig.tar.xz
+          echo "$PWD/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
+      - name: Check formatting
+        run: zig fmt --check src/
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-22.04
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig 0.15.2
+        run: |
+          set -euo pipefail
+          curl -L "https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz" -o zig.tar.xz
+          tar -xf zig.tar.xz
+          echo "$PWD/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
+
+      - name: Install kcov
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y kcov
+
+      - name: Build test binaries
+        run: zig build build-coverage
+
+      - name: Run coverage
+        run: |
+          set -euo pipefail
+          mkdir -p coverage/config coverage/jackett coverage/superseedr \
+            coverage/theme coverage/search coverage/results \
+            coverage/panels coverage/app coverage/merged
+          kcov --include-path=src coverage/config     ./zig-out/bin/test-config
+          kcov --include-path=src coverage/jackett    ./zig-out/bin/test-jackett
+          kcov --include-path=src coverage/superseedr ./zig-out/bin/test-superseedr
+          kcov --include-path=src coverage/theme      ./zig-out/bin/test-theme
+          kcov --include-path=src coverage/search     ./zig-out/bin/test-search
+          kcov --include-path=src coverage/results    ./zig-out/bin/test-results
+          kcov --include-path=src coverage/panels     ./zig-out/bin/test-panels
+          kcov --include-path=src coverage/app        ./zig-out/bin/test-app
+          kcov --merge coverage/merged \
+            coverage/config coverage/jackett coverage/superseedr \
+            coverage/theme coverage/search coverage/results \
+            coverage/panels coverage/app
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage/merged/cobertura.xml
+          fail_ci_if_error: true
