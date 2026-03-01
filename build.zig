@@ -10,11 +10,6 @@ const ModuleTest = struct {
     run: *std.Build.Step.Run,
 };
 
-const CoverageModule = struct {
-    name: []const u8,
-    artifact: *std.Build.Step.Compile,
-};
-
 fn addImports(dst: *std.Build.Module, imports: []const ImportSpec) void {
     for (imports) |imp| {
         dst.addImport(imp.name, imp.module);
@@ -215,40 +210,4 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&run_test.step);
     }
 
-    const coverage_step = b.step("build-coverage", "Build test binaries and collect kcov coverage");
-    const coverage_modules = [_]CoverageModule{
-        .{ .name = "config", .artifact = config_tests.artifact },
-        .{ .name = "jackett", .artifact = jackett_tests.artifact },
-        .{ .name = "superseedr", .artifact = superseedr_tests.artifact },
-        .{ .name = "theme", .artifact = theme_tests.artifact },
-        .{ .name = "search", .artifact = search_widget_tests.artifact },
-        .{ .name = "results", .artifact = results_widget_tests.artifact },
-        .{ .name = "panels", .artifact = panels_tests.artifact },
-        .{ .name = "app", .artifact = app_tests.artifact },
-    };
-
-    const mkdir_coverage = b.addSystemCommand(&.{ "mkdir", "-p" });
-    for (coverage_modules) |mod| {
-        mkdir_coverage.addArg(b.fmt("coverage/{s}", .{mod.name}));
-    }
-    mkdir_coverage.addArg("coverage/merged");
-
-    const kcov_merge = b.addSystemCommand(&.{ "kcov", "--merge", "coverage/merged" });
-    for (coverage_modules) |mod| {
-        mod.artifact.root_module.strip = false;
-
-        const output_dir = b.fmt("coverage/{s}", .{mod.name});
-        const kcov_run = b.addSystemCommand(&.{ "kcov", "--clean" });
-        kcov_run.addArg("--include-path=./");
-        kcov_run.addArg("--exclude-pattern=/.zig/");
-        kcov_run.addArg("--exclude-pattern=/lib/zig/");
-        kcov_run.addArg(output_dir);
-        kcov_run.addArtifactArg(mod.artifact);
-        kcov_run.step.dependOn(&mkdir_coverage.step);
-
-        kcov_merge.step.dependOn(&kcov_run.step);
-        kcov_merge.addArg(output_dir);
-    }
-
-    coverage_step.dependOn(&kcov_merge.step);
 }

@@ -4,11 +4,6 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
-## 0.3.5
-
-### Fixed
-- Fixed the Codecov CI upload input to use the merged kcov Cobertura report path and disabled auto-discovery to prevent invalid coverage processing.
-
 ## 0.3.4
 
 ### Added
@@ -17,9 +12,7 @@ All notable changes to this project are documented in this file.
 ## 0.3.3
 
 ### Added
-- Added `zig build coverage` step using `kcov` to generate per-suite and merged HTML/Cobertura coverage reports.
 - Added `fmt` CI job to enforce `zig fmt` formatting on all source files.
-- Added `coverage` CI job that runs `kcov`, merges results, and uploads Cobertura XML to Codecov.
 
 ## 0.3.2
 
