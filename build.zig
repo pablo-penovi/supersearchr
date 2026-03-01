@@ -294,21 +294,21 @@ pub fn build(b: *std.Build) void {
         artifact: *std.Build.Step.Compile,
     };
     const coverage_modules = [_]CoverageModule{
-        .{ .name = "config",    .artifact = config_tests },
-        .{ .name = "jackett",   .artifact = jackett_tests },
-        .{ .name = "superseedr",.artifact = superseedr_tests },
-        .{ .name = "theme",     .artifact = theme_tests },
-        .{ .name = "search",    .artifact = search_widget_tests },
-        .{ .name = "results",   .artifact = results_widget_tests },
-        .{ .name = "panels",    .artifact = panels_tests },
-        .{ .name = "app",       .artifact = app_tests },
+        .{ .name = "config", .artifact = config_tests },
+        .{ .name = "jackett", .artifact = jackett_tests },
+        .{ .name = "superseedr", .artifact = superseedr_tests },
+        .{ .name = "theme", .artifact = theme_tests },
+        .{ .name = "search", .artifact = search_widget_tests },
+        .{ .name = "results", .artifact = results_widget_tests },
+        .{ .name = "panels", .artifact = panels_tests },
+        .{ .name = "app", .artifact = app_tests },
     };
 
     const mkdir_coverage = b.addSystemCommand(&.{ "mkdir", "-p" });
     for (coverage_modules) |mod| mkdir_coverage.addArg(b.fmt("coverage/{s}", .{mod.name}));
     mkdir_coverage.addArg("coverage/merged");
 
-    const src_path = b.pathFromRoot("src");
+    const project_root = b.pathFromRoot(".");
     const kcov_merge = b.addSystemCommand(&.{ "kcov", "--merge", "coverage/merged" });
 
     for (coverage_modules) |mod| {
@@ -316,7 +316,9 @@ pub fn build(b: *std.Build) void {
 
         const output_dir = b.fmt("coverage/{s}", .{mod.name});
         const kcov_run = b.addSystemCommand(&.{ "kcov", "--clean" });
-        kcov_run.addArg(b.fmt("--include-path={s}", .{src_path}));
+        kcov_run.addArg(b.fmt("--include-path={s}", .{project_root}));
+        kcov_run.addArg("--exclude-pattern=/.zig/");
+        kcov_run.addArg("--exclude-pattern=/lib/zig/");
         kcov_run.addArg(output_dir);
         kcov_run.addArtifactArg(mod.artifact);
         kcov_run.step.dependOn(&mkdir_coverage.step);
