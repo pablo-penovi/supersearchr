@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.3.6
+
+### Removed
+- Removed code coverage monitoring: dropped `build-coverage` step from `build.zig` and the `coverage` CI job (kcov + Codecov upload) from CI.
+
 ## 0.3.5
 
 ### Fixed

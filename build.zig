@@ -1,312 +1,213 @@
 const std = @import("std");
 
-// Although this function looks imperative, it does not perform the build
-// directly and instead it mutates the build graph (`b`) that will be then
-// executed by an external runner. The functions in `std.Build` implement a DSL
-// for defining build steps and express dependencies between them, allowing the
-// build runner to parallelize the build automatically (and the cache system to
-// know when a step doesn't need to be re-run).
+const ImportSpec = struct {
+    name: []const u8,
+    module: *std.Build.Module,
+};
+
+const ModuleTest = struct {
+    artifact: *std.Build.Step.Compile,
+    run: *std.Build.Step.Run,
+};
+
+fn addImports(dst: *std.Build.Module, imports: []const ImportSpec) void {
+    for (imports) |imp| {
+        dst.addImport(imp.name, imp.module);
+    }
+}
+
+fn createTargetedModule(
+    b: *std.Build,
+    root_source_file: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Module {
+    return b.createModule(.{
+        .root_source_file = b.path(root_source_file),
+        .target = target,
+        .optimize = optimize,
+    });
+}
+
+fn addModuleTest(
+    b: *std.Build,
+    name: []const u8,
+    root_source_file: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) ModuleTest {
+    const artifact = b.addTest(.{
+        .name = name,
+        .root_module = createTargetedModule(b, root_source_file, target, optimize),
+    });
+
+    return .{
+        .artifact = artifact,
+        .run = b.addRunArtifact(artifact),
+    };
+}
+
 pub fn build(b: *std.Build) void {
-    const app_version = "0.3.5";
+    const app_version = "0.3.6";
 
-    // Standard target options allow the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
-    // Standard optimization options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
-    // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
-    // It's also possible to define more custom flags to toggle optional features
-    // of this build script using `b.option()`. All defined flags (including
-    // target and optimize options) will be listed when running `zig build --help`
-    // in this directory.
-
-    // This creates a module, which represents a collection of source files alongside
-    // some compilation options, such as optimization mode and linked system libraries.
-    // Zig modules are the preferred way of making Zig code available to consumers.
-    // addModule defines a module that we intend to make available for importing
-    // Here we define an executable. An executable needs to have a root module
-    // which needs to expose a `main` function.
-    const exe = b.addExecutable(.{
-        .name = "supersearchr",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-
-    const config_mod = b.createModule(.{
-        .root_source_file = b.path("src/config.zig"),
-    });
-    const jackett_mod = b.createModule(.{
-        .root_source_file = b.path("src/jackett/client.zig"),
-    });
-    const superseedr_mod = b.createModule(.{
-        .root_source_file = b.path("src/superseedr/client.zig"),
-    });
-    const term_mod = b.createModule(.{
-        .root_source_file = b.path("src/tui/term.zig"),
-    });
-    const theme_mod = b.createModule(.{
-        .root_source_file = b.path("src/tui/theme.zig"),
-    });
-    const panels_mod = b.createModule(.{
-        .root_source_file = b.path("src/tui/panels.zig"),
-    });
-    const torrent_mod = b.createModule(.{
-        .root_source_file = b.path("src/structs/torrent.zig"),
-    });
-    const debug_log_mod = b.createModule(.{
-        .root_source_file = b.path("src/debug/log.zig"),
-    });
 
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", app_version);
+    const build_options_mod = build_options.createModule();
 
-    theme_mod.addImport("term", term_mod);
-    jackett_mod.addImport("torrent", torrent_mod);
-    jackett_mod.addImport("debug_log", debug_log_mod);
-    superseedr_mod.addImport("debug_log", debug_log_mod);
-    const search_widget_mod = b.createModule(.{
-        .root_source_file = b.path("src/tui/widgets/search.zig"),
+    const config_mod = b.createModule(.{ .root_source_file = b.path("src/config.zig") });
+    const jackett_mod = b.createModule(.{ .root_source_file = b.path("src/jackett/client.zig") });
+    const superseedr_mod = b.createModule(.{ .root_source_file = b.path("src/superseedr/client.zig") });
+    const term_mod = b.createModule(.{ .root_source_file = b.path("src/tui/term.zig") });
+    const theme_mod = b.createModule(.{ .root_source_file = b.path("src/tui/theme.zig") });
+    const panels_mod = b.createModule(.{ .root_source_file = b.path("src/tui/panels.zig") });
+    const torrent_mod = b.createModule(.{ .root_source_file = b.path("src/structs/torrent.zig") });
+    const debug_log_mod = b.createModule(.{ .root_source_file = b.path("src/debug/log.zig") });
+    const search_widget_mod = b.createModule(.{ .root_source_file = b.path("src/tui/widgets/search.zig") });
+    const results_widget_mod = b.createModule(.{ .root_source_file = b.path("src/tui/widgets/results.zig") });
+    const app_mod = b.createModule(.{ .root_source_file = b.path("src/tui/app.zig") });
+
+    addImports(theme_mod, &.{
+        .{ .name = "term", .module = term_mod },
     });
-    search_widget_mod.addImport("term", term_mod);
-    search_widget_mod.addImport("theme", theme_mod);
-    search_widget_mod.addImport("build_options", build_options.createModule());
-    const results_widget_mod = b.createModule(.{
-        .root_source_file = b.path("src/tui/widgets/results.zig"),
+    addImports(jackett_mod, &.{
+        .{ .name = "torrent", .module = torrent_mod },
+        .{ .name = "debug_log", .module = debug_log_mod },
     });
-    results_widget_mod.addImport("term", term_mod);
-    results_widget_mod.addImport("theme", theme_mod);
-    results_widget_mod.addImport("torrent", torrent_mod);
-    panels_mod.addImport("term", term_mod);
-    panels_mod.addImport("theme", theme_mod);
-    panels_mod.addImport("results", results_widget_mod);
-    const app_mod = b.createModule(.{
-        .root_source_file = b.path("src/tui/app.zig"),
+    addImports(superseedr_mod, &.{
+        .{ .name = "debug_log", .module = debug_log_mod },
+    });
+    addImports(search_widget_mod, &.{
+        .{ .name = "term", .module = term_mod },
+        .{ .name = "theme", .module = theme_mod },
+        .{ .name = "build_options", .module = build_options_mod },
+    });
+    addImports(results_widget_mod, &.{
+        .{ .name = "term", .module = term_mod },
+        .{ .name = "theme", .module = theme_mod },
+        .{ .name = "torrent", .module = torrent_mod },
+    });
+    addImports(panels_mod, &.{
+        .{ .name = "term", .module = term_mod },
+        .{ .name = "theme", .module = theme_mod },
+        .{ .name = "results", .module = results_widget_mod },
+    });
+    addImports(app_mod, &.{
+        .{ .name = "config", .module = config_mod },
+        .{ .name = "jackett", .module = jackett_mod },
+        .{ .name = "superseedr", .module = superseedr_mod },
+        .{ .name = "term", .module = term_mod },
+        .{ .name = "theme", .module = theme_mod },
+        .{ .name = "panels", .module = panels_mod },
+        .{ .name = "search", .module = search_widget_mod },
+        .{ .name = "results", .module = results_widget_mod },
+        .{ .name = "torrent", .module = torrent_mod },
+        .{ .name = "debug_log", .module = debug_log_mod },
     });
 
-    app_mod.addImport("config", config_mod);
-    app_mod.addImport("jackett", jackett_mod);
-    app_mod.addImport("superseedr", superseedr_mod);
-    app_mod.addImport("term", term_mod);
-    app_mod.addImport("theme", theme_mod);
-    app_mod.addImport("panels", panels_mod);
-    app_mod.addImport("search", search_widget_mod);
-    app_mod.addImport("results", results_widget_mod);
-    app_mod.addImport("torrent", torrent_mod);
-    app_mod.addImport("debug_log", debug_log_mod);
+    const exe = b.addExecutable(.{
+        .name = "supersearchr",
+        .root_module = createTargetedModule(b, "src/main.zig", target, optimize),
+    });
+    addImports(exe.root_module, &.{
+        .{ .name = "config", .module = config_mod },
+        .{ .name = "jackett", .module = jackett_mod },
+        .{ .name = "superseedr", .module = superseedr_mod },
+        .{ .name = "term", .module = term_mod },
+        .{ .name = "theme", .module = theme_mod },
+        .{ .name = "torrent", .module = torrent_mod },
+        .{ .name = "search", .module = search_widget_mod },
+        .{ .name = "results", .module = results_widget_mod },
+        .{ .name = "tui/app", .module = app_mod },
+    });
 
-    exe.root_module.addImport("config", config_mod);
-    exe.root_module.addImport("jackett", jackett_mod);
-    exe.root_module.addImport("superseedr", superseedr_mod);
-    exe.root_module.addImport("term", term_mod);
-    exe.root_module.addImport("theme", theme_mod);
-    exe.root_module.addImport("torrent", torrent_mod);
-    exe.root_module.addImport("search", search_widget_mod);
-    exe.root_module.addImport("results", results_widget_mod);
-    exe.root_module.addImport("tui/app", app_mod);
-
-    // This declares intent for the executable to be installed into the
-    // install prefix when running `zig build` (i.e. when executing the default
-    // step). By default the install prefix is `zig-out/` but can be overridden
-    // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
 
-    // This creates a top level step. Top level steps have a name and can be
-    // invoked by name when running `zig build` (e.g. `zig build run`).
-    // This will evaluate the `run` step rather than the default step.
-    // For a top level step to actually do something, it must depend on other
-    // steps (e.g. a Run step, as we will see in a moment).
     const run_step = b.step("run", "Run the app");
-
-    // This creates a RunArtifact step in the build graph. A RunArtifact step
-    // invokes an executable compiled by Zig. Steps will only be executed by the
-    // runner if invoked directly by the user (in the case of top level steps)
-    // or if another step depends on it, so it's up to you to define when and
-    // how this Run step will be executed. In our case we want to run it when
-    // the user runs `zig build run`, so we create a dependency link.
     const run_cmd = b.addRunArtifact(exe);
-    run_step.dependOn(&run_cmd.step);
-
-    // By making the run step depend on the default step, it will be run from the
-    // installation directory rather than directly from within the cache directory.
     run_cmd.step.dependOn(b.getInstallStep());
-
-    // This allows the user to pass arguments to the application in the build
-    // command itself, like this: `zig build run -- arg1 arg2 etc`
+    run_step.dependOn(&run_cmd.step);
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
 
-    // Test for config module
-    const config_tests = b.addTest(.{
-        .name = "test-config",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/config.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    const run_config_tests = b.addRunArtifact(config_tests);
+    const config_tests = addModuleTest(b, "test-config", "src/config.zig", target, optimize);
 
-    // Test for jackett module
-    // Reuse torrent_mod defined above
-    const jackett_tests = b.addTest(.{
-        .name = "test-jackett",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/jackett/client.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    jackett_tests.root_module.addImport("torrent", torrent_mod);
-    jackett_tests.root_module.addImport("debug_log", debug_log_mod);
-    const run_jackett_tests = b.addRunArtifact(jackett_tests);
-
-    // Test for superseedr module
-    const superseedr_tests = b.addTest(.{
-        .name = "test-superseedr",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/superseedr/client.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    superseedr_tests.root_module.addImport("debug_log", debug_log_mod);
-    const run_superseedr_tests = b.addRunArtifact(superseedr_tests);
-
-    // Test for search widget
-    // Reuse term_mod defined above
-    const search_widget_tests = b.addTest(.{
-        .name = "test-search",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/tui/widgets/search.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    search_widget_tests.root_module.addImport("term", term_mod);
-    search_widget_tests.root_module.addImport("theme", theme_mod);
-    search_widget_tests.root_module.addImport("build_options", build_options.createModule());
-    const run_search_widget_tests = b.addRunArtifact(search_widget_tests);
-
-    // Test for results widget
-    const results_widget_tests = b.addTest(.{
-        .name = "test-results",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/tui/widgets/results.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    results_widget_tests.root_module.addImport("term", term_mod);
-    results_widget_tests.root_module.addImport("theme", theme_mod);
-    results_widget_tests.root_module.addImport("torrent", torrent_mod);
-    const run_results_widget_tests = b.addRunArtifact(results_widget_tests);
-
-    // Test for theme module
-    const theme_tests = b.addTest(.{
-        .name = "test-theme",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/tui/theme.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    theme_tests.root_module.addImport("term", term_mod);
-    const run_theme_tests = b.addRunArtifact(theme_tests);
-
-    // Test for panels module
-    const panels_tests = b.addTest(.{
-        .name = "test-panels",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/tui/panels.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    panels_tests.root_module.addImport("term", term_mod);
-    panels_tests.root_module.addImport("theme", theme_mod);
-    panels_tests.root_module.addImport("results", results_widget_mod);
-    const run_panels_tests = b.addRunArtifact(panels_tests);
-
-    // Test for app module
-    // Reuse modules defined above
-    const app_tests = b.addTest(.{
-        .name = "test-app",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/tui/app.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    const app_tests_jackett_mod = b.createModule(.{
-        .root_source_file = b.path("src/jackett/client.zig"),
-    });
-    app_tests_jackett_mod.addImport("torrent", torrent_mod);
-    app_tests_jackett_mod.addImport("debug_log", debug_log_mod);
-    app_tests.root_module.addImport("config", config_mod);
-    app_tests.root_module.addImport("jackett", app_tests_jackett_mod);
-    app_tests.root_module.addImport("superseedr", superseedr_mod);
-    app_tests.root_module.addImport("term", term_mod);
-    app_tests.root_module.addImport("theme", theme_mod);
-    app_tests.root_module.addImport("panels", panels_mod);
-    app_tests.root_module.addImport("search", search_widget_mod);
-    app_tests.root_module.addImport("results", results_widget_mod);
-    app_tests.root_module.addImport("torrent", torrent_mod);
-    app_tests.root_module.addImport("debug_log", debug_log_mod);
-    const run_app_tests = b.addRunArtifact(app_tests);
-
-    // Creates an executable that will run `test` blocks from the executable's
-    // root module. Note that test executables only test one module at a time,
-    // hence why we have to create two separate ones.
-    const exe_tests = b.addTest(.{
-        .root_module = exe.root_module,
+    const jackett_tests = addModuleTest(b, "test-jackett", "src/jackett/client.zig", target, optimize);
+    addImports(jackett_tests.artifact.root_module, &.{
+        .{ .name = "torrent", .module = torrent_mod },
+        .{ .name = "debug_log", .module = debug_log_mod },
     });
 
-    // A run step that will run the second test executable.
+    const superseedr_tests = addModuleTest(b, "test-superseedr", "src/superseedr/client.zig", target, optimize);
+    addImports(superseedr_tests.artifact.root_module, &.{
+        .{ .name = "debug_log", .module = debug_log_mod },
+    });
+
+    const search_widget_tests = addModuleTest(b, "test-search", "src/tui/widgets/search.zig", target, optimize);
+    addImports(search_widget_tests.artifact.root_module, &.{
+        .{ .name = "term", .module = term_mod },
+        .{ .name = "theme", .module = theme_mod },
+        .{ .name = "build_options", .module = build_options_mod },
+    });
+
+    const results_widget_tests = addModuleTest(b, "test-results", "src/tui/widgets/results.zig", target, optimize);
+    addImports(results_widget_tests.artifact.root_module, &.{
+        .{ .name = "term", .module = term_mod },
+        .{ .name = "theme", .module = theme_mod },
+        .{ .name = "torrent", .module = torrent_mod },
+    });
+
+    const theme_tests = addModuleTest(b, "test-theme", "src/tui/theme.zig", target, optimize);
+    addImports(theme_tests.artifact.root_module, &.{
+        .{ .name = "term", .module = term_mod },
+    });
+
+    const panels_tests = addModuleTest(b, "test-panels", "src/tui/panels.zig", target, optimize);
+    addImports(panels_tests.artifact.root_module, &.{
+        .{ .name = "term", .module = term_mod },
+        .{ .name = "theme", .module = theme_mod },
+        .{ .name = "results", .module = results_widget_mod },
+    });
+
+    const app_tests = addModuleTest(b, "test-app", "src/tui/app.zig", target, optimize);
+    const app_tests_jackett_mod = b.createModule(.{ .root_source_file = b.path("src/jackett/client.zig") });
+    addImports(app_tests_jackett_mod, &.{
+        .{ .name = "torrent", .module = torrent_mod },
+        .{ .name = "debug_log", .module = debug_log_mod },
+    });
+    addImports(app_tests.artifact.root_module, &.{
+        .{ .name = "config", .module = config_mod },
+        .{ .name = "jackett", .module = app_tests_jackett_mod },
+        .{ .name = "superseedr", .module = superseedr_mod },
+        .{ .name = "term", .module = term_mod },
+        .{ .name = "theme", .module = theme_mod },
+        .{ .name = "panels", .module = panels_mod },
+        .{ .name = "search", .module = search_widget_mod },
+        .{ .name = "results", .module = results_widget_mod },
+        .{ .name = "torrent", .module = torrent_mod },
+        .{ .name = "debug_log", .module = debug_log_mod },
+    });
+
+    const exe_tests = b.addTest(.{ .root_module = exe.root_module });
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
-    // A top level step for running all tests. dependOn can be called multiple
-    // times and since the two run steps does not depend on one another, this will
-    // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&run_exe_tests.step);
-    test_step.dependOn(&run_config_tests.step);
-    test_step.dependOn(&run_jackett_tests.step);
-    test_step.dependOn(&run_superseedr_tests.step);
-    test_step.dependOn(&run_theme_tests.step);
-    test_step.dependOn(&run_panels_tests.step);
-    test_step.dependOn(&run_search_widget_tests.step);
-    test_step.dependOn(&run_results_widget_tests.step);
-    test_step.dependOn(&run_app_tests.step);
+    const test_runs = [_]*std.Build.Step.Run{
+        run_exe_tests,
+        config_tests.run,
+        jackett_tests.run,
+        superseedr_tests.run,
+        theme_tests.run,
+        panels_tests.run,
+        search_widget_tests.run,
+        results_widget_tests.run,
+        app_tests.run,
+    };
+    for (test_runs) |run_test| {
+        test_step.dependOn(&run_test.step);
+    }
 
-    // Build step that installs all test binaries for kcov coverage collection.
-    // Run with: zig build build-coverage
-    // Binaries are emitted to zig-out/bin/test-{module}.
-    const coverage_step = b.step("build-coverage", "Build test binaries for kcov coverage");
-    coverage_step.dependOn(&b.addInstallArtifact(config_tests, .{}).step);
-    coverage_step.dependOn(&b.addInstallArtifact(jackett_tests, .{}).step);
-    coverage_step.dependOn(&b.addInstallArtifact(superseedr_tests, .{}).step);
-    coverage_step.dependOn(&b.addInstallArtifact(theme_tests, .{}).step);
-    coverage_step.dependOn(&b.addInstallArtifact(search_widget_tests, .{}).step);
-    coverage_step.dependOn(&b.addInstallArtifact(results_widget_tests, .{}).step);
-    coverage_step.dependOn(&b.addInstallArtifact(panels_tests, .{}).step);
-    coverage_step.dependOn(&b.addInstallArtifact(app_tests, .{}).step);
-
-    // Just like flags, top level steps are also listed in the `--help` menu.
-    //
-    // The Zig build system is entirely implemented in userland, which means
-    // that it cannot hook into private compiler APIs. All compilation work
-    // orchestrated by the build system will result in other Zig compiler
-    // subcommands being invoked with the right flags defined. You can observe
-    // these invocations when one fails (or you pass a flag to increase
-    // verbosity) to validate assumptions and diagnose problems.
-    //
-    // Lastly, the Zig build system is relatively simple and self-contained,
-    // and reading its source code will allow you to master it.
 }
