@@ -97,14 +97,14 @@ jobs:
           mkdir -p coverage/config coverage/jackett coverage/superseedr \
             coverage/theme coverage/search coverage/results \
             coverage/panels coverage/app coverage/merged
-          kcov --include-path=src coverage/config     ./zig-out/bin/test-config
-          kcov --include-path=src coverage/jackett    ./zig-out/bin/test-jackett
-          kcov --include-path=src coverage/superseedr ./zig-out/bin/test-superseedr
-          kcov --include-path=src coverage/theme      ./zig-out/bin/test-theme
-          kcov --include-path=src coverage/search     ./zig-out/bin/test-search
-          kcov --include-path=src coverage/results    ./zig-out/bin/test-results
-          kcov --include-path=src coverage/panels     ./zig-out/bin/test-panels
-          kcov --include-path=src coverage/app        ./zig-out/bin/test-app
+          kcov --include-path=./src coverage/config     ./zig-out/bin/test-config
+          kcov --include-path=./src coverage/jackett    ./zig-out/bin/test-jackett
+          kcov --include-path=./src coverage/superseedr ./zig-out/bin/test-superseedr
+          kcov --include-path=./src coverage/theme      ./zig-out/bin/test-theme
+          kcov --include-path=./src coverage/search     ./zig-out/bin/test-search
+          kcov --include-path=./src coverage/results    ./zig-out/bin/test-results
+          kcov --include-path=./src coverage/panels     ./zig-out/bin/test-panels
+          kcov --include-path=./src coverage/app        ./zig-out/bin/test-app
           kcov --merge coverage/merged \
             coverage/config coverage/jackett coverage/superseedr \
             coverage/theme coverage/search coverage/results \
