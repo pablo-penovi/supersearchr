@@ -1,7 +1,7 @@
 # Repository Structure
 
 This file summarizes tracked files to avoid re-scanning. Build artifacts in `zig-out/` are excluded by design.
-Current project version: `v0.3.6`.
+Current project version: `v0.3.7`.
 
 ## Root
 
@@ -19,6 +19,7 @@ Current project version: `v0.3.6`.
 - `src/main.zig`: Program entry; initializes allocator, loads config, runs TUI app.
 - `src/config.zig`: Config file path handling, creation, defaults patching, and validation.
 - `src/debug/log.zig`: Optional debug logging controlled by environment variables.
+- `src/update_checker.zig`: Latest-release checker (GitHub API fetch + semantic version comparison).
 - `src/structs/torrent.zig`: `Torrent` struct definition.
 - `src/jackett/client.zig`: Jackett Torznab API client, URL building, XML parsing, sorting.
 - `src/superseedr/client.zig`: Superseedr integration, process checks, spawn/add flow.

@@ -6,6 +6,7 @@ const build_options = @import("build_options");
 pub const SearchWidget = struct {
     allocator: std.mem.Allocator,
     query: std.ArrayList(u8),
+    latest_version: ?[]const u8,
     has_drawn_once: bool,
     last_size: ?term.TerminalSize,
 
@@ -13,6 +14,7 @@ pub const SearchWidget = struct {
         return .{
             .allocator = allocator,
             .query = .{},
+            .latest_version = null,
             .has_drawn_once = false,
             .last_size = null,
         };
@@ -32,13 +34,13 @@ pub const SearchWidget = struct {
 
         if (theme.isCompactViewport(size.rows, size.cols)) {
             switch (redraw_mode) {
-                .full => drawCompactFull(stdout, colors, self.query.items),
+                .full => drawCompactFull(stdout, colors, self.query.items, self.latest_version),
                 .partial => drawCompactInputLine(stdout, size, colors, self.query.items),
             }
         } else {
             const layout = computePanelLayout(size);
             switch (redraw_mode) {
-                .full => drawPanelFrame(stdout, colors, border, layout),
+                .full => drawPanelFrame(stdout, colors, border, layout, self.latest_version),
                 .partial => {},
             }
             drawPanelQueryRow(stdout, size, colors, border, layout, self.query.items);
@@ -85,6 +87,10 @@ pub const SearchWidget = struct {
     pub fn clear(self: *SearchWidget) void {
         self.query.clearRetainingCapacity();
     }
+
+    pub fn setLatestVersion(self: *SearchWidget, latest_version: ?[]const u8) void {
+        self.latest_version = latest_version;
+    }
 };
 
 const CursorPosition = struct {
@@ -117,7 +123,7 @@ fn computePanelLayout(size: term.TerminalSize) PanelLayout {
     return .{ .panel_width = panel_width, .left_pad = left_pad, .top_pad = top_pad };
 }
 
-fn drawCompactFull(stdout: std.fs.File, colors: theme.Theme, query: []const u8) void {
+fn drawCompactFull(stdout: std.fs.File, colors: theme.Theme, query: []const u8, latest_version: ?[]const u8) void {
     term.moveCursor(1, 1);
     term.clearScreen();
     term.setFg256(colors.panel_title);
@@ -130,8 +136,7 @@ fn drawCompactFull(stdout: std.fs.File, colors: theme.Theme, query: []const u8) 
     stdout.writeAll("\r\n") catch {};
     term.setFg256(colors.muted);
     stdout.writeAll("ENTER search | ESC exit\r\n") catch {};
-    stdout.writeAll("v" ++ build_options.version) catch {};
-    term.resetColor();
+    writeVersionLine(stdout, colors, latest_version);
 }
 
 fn drawCompactInputLine(stdout: std.fs.File, size: term.TerminalSize, colors: theme.Theme, query: []const u8) void {
@@ -149,7 +154,7 @@ fn drawCompactInputLine(stdout: std.fs.File, size: term.TerminalSize, colors: th
     term.resetColor();
 }
 
-fn drawPanelFrame(stdout: std.fs.File, colors: theme.Theme, border: theme.BorderChars, layout: PanelLayout) void {
+fn drawPanelFrame(stdout: std.fs.File, colors: theme.Theme, border: theme.BorderChars, layout: PanelLayout, latest_version: ?[]const u8) void {
     term.moveCursor(1, 1);
     term.clearScreen();
     term.moveCursor(@as(u16, @intCast(layout.top_pad)), 1);
@@ -187,8 +192,18 @@ fn drawPanelFrame(stdout: std.fs.File, colors: theme.Theme, border: theme.Border
     theme.drawPanelBottom(stdout, layout.panel_width, border, colors) catch {};
 
     term.moveCursor(@as(u16, @intCast(layout.top_pad + 6)), @as(u16, @intCast(layout.left_pad + 2)));
+    writeVersionLine(stdout, colors, latest_version);
+}
+
+fn writeVersionLine(stdout: std.fs.File, colors: theme.Theme, latest_version: ?[]const u8) void {
     term.setFg256(colors.muted);
     stdout.writeAll("v" ++ build_options.version) catch {};
+    if (latest_version) |latest| {
+        term.setFg256(colors.accent);
+        stdout.writeAll(" [NEW v") catch {};
+        stdout.writeAll(latest) catch {};
+        stdout.writeAll("]") catch {};
+    }
     term.resetColor();
 }
 
@@ -324,6 +339,16 @@ test "SearchWidget clear empties query" {
     widget.clear();
 
     try std.testing.expectEqual(@as(usize, 0), widget.query.items.len);
+}
+
+test "SearchWidget setLatestVersion stores update info" {
+    const allocator = std.testing.allocator;
+    var widget = SearchWidget.init(allocator);
+    defer widget.deinit();
+
+    widget.setLatestVersion("0.3.7");
+    try std.testing.expect(widget.latest_version != null);
+    try std.testing.expectEqualStrings("0.3.7", widget.latest_version.?);
 }
 
 test "computeSearchCursorPosition compact layout places cursor after query" {

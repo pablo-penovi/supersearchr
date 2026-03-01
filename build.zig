@@ -48,7 +48,7 @@ fn addModuleTest(
 }
 
 pub fn build(b: *std.Build) void {
-    const app_version = "0.3.6";
+    const app_version = "0.3.7";
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -65,6 +65,7 @@ pub fn build(b: *std.Build) void {
     const panels_mod = b.createModule(.{ .root_source_file = b.path("src/tui/panels.zig") });
     const torrent_mod = b.createModule(.{ .root_source_file = b.path("src/structs/torrent.zig") });
     const debug_log_mod = b.createModule(.{ .root_source_file = b.path("src/debug/log.zig") });
+    const update_checker_mod = b.createModule(.{ .root_source_file = b.path("src/update_checker.zig") });
     const search_widget_mod = b.createModule(.{ .root_source_file = b.path("src/tui/widgets/search.zig") });
     const results_widget_mod = b.createModule(.{ .root_source_file = b.path("src/tui/widgets/results.zig") });
     const app_mod = b.createModule(.{ .root_source_file = b.path("src/tui/app.zig") });
@@ -103,6 +104,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "panels", .module = panels_mod },
         .{ .name = "search", .module = search_widget_mod },
         .{ .name = "results", .module = results_widget_mod },
+        .{ .name = "update_checker", .module = update_checker_mod },
+        .{ .name = "build_options", .module = build_options_mod },
         .{ .name = "torrent", .module = torrent_mod },
         .{ .name = "debug_log", .module = debug_log_mod },
     });
@@ -146,6 +149,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "debug_log", .module = debug_log_mod },
     });
 
+    const update_checker_tests = addModuleTest(b, "test-update-checker", "src/update_checker.zig", target, optimize);
+
     const search_widget_tests = addModuleTest(b, "test-search", "src/tui/widgets/search.zig", target, optimize);
     addImports(search_widget_tests.artifact.root_module, &.{
         .{ .name = "term", .module = term_mod },
@@ -187,6 +192,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "panels", .module = panels_mod },
         .{ .name = "search", .module = search_widget_mod },
         .{ .name = "results", .module = results_widget_mod },
+        .{ .name = "update_checker", .module = update_checker_mod },
+        .{ .name = "build_options", .module = build_options_mod },
         .{ .name = "torrent", .module = torrent_mod },
         .{ .name = "debug_log", .module = debug_log_mod },
     });
@@ -200,6 +207,7 @@ pub fn build(b: *std.Build) void {
         config_tests.run,
         jackett_tests.run,
         superseedr_tests.run,
+        update_checker_tests.run,
         theme_tests.run,
         panels_tests.run,
         search_widget_tests.run,
@@ -209,5 +217,4 @@ pub fn build(b: *std.Build) void {
     for (test_runs) |run_test| {
         test_step.dependOn(&run_test.step);
     }
-
 }
