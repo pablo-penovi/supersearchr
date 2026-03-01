@@ -333,16 +333,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                             "Added torrent to superseedr title=\"{s}\" link=\"{s}\"",
                             .{ torrent.title, torrent.link },
                         );
-                        panels.renderResultNoticeOverlay(
-                            &app.term_rows,
-                            &app.term_cols,
-                            refreshTerminalSizeValues,
-                            &widget,
-                            "Success",
-                            "Added to superseedr!",
-                            theme.superseedr_like.ok,
-                        );
-                        widget.force_full_redraw = true;
+                        widget.setSendState(idx, .success);
                     } else |err| {
                         debug_log.writef(
                             app.allocator,
@@ -350,6 +341,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                             "Failed to add torrent err={s} title=\"{s}\" link=\"{s}\"",
                             .{ @errorName(err), torrent.title, torrent.link },
                         );
+                        widget.setSendState(idx, .failed);
                         panels.renderResultErrorOverlay(
                             &app.term_rows,
                             &app.term_cols,
@@ -776,6 +768,8 @@ test "loadingQueryWidth uses panel width in regular mode" {
 }
 
 test "checkLatestVersionOnStartup stores latest version from injected executor" {
+    const mocked_latest_tag = "v99.99.99";
+    const expected_latest = "99.99.99";
     const state = struct {
         var called_count: usize = 0;
     };
@@ -784,7 +778,11 @@ test "checkLatestVersionOnStartup stores latest version from injected executor" 
     const mock = struct {
         fn exec(allocator: std.mem.Allocator, _: []const u8) update_checker.UpdateError![]u8 {
             state.called_count += 1;
-            return allocator.dupe(u8, "{\"tag_name\":\"v0.3.8\"}") catch return error.OutOfMemory;
+            return std.fmt.allocPrint(
+                allocator,
+                "{{\"tag_name\":\"{s}\"}}",
+                .{mocked_latest_tag},
+            ) catch return error.OutOfMemory;
         }
     };
 
@@ -806,7 +804,7 @@ test "checkLatestVersionOnStartup stores latest version from injected executor" 
 
     try std.testing.expectEqual(@as(usize, 1), state.called_count);
     try std.testing.expect(app.latest_version != null);
-    try std.testing.expectEqualStrings("0.3.8", app.latest_version.?);
+    try std.testing.expectEqualStrings(expected_latest, app.latest_version.?);
 }
 
 test "checkLatestVersionOnStartup keeps latest_version null on executor failure" {

@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.3.8
+
+### Changed
+- Replaced the results-screen success modal after `superseedr add` with inline row-status feedback.
+- Added persistent per-search row status coloring in results: successful sends are shown in green and failed sends in red.
+- Kept failure modal behavior unchanged while also marking failed rows red in the list.
+- Improved selected-row readability by increasing foreground contrast for normal, success, and failed rows when highlighted.
+
 ## 0.3.7
 
 ### Added

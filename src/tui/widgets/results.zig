@@ -20,8 +20,15 @@ pub const ResultsWidget = struct {
     marquee_target_set: bool,
     marquee_cursor: usize,
     marquee_title_col_width: usize,
+    send_states: std.ArrayList(SendState),
 
     const marquee_edge_hold_ticks: u8 = 2;
+
+    pub const SendState = enum {
+        none,
+        success,
+        failed,
+    };
 
     pub fn init(allocator: std.mem.Allocator) ResultsWidget {
         return .{
@@ -41,10 +48,13 @@ pub const ResultsWidget = struct {
             .marquee_target_set = false,
             .marquee_cursor = 0,
             .marquee_title_col_width = 0,
+            .send_states = .{},
         };
     }
 
-    pub fn deinit(_: *ResultsWidget) void {}
+    pub fn deinit(self: *ResultsWidget) void {
+        self.send_states.deinit(self.allocator);
+    }
 
     pub fn setTorrents(self: *ResultsWidget, torrents: []const Torrent, total: usize) void {
         self.torrents = torrents;
@@ -53,6 +63,21 @@ pub const ResultsWidget = struct {
         self.scroll_offset = 0;
         self.force_full_redraw = true;
         self.resetMarqueeState();
+        self.send_states.resize(self.allocator, torrents.len) catch {};
+        for (self.send_states.items) |*state| {
+            state.* = .none;
+        }
+    }
+
+    pub fn setSendState(self: *ResultsWidget, idx: usize, state: SendState) void {
+        if (idx >= self.send_states.items.len) return;
+        self.send_states.items[idx] = state;
+        self.force_selected_redraw = true;
+    }
+
+    fn getSendState(self: *ResultsWidget, idx: usize) SendState {
+        if (idx >= self.send_states.items.len) return .none;
+        return self.send_states.items[idx];
     }
 
     pub fn render(self: *ResultsWidget, max_rows: u16, max_cols: u16) void {
@@ -86,7 +111,15 @@ pub const ResultsWidget = struct {
         switch (redraw_mode) {
             .full => {
                 if (compact) {
-                    drawCompact(stdout, colors, border, self.torrents, self.cursor, max_cols);
+                    drawCompact(
+                        stdout,
+                        colors,
+                        border,
+                        self.torrents,
+                        self.cursor,
+                        max_cols,
+                        self.getSendState(self.cursor),
+                    );
                 } else {
                     term.moveCursor(1, 1);
                     term.clearScreen();
@@ -453,6 +486,7 @@ fn drawCompact(
     torrents: []const Torrent,
     cursor: usize,
     max_cols: u16,
+    selected_send_state: ResultsWidget.SendState,
 ) void {
     term.moveCursor(1, 1);
     term.clearScreen();
@@ -461,7 +495,7 @@ fn drawCompact(
     stdout.writeAll("Results\r\n") catch {};
     term.setBold(false);
     drawCompactDivider(stdout, colors, border, max_cols);
-    term.setFg256(colors.text);
+    term.setFg256(colorForSendState(colors, selected_send_state));
     if (torrents.len == 0) {
         stdout.writeAll("No results found\r\n") catch {};
     } else {
@@ -566,13 +600,13 @@ fn drawContentRow(
 
     if (abs_idx == selected_idx) {
         term.setBg256(colors.selected_bg);
-        term.setFg256(colors.selected_fg);
+        term.setFg256(selectedColorForSendState(colors, widget.getSendState(abs_idx)));
         term.setBold(true);
         try theme.writePadded(stdout, row, inner_width);
         term.resetColor();
         term.setBold(false);
     } else {
-        term.setFg256(colors.text);
+        term.setFg256(colorForSendState(colors, widget.getSendState(abs_idx)));
         try theme.writePadded(stdout, row, inner_width);
     }
 
@@ -580,6 +614,23 @@ fn drawContentRow(
     try stdout.writeAll(border.vertical);
     term.resetColor();
     try stdout.writeAll("\r\n");
+}
+
+fn colorForSendState(colors: theme.Theme, state: ResultsWidget.SendState) u8 {
+    return switch (state) {
+        .none => colors.text,
+        .success => colors.ok,
+        .failed => colors.err,
+    };
+}
+
+fn selectedColorForSendState(colors: theme.Theme, state: ResultsWidget.SendState) u8 {
+    return switch (state) {
+        .none => colors.selected_fg,
+        // Darker tones improve legibility against selected_bg.
+        .success => 22,
+        .failed => 88,
+    };
 }
 
 fn selectedTitleForRender(
@@ -1232,6 +1283,28 @@ test "ResultsWidget cursor resets on new search" {
     try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
 }
 
+test "ResultsWidget send state persists and resets on new results" {
+    const allocator = std.testing.allocator;
+    var widget = ResultsWidget.init(allocator);
+    defer widget.deinit();
+
+    const torrents1 = &[_]Torrent{
+        .{ .title = "Test1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
+        .{ .title = "Test2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
+    };
+    widget.setTorrents(torrents1, 2);
+    widget.setSendState(1, .success);
+
+    try std.testing.expectEqual(ResultsWidget.SendState.success, widget.getSendState(1));
+
+    const torrents2 = &[_]Torrent{
+        .{ .title = "Test3", .seeders = 3, .leechers = 0, .link = "magnet:3" },
+    };
+    widget.setTorrents(torrents2, 1);
+
+    try std.testing.expectEqual(ResultsWidget.SendState.none, widget.getSendState(0));
+}
+
 test "stepMarqueeState bounces and flips direction" {
     var offset: usize = 0;
     var moving_right = true;
@@ -1291,4 +1364,11 @@ test "writeRightAligned clips overflowing values to preserve column width" {
 
     try writeRightAligned(out.writer(allocator), "123456", 4);
     try std.testing.expectEqualStrings("3456", out.items);
+}
+
+test "selectedColorForSendState uses darker tones for selected rows" {
+    const colors = theme.superseedr_like;
+    try std.testing.expectEqual(colors.selected_fg, selectedColorForSendState(colors, .none));
+    try std.testing.expectEqual(@as(u8, 22), selectedColorForSendState(colors, .success));
+    try std.testing.expectEqual(@as(u8, 88), selectedColorForSendState(colors, .failed));
 }
