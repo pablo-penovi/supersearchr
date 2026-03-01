@@ -285,18 +285,73 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_results_widget_tests.step);
     test_step.dependOn(&run_app_tests.step);
 
-    // Build step that installs all test binaries for kcov coverage collection.
+    // Build step that compiles test binaries, runs kcov on each, and merges.
     // Run with: zig build build-coverage
-    // Binaries are emitted to zig-out/bin/test-{module}.
-    const coverage_step = b.step("build-coverage", "Build test binaries for kcov coverage");
-    coverage_step.dependOn(&b.addInstallArtifact(config_tests, .{}).step);
-    coverage_step.dependOn(&b.addInstallArtifact(jackett_tests, .{}).step);
-    coverage_step.dependOn(&b.addInstallArtifact(superseedr_tests, .{}).step);
-    coverage_step.dependOn(&b.addInstallArtifact(theme_tests, .{}).step);
-    coverage_step.dependOn(&b.addInstallArtifact(search_widget_tests, .{}).step);
-    coverage_step.dependOn(&b.addInstallArtifact(results_widget_tests, .{}).step);
-    coverage_step.dependOn(&b.addInstallArtifact(panels_tests, .{}).step);
-    coverage_step.dependOn(&b.addInstallArtifact(app_tests, .{}).step);
+    const coverage_step = b.step("build-coverage", "Build test binaries and collect kcov coverage");
+
+    const mkdir_coverage = b.addSystemCommand(&.{
+        "mkdir", "-p",
+        "coverage/config", "coverage/jackett", "coverage/superseedr",
+        "coverage/theme",  "coverage/search",  "coverage/results",
+        "coverage/panels", "coverage/app",     "coverage/merged",
+    });
+
+    const kcov_config = b.addSystemCommand(&.{ "kcov", "--clean", "--include-path=./src" });
+    kcov_config.addArgs(&.{"coverage/config"});
+    kcov_config.addArtifactArg(config_tests);
+    kcov_config.step.dependOn(&mkdir_coverage.step);
+
+    const kcov_jackett = b.addSystemCommand(&.{ "kcov", "--clean", "--include-path=./src" });
+    kcov_jackett.addArgs(&.{"coverage/jackett"});
+    kcov_jackett.addArtifactArg(jackett_tests);
+    kcov_jackett.step.dependOn(&mkdir_coverage.step);
+
+    const kcov_superseedr = b.addSystemCommand(&.{ "kcov", "--clean", "--include-path=./src" });
+    kcov_superseedr.addArgs(&.{"coverage/superseedr"});
+    kcov_superseedr.addArtifactArg(superseedr_tests);
+    kcov_superseedr.step.dependOn(&mkdir_coverage.step);
+
+    const kcov_theme = b.addSystemCommand(&.{ "kcov", "--clean", "--include-path=./src" });
+    kcov_theme.addArgs(&.{"coverage/theme"});
+    kcov_theme.addArtifactArg(theme_tests);
+    kcov_theme.step.dependOn(&mkdir_coverage.step);
+
+    const kcov_search = b.addSystemCommand(&.{ "kcov", "--clean", "--include-path=./src" });
+    kcov_search.addArgs(&.{"coverage/search"});
+    kcov_search.addArtifactArg(search_widget_tests);
+    kcov_search.step.dependOn(&mkdir_coverage.step);
+
+    const kcov_results = b.addSystemCommand(&.{ "kcov", "--clean", "--include-path=./src" });
+    kcov_results.addArgs(&.{"coverage/results"});
+    kcov_results.addArtifactArg(results_widget_tests);
+    kcov_results.step.dependOn(&mkdir_coverage.step);
+
+    const kcov_panels = b.addSystemCommand(&.{ "kcov", "--clean", "--include-path=./src" });
+    kcov_panels.addArgs(&.{"coverage/panels"});
+    kcov_panels.addArtifactArg(panels_tests);
+    kcov_panels.step.dependOn(&mkdir_coverage.step);
+
+    const kcov_app = b.addSystemCommand(&.{ "kcov", "--clean", "--include-path=./src" });
+    kcov_app.addArgs(&.{"coverage/app"});
+    kcov_app.addArtifactArg(app_tests);
+    kcov_app.step.dependOn(&mkdir_coverage.step);
+
+    const kcov_merge = b.addSystemCommand(&.{
+        "kcov", "--merge", "coverage/merged",
+        "coverage/config", "coverage/jackett", "coverage/superseedr",
+        "coverage/theme",  "coverage/search",  "coverage/results",
+        "coverage/panels", "coverage/app",
+    });
+    kcov_merge.step.dependOn(&kcov_config.step);
+    kcov_merge.step.dependOn(&kcov_jackett.step);
+    kcov_merge.step.dependOn(&kcov_superseedr.step);
+    kcov_merge.step.dependOn(&kcov_theme.step);
+    kcov_merge.step.dependOn(&kcov_search.step);
+    kcov_merge.step.dependOn(&kcov_results.step);
+    kcov_merge.step.dependOn(&kcov_panels.step);
+    kcov_merge.step.dependOn(&kcov_app.step);
+
+    coverage_step.dependOn(&kcov_merge.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
