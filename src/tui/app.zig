@@ -7,6 +7,8 @@ const theme = @import("theme");
 const panels = @import("panels");
 const search_widget = @import("search");
 const results_widget = @import("results");
+const update_checker = @import("update_checker");
+const build_options = @import("build_options");
 const Torrent = @import("torrent").Torrent;
 const debug_log = @import("debug_log");
 
@@ -46,6 +48,7 @@ const AppDeps = struct {
     superseedr_executor: *const fn (allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void = superseedr.defaultExecutor,
     superseedr_process_checker: *const fn (allocator: std.mem.Allocator) anyerror!bool = superseedr.defaultProcessChecker,
     superseedr_spawner: *const fn (allocator: std.mem.Allocator, terminal: []const u8) anyerror!void = superseedr.defaultSpawner,
+    update_latest_version_executor: update_checker.LatestVersionExecutor = update_checker.defaultLatestVersionExecutor,
 };
 
 const App = struct {
@@ -57,6 +60,7 @@ const App = struct {
     term_rows: u16,
     term_cols: u16,
     terminal: []const u8,
+    latest_version: ?[]u8 = null,
 };
 
 pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
@@ -89,6 +93,9 @@ pub fn runWithDeps(allocator: std.mem.Allocator, cfg: config.Config, deps: AppDe
     };
 
     defer client.deinit();
+    defer if (app.latest_version != null) app.allocator.free(app.latest_version.?);
+
+    checkLatestVersionOnStartup(&app);
 
     while (app.running) {
         switch (app.state) {
@@ -111,6 +118,7 @@ pub fn runWithDeps(allocator: std.mem.Allocator, cfg: config.Config, deps: AppDe
 fn runSearchState(app: *App) !void {
     var widget = search_widget.SearchWidget.init(app.allocator);
     defer widget.deinit();
+    configureSearchWidgetForApp(&widget, app);
     var needs_render = true;
     const input_poll_ms: i32 = 80;
 
@@ -145,6 +153,19 @@ fn runSearchState(app: *App) !void {
             },
         }
     }
+}
+
+fn checkLatestVersionOnStartup(app: *App) void {
+    app.latest_version = update_checker.checkLatestVersion(
+        app.allocator,
+        build_options.version,
+        .{ .owner = "pablo-penovi", .name = "supersearchr" },
+        app.deps.update_latest_version_executor,
+    ) catch null;
+}
+
+fn configureSearchWidgetForApp(widget: *search_widget.SearchWidget, app: *const App) void {
+    widget.setLatestVersion(app.latest_version);
 }
 
 fn spinnerThread(ctx: SpinnerContext) void {
@@ -752,4 +773,95 @@ test "loadingQueryWidth avoids underflow in compact mode" {
 test "loadingQueryWidth uses panel width in regular mode" {
     try std.testing.expectEqual(@as(usize, 61), loadingQueryWidth(80, 74, false));
     try std.testing.expectEqual(@as(usize, 1), loadingQueryWidth(80, 13, false));
+}
+
+test "checkLatestVersionOnStartup stores latest version from injected executor" {
+    const state = struct {
+        var called_count: usize = 0;
+    };
+    state.called_count = 0;
+
+    const mock = struct {
+        fn exec(allocator: std.mem.Allocator, _: []const u8) update_checker.UpdateError![]u8 {
+            state.called_count += 1;
+            return allocator.dupe(u8, "{\"tag_name\":\"v0.3.8\"}") catch return error.OutOfMemory;
+        }
+    };
+
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .deps = .{
+            .update_latest_version_executor = mock.exec,
+        },
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "xterm",
+    };
+    defer if (app.latest_version != null) std.testing.allocator.free(app.latest_version.?);
+
+    checkLatestVersionOnStartup(&app);
+
+    try std.testing.expectEqual(@as(usize, 1), state.called_count);
+    try std.testing.expect(app.latest_version != null);
+    try std.testing.expectEqualStrings("0.3.8", app.latest_version.?);
+}
+
+test "checkLatestVersionOnStartup keeps latest_version null on executor failure" {
+    const state = struct {
+        var called_count: usize = 0;
+    };
+    state.called_count = 0;
+
+    const mock = struct {
+        fn exec(_: std.mem.Allocator, _: []const u8) update_checker.UpdateError![]u8 {
+            state.called_count += 1;
+            return error.HttpError;
+        }
+    };
+
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .deps = .{
+            .update_latest_version_executor = mock.exec,
+        },
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "xterm",
+    };
+
+    checkLatestVersionOnStartup(&app);
+
+    try std.testing.expectEqual(@as(usize, 1), state.called_count);
+    try std.testing.expect(app.latest_version == null);
+}
+
+test "configureSearchWidgetForApp forwards latest version to search widget" {
+    const latest = try std.testing.allocator.dupe(u8, "0.3.7");
+    defer std.testing.allocator.free(latest);
+
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .deps = .{},
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "xterm",
+        .latest_version = latest,
+    };
+
+    var widget = search_widget.SearchWidget.init(std.testing.allocator);
+    defer widget.deinit();
+
+    configureSearchWidgetForApp(&widget, &app);
+
+    try std.testing.expect(widget.latest_version != null);
+    try std.testing.expectEqualStrings("0.3.7", widget.latest_version.?);
 }

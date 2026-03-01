@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.3.7
+
+### Added
+- Added one-time startup release checking against GitHub latest releases.
+- Added a search-screen version alert (`[NEW vX.Y.Z]`) when a newer release is available.
+- Added a new `update_checker` module with dependency-injected executor support and tests.
+
 ## 0.3.6
 
 ### Removed
