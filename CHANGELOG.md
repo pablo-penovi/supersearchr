@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.3.12
+
+### Added
+- Added a tag-triggered GitHub release workflow that builds and uploads target-specific executable assets for `v*` tags.
+
 ## 0.3.11
 
 ### Fixed
