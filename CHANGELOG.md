@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.3.13
+
+### Added
+- Added a `zig build coverage` step that runs all test binaries through `kcov` and merges the reports under `coverage/`.
+- Added a GitHub Pages coverage workflow that publishes the merged kcov report and a Shields-compatible README badge endpoint.
+- Added a main entrypoint smoke test so `main.zig` appears in kcov reports without launching the TUI.
+- Added a torrent struct smoke test to include torrent metadata coverage in the standard test suite.
+
+### Fixed
+- Made Superseedr argv-capture tests copy argument entries instead of retaining a temporary slice, keeping them valid under LLVM-backed coverage builds.
+
 ## 0.3.12
 
 ### Added

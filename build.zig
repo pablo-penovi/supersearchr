@@ -6,8 +6,14 @@ const ImportSpec = struct {
 };
 
 const ModuleTest = struct {
+    name: []const u8,
     artifact: *std.Build.Step.Compile,
     run: *std.Build.Step.Run,
+};
+
+const CoverageTest = struct {
+    name: []const u8,
+    artifact: *std.Build.Step.Compile,
 };
 
 fn addImports(dst: *std.Build.Module, imports: []const ImportSpec) void {
@@ -45,13 +51,14 @@ fn addModuleTest(
     });
 
     return .{
+        .name = name,
         .artifact = artifact,
         .run = b.addRunArtifact(artifact),
     };
 }
 
 pub fn build(b: *std.Build) void {
-    const app_version = "0.3.12";
+    const app_version = "0.3.13";
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -155,6 +162,8 @@ pub fn build(b: *std.Build) void {
 
     const update_checker_tests = addModuleTest(b, "test-update-checker", "src/update_checker.zig", target, optimize, strip);
 
+    const torrent_tests = addModuleTest(b, "test-torrent", "src/structs/torrent.zig", target, optimize, strip);
+
     const term_tests = addModuleTest(b, "test-term", "src/tui/term.zig", target, optimize, strip);
 
     const search_widget_tests = addModuleTest(b, "test-search", "src/tui/widgets/search.zig", target, optimize, strip);
@@ -214,6 +223,7 @@ pub fn build(b: *std.Build) void {
         jackett_tests.run,
         superseedr_tests.run,
         update_checker_tests.run,
+        torrent_tests.run,
         term_tests.run,
         theme_tests.run,
         panels_tests.run,
@@ -224,4 +234,52 @@ pub fn build(b: *std.Build) void {
     for (test_runs) |run_test| {
         test_step.dependOn(&run_test.step);
     }
+
+    const coverage_step = b.step("coverage", "Run tests with kcov coverage");
+    const coverage_tests = [_]CoverageTest{
+        .{ .name = "main", .artifact = exe_tests },
+        .{ .name = config_tests.name, .artifact = config_tests.artifact },
+        .{ .name = jackett_tests.name, .artifact = jackett_tests.artifact },
+        .{ .name = superseedr_tests.name, .artifact = superseedr_tests.artifact },
+        .{ .name = update_checker_tests.name, .artifact = update_checker_tests.artifact },
+        .{ .name = torrent_tests.name, .artifact = torrent_tests.artifact },
+        .{ .name = term_tests.name, .artifact = term_tests.artifact },
+        .{ .name = theme_tests.name, .artifact = theme_tests.artifact },
+        .{ .name = panels_tests.name, .artifact = panels_tests.artifact },
+        .{ .name = search_widget_tests.name, .artifact = search_widget_tests.artifact },
+        .{ .name = results_widget_tests.name, .artifact = results_widget_tests.artifact },
+        .{ .name = app_tests.name, .artifact = app_tests.artifact },
+    };
+
+    const clean_coverage = b.addRemoveDirTree(b.path("coverage"));
+    const mkdir_coverage = b.addSystemCommand(&.{ "mkdir", "-p" });
+    mkdir_coverage.step.dependOn(&clean_coverage.step);
+    for (coverage_tests) |coverage_test| {
+        coverage_test.artifact.use_llvm = true;
+        coverage_test.artifact.root_module.strip = false;
+        mkdir_coverage.addArg(b.fmt("coverage/{s}", .{coverage_test.name}));
+    }
+    mkdir_coverage.addArg("coverage/merged");
+
+    const project_root = b.pathFromRoot(".");
+    const kcov_merge = b.addSystemCommand(&.{ "kcov", "--clean", "--merge", "coverage/merged" });
+    kcov_merge.step.dependOn(&mkdir_coverage.step);
+
+    for (coverage_tests) |coverage_test| {
+        const output_dir = b.fmt("coverage/{s}", .{coverage_test.name});
+        const kcov_run = b.addSystemCommand(&.{
+            "kcov",
+            "--clean",
+            b.fmt("--include-path={s}/src", .{project_root}),
+            "--exclude-pattern=debug/,/.zig/,/lib/zig/",
+        });
+        kcov_run.addArg(output_dir);
+        kcov_run.addArtifactArg(coverage_test.artifact);
+        kcov_run.step.dependOn(&mkdir_coverage.step);
+
+        kcov_merge.addArg(output_dir);
+        kcov_merge.step.dependOn(&kcov_run.step);
+    }
+
+    coverage_step.dependOn(&kcov_merge.step);
 }

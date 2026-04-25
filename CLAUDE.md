@@ -12,6 +12,7 @@ Supersearchr is a TUI (terminal user interface) BitTorrent search tool written i
 zig build                          # Compile (output: zig-out/bin/supersearchr)
 zig build run                      # Build and run
 zig build test --summary all       # Run all tests with detailed output
+zig build coverage                 # Run tests through kcov and merge coverage reports
 ```
 
 Always use `--summary all` when running tests to see test names and pass/fail status.

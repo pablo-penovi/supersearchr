@@ -222,11 +222,16 @@ pub fn addLinkWithExecutor(allocator: std.mem.Allocator, link: []const u8, termi
 }
 
 test "valid magnet URL is accepted" {
-    var argv_captured: ?[]const []const u8 = null;
+    var argv_captured: [3][]const u8 = undefined;
+    var argv_captured_len: usize = 0;
     const mock = struct {
-        var captured: *?[]const []const u8 = undefined;
+        var captured: *[3][]const u8 = undefined;
+        var captured_len: *usize = undefined;
         fn exec(_: std.mem.Allocator, argv: []const []const u8) anyerror!void {
-            captured.* = argv;
+            captured_len.* = @min(captured.len, argv.len);
+            for (argv[0..captured_len.*], 0..) |arg, i| {
+                captured.*[i] = arg;
+            }
         }
         fn checker(_: std.mem.Allocator) anyerror!bool {
             return true;
@@ -236,20 +241,26 @@ test "valid magnet URL is accepted" {
         }
     };
     mock.captured = &argv_captured;
+    mock.captured_len = &argv_captured_len;
 
     try addLinkWithAllDeps(std.testing.allocator, "magnet:?xt=urn:btih:1234567890", "ghostty", mock.exec, mock.checker, mock.spawner);
-    try std.testing.expect(argv_captured != null);
-    try std.testing.expectEqualStrings("superseedr", argv_captured.?[0]);
-    try std.testing.expectEqualStrings("add", argv_captured.?[1]);
-    try std.testing.expect(std.mem.startsWith(u8, argv_captured.?[2], "magnet:"));
+    try std.testing.expectEqual(@as(usize, 3), argv_captured_len);
+    try std.testing.expectEqualStrings("superseedr", argv_captured[0]);
+    try std.testing.expectEqualStrings("add", argv_captured[1]);
+    try std.testing.expect(std.mem.startsWith(u8, argv_captured[2], "magnet:"));
 }
 
 test "valid torrent path is accepted" {
-    var argv_captured: ?[]const []const u8 = null;
+    var argv_captured: [3][]const u8 = undefined;
+    var argv_captured_len: usize = 0;
     const mock = struct {
-        var captured: *?[]const []const u8 = undefined;
+        var captured: *[3][]const u8 = undefined;
+        var captured_len: *usize = undefined;
         fn exec(_: std.mem.Allocator, argv: []const []const u8) anyerror!void {
-            captured.* = argv;
+            captured_len.* = @min(captured.len, argv.len);
+            for (argv[0..captured_len.*], 0..) |arg, i| {
+                captured.*[i] = arg;
+            }
         }
         fn checker(_: std.mem.Allocator) anyerror!bool {
             return true;
@@ -259,12 +270,13 @@ test "valid torrent path is accepted" {
         }
     };
     mock.captured = &argv_captured;
+    mock.captured_len = &argv_captured_len;
 
     try addLinkWithAllDeps(std.testing.allocator, "/tmp/file.torrent", "ghostty", mock.exec, mock.checker, mock.spawner);
-    try std.testing.expect(argv_captured != null);
-    try std.testing.expectEqualStrings("superseedr", argv_captured.?[0]);
-    try std.testing.expectEqualStrings("add", argv_captured.?[1]);
-    try std.testing.expect(std.mem.endsWith(u8, argv_captured.?[2], ".torrent"));
+    try std.testing.expectEqual(@as(usize, 3), argv_captured_len);
+    try std.testing.expectEqualStrings("superseedr", argv_captured[0]);
+    try std.testing.expectEqualStrings("add", argv_captured[1]);
+    try std.testing.expect(std.mem.endsWith(u8, argv_captured[2], ".torrent"));
 }
 
 test "invalid URL returns error" {
