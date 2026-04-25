@@ -9,6 +9,7 @@ Current project version: `v0.3.12`.
 
 - Linux, macOS, or Windows (Windows Terminal recommended on Windows)
 - Zig `0.15.2`
+- `kcov` for coverage reports
 - A running Jackett instance with API key
 - `superseedr` CLI in your `PATH`
 
@@ -47,7 +48,12 @@ zig build -Dtarget=x86_64-windows
 
 # Run all tests with detailed summary
 zig build test --summary all
+
+# Run tests through kcov and merge coverage reports
+zig build coverage
 ```
+
+Coverage output is written to `coverage/`. Open `coverage/merged/kcov-merged/index.html` for the merged HTML report, or use `coverage/merged/kcov-merged/cobertura.xml` for Cobertura-compatible tooling.
 
 ## Installation
 

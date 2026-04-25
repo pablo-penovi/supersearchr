@@ -24,3 +24,8 @@ pub fn main() !void {
 
     try app.run(gpa.allocator(), cfg);
 }
+
+test "main entry point has expected signature" {
+    const entry: fn () anyerror!void = main;
+    _ = entry;
+}
