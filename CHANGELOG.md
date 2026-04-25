@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.3.11
+
+### Fixed
+- Resolve Jackett HTTP download links before sending selections to Superseedr, including magnet redirects and downloaded `.torrent` files.
+- Reject unresolved HTTP URLs as final Superseedr inputs so non-magnet Jackett results fail clearly instead of being treated as local paths.
+
 ## 0.3.10
 
 ### Added
