@@ -46,6 +46,7 @@ const SpinnerContext = struct {
 
 const AppDeps = struct {
     jackett_body_executor: jackett.BodyExecutor = jackett.defaultBodyExecutor,
+    jackett_link_fetcher: jackett.LinkFetchExecutor = jackett.defaultLinkFetchExecutor,
     jackett_parallel_requests: usize = 4,
     superseedr_executor: *const fn (allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void = superseedr.defaultExecutor,
     superseedr_process_checker: *const fn (allocator: std.mem.Allocator) anyerror!bool = superseedr.defaultProcessChecker,
@@ -356,16 +357,16 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                         debug_log.writef(
                             app.allocator,
                             "app",
-                            "Added torrent to superseedr title=\"{s}\" link=\"{s}\"",
-                            .{ torrent.title, torrent.link },
+                            "Added torrent to superseedr title=\"{s}\" link_kind={s}",
+                            .{ torrent.title, selectedLinkKind(torrent.link) },
                         );
                         widget.setSendState(idx, .success);
                     } else |err| {
                         debug_log.writef(
                             app.allocator,
                             "app",
-                            "Failed to add torrent err={s} title=\"{s}\" link=\"{s}\"",
-                            .{ @errorName(err), torrent.title, torrent.link },
+                            "Failed to add torrent err={s} title=\"{s}\" link_kind={s}",
+                            .{ @errorName(err), torrent.title, selectedLinkKind(torrent.link) },
                         );
                         widget.setSendState(idx, .failed);
                         panels.renderResultErrorOverlay(
@@ -395,14 +396,39 @@ fn searchWithAppDeps(app: *App, query: []const u8, progress: *jackett.SearchProg
 }
 
 fn addLinkWithAppDeps(app: *App, link: []const u8) superseedr.AddLinkError!void {
+    var resolved_link = jackett.resolveDownloadLink(app.allocator, link, app.deps.jackett_link_fetcher) catch |err| {
+        debug_log.writef(
+            app.allocator,
+            "app",
+            "Failed to resolve selected link err={s} link_kind={s}",
+            .{ @errorName(err), selectedLinkKind(link) },
+        );
+        return error.LinkResolveFailed;
+    };
+    defer resolved_link.deinit(app.allocator);
+
+    debug_log.writef(
+        app.allocator,
+        "app",
+        "Selected link ready for superseedr kind={s}",
+        .{@tagName(resolved_link.kind)},
+    );
+
     return superseedr.addLinkWithAllDeps(
         app.allocator,
-        link,
+        resolved_link.value,
         app.terminal,
         app.deps.superseedr_executor,
         app.deps.superseedr_process_checker,
         app.deps.superseedr_spawner,
     );
+}
+
+fn selectedLinkKind(link: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, link, "magnet:")) return "magnet";
+    if (std.mem.startsWith(u8, link, "http://") or std.mem.startsWith(u8, link, "https://")) return "http";
+    if (std.mem.endsWith(u8, link, ".torrent")) return "torrent_path";
+    return "other";
 }
 
 fn transitionLoadingToNextState(app: *App, query: []const u8, progress: *jackett.SearchProgress) void {
@@ -455,6 +481,7 @@ fn getErrorMessage(err: jackett.JackettError) []const u8 {
 fn getSuperseedrErrorMessage(err: superseedr.AddLinkError) []const u8 {
     return switch (err) {
         error.InvalidLink => "Invalid link",
+        error.LinkResolveFailed => "Failed to resolve Jackett download link",
         error.SuperseedrNotFound => "superseedr not found in PATH",
         error.SuperseedrFailed => "Failed to add to superseedr",
         error.SuperseedrLaunchFailed => "Failed to launch superseedr",

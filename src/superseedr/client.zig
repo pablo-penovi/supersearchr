@@ -4,6 +4,7 @@ const debug_log = @import("debug_log");
 
 pub const AddLinkError = error{
     InvalidLink,
+    LinkResolveFailed,
     SuperseedrNotFound,
     SuperseedrFailed,
     SuperseedrLaunchFailed,
@@ -149,14 +150,13 @@ pub fn addLinkWithAllDeps(
     spawner: Spawner,
 ) AddLinkError!void {
     const is_magnet = std.mem.startsWith(u8, link, "magnet:");
-    const is_http = std.mem.startsWith(u8, link, "http://") or std.mem.startsWith(u8, link, "https://");
     const is_torrent = std.mem.endsWith(u8, link, ".torrent");
-    if (!is_magnet and !is_http and !is_torrent) {
+    if (!is_magnet and !is_torrent) {
         debug_log.writef(
             allocator,
             "superseedr",
-            "Invalid link rejected link=\"{s}\" magnet={any} http={any} torrent_ext={any}",
-            .{ link, is_magnet, is_http, is_torrent },
+            "Invalid final link rejected magnet={any} torrent_ext={any}",
+            .{ is_magnet, is_torrent },
         );
         return error.InvalidLink;
     }
@@ -244,7 +244,7 @@ test "valid magnet URL is accepted" {
     try std.testing.expect(std.mem.startsWith(u8, argv_captured.?[2], "magnet:"));
 }
 
-test "valid torrent URL is accepted" {
+test "valid torrent path is accepted" {
     var argv_captured: ?[]const []const u8 = null;
     const mock = struct {
         var captured: *?[]const []const u8 = undefined;
@@ -260,7 +260,7 @@ test "valid torrent URL is accepted" {
     };
     mock.captured = &argv_captured;
 
-    try addLinkWithAllDeps(std.testing.allocator, "https://example.com/file.torrent", "ghostty", mock.exec, mock.checker, mock.spawner);
+    try addLinkWithAllDeps(std.testing.allocator, "/tmp/file.torrent", "ghostty", mock.exec, mock.checker, mock.spawner);
     try std.testing.expect(argv_captured != null);
     try std.testing.expectEqualStrings("superseedr", argv_captured.?[0]);
     try std.testing.expectEqualStrings("add", argv_captured.?[1]);
@@ -301,12 +301,11 @@ test "empty URL returns error" {
     try std.testing.expectError(error.InvalidLink, addLinkWithAllDeps(std.testing.allocator, "", "ghostty", mock.exec, mock.checker, mock.spawner));
 }
 
-test "valid HTTP URL is accepted" {
-    var argv_captured: ?[]const []const u8 = null;
+test "HTTP URL is rejected as final superseedr input" {
     const mock = struct {
-        var captured: *?[]const []const u8 = undefined;
         fn exec(_: std.mem.Allocator, argv: []const []const u8) anyerror!void {
-            captured.* = argv;
+            _ = argv;
+            unreachable;
         }
         fn checker(_: std.mem.Allocator) anyerror!bool {
             return true;
@@ -315,11 +314,8 @@ test "valid HTTP URL is accepted" {
             unreachable;
         }
     };
-    mock.captured = &argv_captured;
 
-    try addLinkWithAllDeps(std.testing.allocator, "https://example.com/download.php?id=7", "ghostty", mock.exec, mock.checker, mock.spawner);
-    try std.testing.expect(argv_captured != null);
-    try std.testing.expectEqualStrings("https://example.com/download.php?id=7", argv_captured.?[2]);
+    try std.testing.expectError(error.InvalidLink, addLinkWithAllDeps(std.testing.allocator, "https://example.com/download.php?id=7", "ghostty", mock.exec, mock.checker, mock.spawner));
 }
 
 test "superseedr already running - no spawn called" {

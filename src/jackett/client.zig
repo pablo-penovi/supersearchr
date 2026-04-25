@@ -148,6 +148,13 @@ fn mapAnyToJackettError(err: anyerror, fallback: JackettError) JackettError {
     };
 }
 
+fn mapAnyToLinkResolveError(err: anyerror, fallback: LinkResolveError) LinkResolveError {
+    return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => fallback,
+    };
+}
+
 pub const ProgressPhase = enum(u8) {
     discovering = 0,
     querying = 1,
@@ -209,6 +216,280 @@ pub const SearchProgress = struct {
 };
 
 pub const BodyExecutor = *const fn (allocator: std.mem.Allocator, url: []const u8) JackettError![]u8;
+
+pub const LinkResolveError = error{
+    InvalidLink,
+    InvalidUrl,
+    RequestCreateFailed,
+    RequestSendFailed,
+    ResponseHeadReadFailed,
+    HttpError,
+    ResponseReadFailed,
+    UnresolvableLink,
+    TempFileCreateFailed,
+    TempFileWriteFailed,
+    OutOfMemory,
+};
+
+pub const ResolvedLinkKind = enum {
+    direct,
+    magnet_redirect,
+    torrent_file,
+};
+
+pub const ResolvedLink = struct {
+    value: []u8,
+    kind: ResolvedLinkKind,
+
+    pub fn deinit(self: *ResolvedLink, allocator: std.mem.Allocator) void {
+        allocator.free(self.value);
+        self.* = undefined;
+    }
+};
+
+pub const LinkFetchResponse = struct {
+    status: std.http.Status,
+    location: ?[]u8 = null,
+    body: []u8 = &.{},
+
+    pub fn deinit(self: *LinkFetchResponse, allocator: std.mem.Allocator) void {
+        if (self.location) |location| allocator.free(location);
+        if (self.body.len != 0) allocator.free(self.body);
+        self.* = undefined;
+    }
+};
+
+pub const LinkFetchExecutor = *const fn (allocator: std.mem.Allocator, url: []const u8) LinkResolveError!LinkFetchResponse;
+
+fn isHttpLink(link: []const u8) bool {
+    return std.mem.startsWith(u8, link, "http://") or std.mem.startsWith(u8, link, "https://");
+}
+
+fn isRedirectStatus(status: std.http.Status) bool {
+    const code = @intFromEnum(status);
+    return code >= 300 and code < 400;
+}
+
+pub fn resolveDownloadLink(
+    allocator: std.mem.Allocator,
+    link: []const u8,
+    fetcher: LinkFetchExecutor,
+) LinkResolveError!ResolvedLink {
+    if (std.mem.startsWith(u8, link, "magnet:") or (!isHttpLink(link) and std.mem.endsWith(u8, link, ".torrent"))) {
+        debug_log.writef(
+            allocator,
+            "jackett",
+            "Selected link used directly kind=direct",
+            .{},
+        );
+        return .{
+            .value = try allocator.dupe(u8, link),
+            .kind = .direct,
+        };
+    }
+
+    if (!isHttpLink(link)) {
+        debug_log.writef(
+            allocator,
+            "jackett",
+            "Selected link rejected before resolve",
+            .{},
+        );
+        return error.InvalidLink;
+    }
+
+    var response = try fetcher(allocator, link);
+    defer response.deinit(allocator);
+
+    if (isRedirectStatus(response.status)) {
+        const location = response.location orelse {
+            debug_log.writef(
+                allocator,
+                "jackett",
+                "HTTP link redirect had no location status={d}",
+                .{@intFromEnum(response.status)},
+            );
+            return error.UnresolvableLink;
+        };
+        if (!std.mem.startsWith(u8, location, "magnet:")) {
+            debug_log.writef(
+                allocator,
+                "jackett",
+                "HTTP link redirected to non-magnet status={d}",
+                .{@intFromEnum(response.status)},
+            );
+            return error.UnresolvableLink;
+        }
+        debug_log.writef(
+            allocator,
+            "jackett",
+            "HTTP link resolved to magnet redirect status={d}",
+            .{@intFromEnum(response.status)},
+        );
+        return .{
+            .value = try allocator.dupe(u8, location),
+            .kind = .magnet_redirect,
+        };
+    }
+
+    if (response.status != .ok) {
+        debug_log.writef(
+            allocator,
+            "jackett",
+            "HTTP link returned non-OK status={d}",
+            .{@intFromEnum(response.status)},
+        );
+        return error.HttpError;
+    }
+
+    if (response.body.len == 0) {
+        debug_log.writef(
+            allocator,
+            "jackett",
+            "HTTP link returned empty torrent body",
+            .{},
+        );
+        return error.UnresolvableLink;
+    }
+
+    const path = try writeTempTorrentFile(allocator, response.body);
+    debug_log.writef(
+        allocator,
+        "jackett",
+        "HTTP link downloaded to temp torrent",
+        .{},
+    );
+    return .{
+        .value = path,
+        .kind = .torrent_file,
+    };
+}
+
+fn writeTempTorrentFile(allocator: std.mem.Allocator, bytes: []const u8) LinkResolveError![]u8 {
+    const temp_dir = try getTempDir(allocator);
+    defer allocator.free(temp_dir);
+
+    var random_bytes: [12]u8 = undefined;
+    var hex_buf: [24]u8 = undefined;
+
+    var attempts: usize = 0;
+    while (attempts < 8) : (attempts += 1) {
+        std.crypto.random.bytes(&random_bytes);
+        const hex = std.fmt.bytesToHex(random_bytes, .lower);
+        @memcpy(hex_buf[0..], hex[0..]);
+
+        const filename = try std.fmt.allocPrint(allocator, "supersearchr-{s}.torrent", .{hex_buf[0..]});
+        defer allocator.free(filename);
+        const path = try std.fs.path.join(allocator, &.{ temp_dir, filename });
+        errdefer allocator.free(path);
+
+        const file = std.fs.createFileAbsolute(path, .{ .exclusive = true }) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                allocator.free(path);
+                continue;
+            },
+            else => return error.TempFileCreateFailed,
+        };
+        defer file.close();
+
+        file.writeAll(bytes) catch |err| switch (err) {
+            else => return error.TempFileWriteFailed,
+        };
+
+        return path;
+    }
+
+    return error.TempFileCreateFailed;
+}
+
+fn getTempDir(allocator: std.mem.Allocator) ![]u8 {
+    if (std.process.getEnvVarOwned(allocator, "TMPDIR")) |value| {
+        if (value.len > 0) return value;
+        allocator.free(value);
+    } else |_| {}
+
+    return allocator.dupe(u8, "/tmp");
+}
+
+pub fn defaultLinkFetchExecutor(allocator: std.mem.Allocator, url: []const u8) LinkResolveError!LinkFetchResponse {
+    var http_client = std.http.Client{ .allocator = allocator };
+    defer http_client.deinit();
+
+    const uri = std.Uri.parse(url) catch |err| {
+        debug_log.writef(
+            allocator,
+            "jackett",
+            "Failed to parse Jackett download URL err={s}",
+            .{@errorName(err)},
+        );
+        return error.InvalidUrl;
+    };
+    var request = http_client.request(.GET, uri, .{ .redirect_behavior = .unhandled }) catch |err| {
+        debug_log.writef(
+            allocator,
+            "jackett",
+            "Failed to create Jackett download request err={s}",
+            .{@errorName(err)},
+        );
+        return mapAnyToLinkResolveError(err, error.RequestCreateFailed);
+    };
+    defer request.deinit();
+
+    request.sendBodiless() catch |err| {
+        debug_log.writef(
+            allocator,
+            "jackett",
+            "Failed to send Jackett download request err={s}",
+            .{@errorName(err)},
+        );
+        return mapAnyToLinkResolveError(err, error.RequestSendFailed);
+    };
+    var header_buf: [64 * 1024]u8 = undefined;
+    var response = request.receiveHead(&header_buf) catch |err| {
+        debug_log.writef(
+            allocator,
+            "jackett",
+            "Failed to receive Jackett download response head err={s}",
+            .{@errorName(err)},
+        );
+        return mapAnyToLinkResolveError(err, error.ResponseHeadReadFailed);
+    };
+
+    const location = if (response.head.location) |raw_location|
+        allocator.dupe(u8, raw_location) catch return error.OutOfMemory
+    else
+        null;
+    errdefer if (location) |owned_location| allocator.free(owned_location);
+
+    if (response.head.status != .ok) {
+        return .{
+            .status = response.head.status,
+            .location = location,
+        };
+    }
+
+    const decompress_buffer: []u8 = switch (response.head.content_encoding) {
+        .identity => &.{},
+        .zstd => allocator.alloc(u8, std.compress.zstd.default_window_len) catch return error.OutOfMemory,
+        .deflate, .gzip => allocator.alloc(u8, std.compress.flate.max_window_len) catch return error.OutOfMemory,
+        .compress => return error.ResponseReadFailed,
+    };
+    defer if (decompress_buffer.len != 0) allocator.free(decompress_buffer);
+
+    var read_buf: [4096]u8 = undefined;
+    var decompress: std.http.Decompress = undefined;
+    const reader = response.readerDecompressing(&read_buf, &decompress, decompress_buffer);
+    const body = reader.allocRemaining(allocator, .unlimited) catch |err| {
+        if (location) |owned_location| allocator.free(owned_location);
+        return mapAnyToLinkResolveError(err, error.ResponseReadFailed);
+    };
+
+    return .{
+        .status = response.head.status,
+        .location = location,
+        .body = body,
+    };
+}
 
 pub fn defaultBodyExecutor(allocator: std.mem.Allocator, url: []const u8) JackettError![]u8 {
     var http_client = std.http.Client{ .allocator = allocator };
@@ -880,6 +1161,78 @@ test "include non-magnet links" {
     try std.testing.expectEqual(@as(u32, 200), torrents[0].seeders);
     try std.testing.expectEqualStrings("With Magnet", torrents[1].title);
     try std.testing.expectEqual(@as(u32, 100), torrents[1].seeders);
+}
+
+test "resolve Jackett HTTP link to magnet redirect" {
+    const mock = struct {
+        fn fetch(allocator: std.mem.Allocator, url: []const u8) LinkResolveError!LinkFetchResponse {
+            if (!std.mem.eql(u8, "https://jackett.local/dl/test", url)) return error.UnresolvableLink;
+            return .{
+                .status = @enumFromInt(302),
+                .location = try allocator.dupe(u8, "magnet:?xt=urn:btih:redirected"),
+            };
+        }
+    };
+
+    var resolved = try resolveDownloadLink(std.testing.allocator, "https://jackett.local/dl/test", mock.fetch);
+    defer resolved.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(.magnet_redirect, resolved.kind);
+    try std.testing.expectEqualStrings("magnet:?xt=urn:btih:redirected", resolved.value);
+}
+
+test "resolve Jackett HTTP link to temp torrent file" {
+    const torrent_bytes = "d8:announce13:http://tracker4:info0:e";
+    const mock = struct {
+        fn fetch(allocator: std.mem.Allocator, url: []const u8) LinkResolveError!LinkFetchResponse {
+            if (!std.mem.eql(u8, "https://jackett.local/dl/file", url)) return error.UnresolvableLink;
+            return .{
+                .status = .ok,
+                .body = try allocator.dupe(u8, torrent_bytes),
+            };
+        }
+    };
+
+    var resolved = try resolveDownloadLink(std.testing.allocator, "https://jackett.local/dl/file", mock.fetch);
+    defer resolved.deinit(std.testing.allocator);
+    defer std.fs.deleteFileAbsolute(resolved.value) catch {};
+
+    try std.testing.expectEqual(.torrent_file, resolved.kind);
+    try std.testing.expect(std.mem.endsWith(u8, resolved.value, ".torrent"));
+
+    const written = try std.fs.cwd().readFileAlloc(std.testing.allocator, resolved.value, 1024);
+    defer std.testing.allocator.free(written);
+    try std.testing.expectEqualStrings(torrent_bytes, written);
+}
+
+test "resolve direct magnet passthrough" {
+    const mock = struct {
+        fn fetch(_: std.mem.Allocator, _: []const u8) LinkResolveError!LinkFetchResponse {
+            unreachable;
+        }
+    };
+
+    var resolved = try resolveDownloadLink(std.testing.allocator, "magnet:?xt=urn:btih:direct", mock.fetch);
+    defer resolved.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(.direct, resolved.kind);
+    try std.testing.expectEqualStrings("magnet:?xt=urn:btih:direct", resolved.value);
+}
+
+test "resolve invalid HTTP link returns clear error" {
+    const mock = struct {
+        fn fetch(_: std.mem.Allocator, _: []const u8) LinkResolveError!LinkFetchResponse {
+            return .{
+                .status = @enumFromInt(302),
+                .location = null,
+            };
+        }
+    };
+
+    try std.testing.expectError(
+        error.UnresolvableLink,
+        resolveDownloadLink(std.testing.allocator, "https://jackett.local/dl/missing-location", mock.fetch),
+    );
 }
 
 test "sort by seeders descending" {
