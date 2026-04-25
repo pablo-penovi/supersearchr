@@ -1,7 +1,7 @@
 # Repository Structure
 
 This file summarizes tracked files to avoid re-scanning. Build artifacts in `zig-out/` are excluded by design.
-Current project version: `v0.3.11`.
+Current project version: `v0.3.12`.
 
 ## Root
 
@@ -13,6 +13,11 @@ Current project version: `v0.3.11`.
 - `STRUCTURE.md`: This repository map.
 - `build.zig`: Zig build script defining modules and test steps.
 - `build.zig.zon`: Zig package metadata (name, version, minimum Zig, paths).
+
+## GitHub Workflows (`.github/workflows/`)
+
+- `.github/workflows/ci.yml`: Pull request and `main` CI for tests, cross-compilation checks, and formatting.
+- `.github/workflows/release.yml`: `v*` tag release workflow that builds optimized executables and uploads them as release assets.
 
 ## Source (`src/`)
 
