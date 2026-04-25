@@ -9,6 +9,7 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 - Pinned the Coverage Pages workflow to Ubuntu 22.04 so `kcov` can be installed from apt.
+- Added a cache-busting query to the README coverage badge so GitHub refreshes stale Shields failures.
 
 ## 0.3.13
 
