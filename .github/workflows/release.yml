@@ -35,7 +35,7 @@ jobs:
         run: zig version
 
       - name: Build
-        run: zig build -Doptimize=ReleaseSafe -Dtarget=${{ matrix.target }}
+        run: zig build -Doptimize=ReleaseSafe -Dstrip=true -Dtarget=${{ matrix.target }}
 
       - name: Stage executable
         run: |

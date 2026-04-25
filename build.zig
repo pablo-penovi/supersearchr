@@ -21,11 +21,13 @@ fn createTargetedModule(
     root_source_file: []const u8,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    strip: bool,
 ) *std.Build.Module {
     return b.createModule(.{
         .root_source_file = b.path(root_source_file),
         .target = target,
         .optimize = optimize,
+        .strip = strip,
     });
 }
 
@@ -35,10 +37,11 @@ fn addModuleTest(
     root_source_file: []const u8,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    strip: bool,
 ) ModuleTest {
     const artifact = b.addTest(.{
         .name = name,
-        .root_module = createTargetedModule(b, root_source_file, target, optimize),
+        .root_module = createTargetedModule(b, root_source_file, target, optimize, strip),
     });
 
     return .{
@@ -52,6 +55,7 @@ pub fn build(b: *std.Build) void {
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const strip = b.option(bool, "strip", "Omit debug symbols from build artifacts") orelse (optimize != .Debug);
 
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", app_version);
@@ -112,7 +116,7 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "supersearchr",
-        .root_module = createTargetedModule(b, "src/main.zig", target, optimize),
+        .root_module = createTargetedModule(b, "src/main.zig", target, optimize, strip),
     });
     addImports(exe.root_module, &.{
         .{ .name = "config", .module = config_mod },
@@ -136,50 +140,50 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const config_tests = addModuleTest(b, "test-config", "src/config.zig", target, optimize);
+    const config_tests = addModuleTest(b, "test-config", "src/config.zig", target, optimize, strip);
 
-    const jackett_tests = addModuleTest(b, "test-jackett", "src/jackett/client.zig", target, optimize);
+    const jackett_tests = addModuleTest(b, "test-jackett", "src/jackett/client.zig", target, optimize, strip);
     addImports(jackett_tests.artifact.root_module, &.{
         .{ .name = "torrent", .module = torrent_mod },
         .{ .name = "debug_log", .module = debug_log_mod },
     });
 
-    const superseedr_tests = addModuleTest(b, "test-superseedr", "src/superseedr/client.zig", target, optimize);
+    const superseedr_tests = addModuleTest(b, "test-superseedr", "src/superseedr/client.zig", target, optimize, strip);
     addImports(superseedr_tests.artifact.root_module, &.{
         .{ .name = "debug_log", .module = debug_log_mod },
     });
 
-    const update_checker_tests = addModuleTest(b, "test-update-checker", "src/update_checker.zig", target, optimize);
+    const update_checker_tests = addModuleTest(b, "test-update-checker", "src/update_checker.zig", target, optimize, strip);
 
-    const term_tests = addModuleTest(b, "test-term", "src/tui/term.zig", target, optimize);
+    const term_tests = addModuleTest(b, "test-term", "src/tui/term.zig", target, optimize, strip);
 
-    const search_widget_tests = addModuleTest(b, "test-search", "src/tui/widgets/search.zig", target, optimize);
+    const search_widget_tests = addModuleTest(b, "test-search", "src/tui/widgets/search.zig", target, optimize, strip);
     addImports(search_widget_tests.artifact.root_module, &.{
         .{ .name = "term", .module = term_mod },
         .{ .name = "theme", .module = theme_mod },
         .{ .name = "build_options", .module = build_options_mod },
     });
 
-    const results_widget_tests = addModuleTest(b, "test-results", "src/tui/widgets/results.zig", target, optimize);
+    const results_widget_tests = addModuleTest(b, "test-results", "src/tui/widgets/results.zig", target, optimize, strip);
     addImports(results_widget_tests.artifact.root_module, &.{
         .{ .name = "term", .module = term_mod },
         .{ .name = "theme", .module = theme_mod },
         .{ .name = "torrent", .module = torrent_mod },
     });
 
-    const theme_tests = addModuleTest(b, "test-theme", "src/tui/theme.zig", target, optimize);
+    const theme_tests = addModuleTest(b, "test-theme", "src/tui/theme.zig", target, optimize, strip);
     addImports(theme_tests.artifact.root_module, &.{
         .{ .name = "term", .module = term_mod },
     });
 
-    const panels_tests = addModuleTest(b, "test-panels", "src/tui/panels.zig", target, optimize);
+    const panels_tests = addModuleTest(b, "test-panels", "src/tui/panels.zig", target, optimize, strip);
     addImports(panels_tests.artifact.root_module, &.{
         .{ .name = "term", .module = term_mod },
         .{ .name = "theme", .module = theme_mod },
         .{ .name = "results", .module = results_widget_mod },
     });
 
-    const app_tests = addModuleTest(b, "test-app", "src/tui/app.zig", target, optimize);
+    const app_tests = addModuleTest(b, "test-app", "src/tui/app.zig", target, optimize, strip);
     const app_tests_jackett_mod = b.createModule(.{ .root_source_file = b.path("src/jackett/client.zig") });
     addImports(app_tests_jackett_mod, &.{
         .{ .name = "torrent", .module = torrent_mod },
