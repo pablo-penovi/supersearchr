@@ -1,0 +1,97 @@
+name: Coverage Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish kcov report
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Zig 0.15.2
+        run: |
+          set -euo pipefail
+          curl -L "https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz" -o zig.tar.xz
+          tar -xf zig.tar.xz
+          echo "$PWD/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
+
+      - name: Install kcov
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y kcov
+
+      - name: Run coverage
+        run: zig build coverage
+
+      - name: Prepare Pages artifact
+        run: |
+          set -euo pipefail
+          mkdir -p coverage-site/coverage
+          cp -R coverage/merged/kcov-merged/. coverage-site/coverage/
+          python3 - <<'PY'
+          import json
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          report = Path("coverage/merged/kcov-merged/cobertura.xml")
+          root = ET.parse(report).getroot()
+          percent = float(root.attrib["line-rate"]) * 100.0
+
+          if percent >= 90.0:
+              color = "brightgreen"
+          elif percent >= 80.0:
+              color = "green"
+          elif percent >= 70.0:
+              color = "yellowgreen"
+          elif percent >= 60.0:
+              color = "yellow"
+          else:
+              color = "red"
+
+          badge = {
+              "schemaVersion": 1,
+              "label": "coverage",
+              "message": f"{percent:.1f}%",
+              "color": color,
+          }
+          Path("coverage-site/coverage-badge.json").write_text(json.dumps(badge) + "\n")
+          PY
+          printf '%s\n' \
+            '<!doctype html>' \
+            '<meta charset="utf-8">' \
+            '<meta http-equiv="refresh" content="0; url=coverage/">' \
+            '<link rel="canonical" href="coverage/">' \
+            '<title>supersearchr coverage</title>' \
+            '<a href="coverage/">Coverage report</a>' \
+            > coverage-site/index.html
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: coverage-site
+
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

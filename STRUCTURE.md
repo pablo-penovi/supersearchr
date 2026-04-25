@@ -1,7 +1,7 @@
 # Repository Structure
 
 This file summarizes tracked files to avoid re-scanning. Build artifacts in `zig-out/` are excluded by design.
-Current project version: `v0.3.12`.
+Current project version: `v0.3.13`.
 
 ## Root
 
@@ -17,6 +17,7 @@ Current project version: `v0.3.12`.
 ## GitHub Workflows (`.github/workflows/`)
 
 - `.github/workflows/ci.yml`: Pull request and `main` CI for tests, cross-compilation checks, and formatting.
+- `.github/workflows/coverage-pages.yml`: `main` and manual workflow that runs `zig build coverage`, publishes the merged kcov HTML report to GitHub Pages, and generates the Shields-compatible coverage badge endpoint.
 - `.github/workflows/release.yml`: `v*` tag release workflow that builds optimized executables and uploads them as release assets.
 
 ## Source (`src/`)

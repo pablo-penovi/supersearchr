@@ -1,9 +1,11 @@
 # supersearchr
 
+[![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fpablo-penovi.github.io%2Fsupersearchr%2Fcoverage-badge.json)](https://pablo-penovi.github.io/supersearchr/coverage/)
+
 Terminal-first BitTorrent search for [Jackett](https://github.com/Jackett/Jackett) + [Superseedr](https://github.com/Jagalite/superseedr), written in Zig 0.15.2.
 
 `supersearchr` lets you search Jackett from a TUI, browse sorted results, and send a selected magnet/torrent link to `superseedr add`. Searches query configured Jackett indexers in parallel and merge the results.
-Current project version: `v0.3.12`.
+Current project version: `v0.3.13`.
 
 ## Requirements
 
@@ -53,7 +55,7 @@ zig build test --summary all
 zig build coverage
 ```
 
-Coverage output is written to `coverage/`. Open `coverage/merged/kcov-merged/index.html` for the merged HTML report, or use `coverage/merged/kcov-merged/cobertura.xml` for Cobertura-compatible tooling.
+Coverage output is written to `coverage/`. Open `coverage/merged/kcov-merged/index.html` for the merged HTML report, or use `coverage/merged/kcov-merged/cobertura.xml` for Cobertura-compatible tooling. The `Coverage Pages` workflow publishes the merged report to GitHub Pages and serves the README coverage badge from the generated Cobertura summary.
 
 ## Installation
 
