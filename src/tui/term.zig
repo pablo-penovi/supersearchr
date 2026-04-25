@@ -41,6 +41,7 @@ var original_windows_input_mode: windows.DWORD = 0;
 var original_windows_output_mode: windows.DWORD = 0;
 var term_initialized: bool = false;
 var dim_persistent: bool = false;
+const escape_sequence_timeout_ms: i32 = 10;
 
 pub fn init() !void {
     term_initialized = true;
@@ -77,6 +78,9 @@ pub fn readKey() !Event {
     const b = buf[0];
 
     if (b == 0x1b) {
+        if (try consumeEscapeSequence(stdin)) {
+            return Event{ .key = .unknown, .value = 0 };
+        }
         return Event{ .key = .escape, .value = 0 };
     }
 
@@ -97,6 +101,90 @@ pub fn readKey() !Event {
     }
 
     return Event{ .key = .unknown, .value = b };
+}
+
+fn consumeEscapeSequence(stdin: std.fs.File) !bool {
+    if (builtin.os.tag == .windows) {
+        return consumeEscapeSequenceWindows(stdin);
+    }
+
+    return try consumeEscapeSequencePosix(stdin);
+}
+
+fn consumeEscapeSequencePosix(stdin: std.fs.File) !bool {
+    var poll_fds = [_]std.posix.pollfd{
+        .{
+            .fd = stdin.handle,
+            .events = std.posix.POLL.IN,
+            .revents = 0,
+        },
+    };
+
+    const ready = try std.posix.poll(&poll_fds, escape_sequence_timeout_ms);
+    if (ready == 0) return false;
+    if ((poll_fds[0].revents & std.posix.POLL.IN) == 0) return false;
+
+    try consumePendingEscapeBytesPosix(stdin);
+    return true;
+}
+
+fn consumeEscapeSequenceWindows(stdin: std.fs.File) !bool {
+    const stdin_handle = try windows.GetStdHandle(windows.STD_INPUT_HANDLE);
+    const wait_ms: windows.DWORD = @intCast(escape_sequence_timeout_ms);
+    windows.WaitForSingleObject(stdin_handle, wait_ms) catch |err| switch (err) {
+        error.WaitAbandoned => return false,
+        error.WaitTimeOut => return false,
+        else => return err,
+    };
+
+    try consumePendingEscapeBytesWindows(stdin, stdin_handle);
+    return true;
+}
+
+fn consumePendingEscapeBytesWindows(stdin: std.fs.File, stdin_handle: windows.HANDLE) !void {
+    var buf: [16]u8 = undefined;
+
+    while (true) {
+        const read_n = try stdin.read(&buf);
+        if (read_n == 0) return;
+        if (endsEscapeSequence(buf[0..read_n])) return;
+
+        windows.WaitForSingleObject(stdin_handle, 0) catch |err| switch (err) {
+            error.WaitAbandoned => return,
+            error.WaitTimeOut => return,
+            else => return err,
+        };
+    }
+}
+
+fn consumePendingEscapeBytesPosix(stdin: std.fs.File) !void {
+    var poll_fds = [_]std.posix.pollfd{
+        .{
+            .fd = stdin.handle,
+            .events = std.posix.POLL.IN,
+            .revents = 0,
+        },
+    };
+    var buf: [16]u8 = undefined;
+
+    while (true) {
+        const read_n = try stdin.read(&buf);
+        if (read_n == 0) return;
+        if (endsEscapeSequence(buf[0..read_n])) return;
+
+        poll_fds[0].revents = 0;
+        const ready = try std.posix.poll(&poll_fds, 0);
+        if (ready == 0) return;
+        if ((poll_fds[0].revents & std.posix.POLL.IN) == 0) return;
+    }
+}
+
+fn endsEscapeSequence(bytes: []const u8) bool {
+    for (bytes, 0..) |byte, idx| {
+        if (idx == 0 and (byte == '[' or byte == 'O' or byte == ']')) continue;
+        if (byte >= 0x40 and byte <= 0x7e) return true;
+    }
+    return false;
 }
 
 pub fn readKeyWithTimeout(timeout_ms: i32) !?Event {
@@ -383,6 +471,16 @@ test "cursor position escape code" {
 
     const result = std.fmt.bufPrint(&buf, "\x1b[{};{}H", .{ 5, 10 }) catch unreachable;
     try Testing.expectEqualStrings("\x1b[5;10H", result);
+}
+
+test "endsEscapeSequence waits for CSI final byte" {
+    try std.testing.expect(!endsEscapeSequence("["));
+    try std.testing.expect(endsEscapeSequence("[A"));
+    try std.testing.expect(endsEscapeSequence("[1;5D"));
+}
+
+test "endsEscapeSequence treats alt key suffix as complete sequence" {
+    try std.testing.expect(endsEscapeSequence("x"));
 }
 
 test "256 color fg escape code" {

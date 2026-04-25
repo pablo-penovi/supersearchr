@@ -1060,6 +1060,25 @@ test "ResultsWidget handleEvent enter with no torrents continues" {
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
 }
 
+test "ResultsWidget handleEvent unsupported key does nothing" {
+    const allocator = std.testing.allocator;
+    var widget = ResultsWidget.init(allocator);
+    defer widget.deinit();
+
+    const torrents = &[_]Torrent{
+        .{ .title = "Test1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
+        .{ .title = "Test2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
+    };
+    widget.setTorrents(torrents, 2);
+
+    const event = term.Event{ .key = .unknown, .value = 0 };
+    const action = widget.handleEvent(event, 20);
+
+    try std.testing.expectEqual(ResultsAction.continue_browsing, action);
+    try std.testing.expectEqual(@as(usize, 0), widget.cursor);
+    try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
+}
+
 test "ResultsWidget handleEvent escape returns cancel" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);

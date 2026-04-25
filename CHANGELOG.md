@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.3.9
+
+### Fixed
+- Ignored unsupported results-screen key presses instead of treating terminal escape sequences, including arrow keys, as `ESC` exit.
+
+### Changed
+- Added terminal key parser tests to the standard `zig build test` step.
+
 ## 0.3.8
 
 ### Changed
