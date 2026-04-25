@@ -80,7 +80,17 @@ When the user asks you to start a new feature, he should tell you what the featu
 **MANDATORY**: At some point, the user will ask you to finish or finalize a feature. At this point, you should:
 
 1. Run corresponding day tests to ensure they pass. If they don't, investigate, diagnose, but DO NOT FIX. Inform the user of your findings and the changes that you think would fix the issue.
-2. If tests pass, ask the user for the new version number.
-3. Update version references and documentation as needed using that version number, including `STRUCTURE.md`, `README.md`, and `CHANGELOG.md`.
+2. Ensure user-facing changes are documented in the `Unreleased` section of `CHANGELOG.md` unless the user explicitly asked to create a release.
+3. Update documentation as needed, including `STRUCTURE.md` and `README.md`, without bumping the version unless the user explicitly asked for a version bump or release.
 4. Commit and push any uncommitted changes and push any unpushed commits.
 5. Create a PR using GitHub CLI. Be sure to adequately describe the changes in the PR description. The PR title should be descriptive but short. To avoid shell expansion mangling the description, always write the PR body to a markdown file in `/tmp` and pass it with `gh pr create --body-file /tmp/<name>.md` (or `gh pr edit --body-file /tmp/<name>.md`).
+
+### Creating a release
+
+**MANDATORY**: When the user asks to create a new release, you should:
+
+1. Ask the user for the new version number if it has not already been provided.
+2. Move the applicable entries from the `Unreleased` section of `CHANGELOG.md` into a new section for that version.
+3. Update version references and documentation as needed using that version number, including `STRUCTURE.md`, `README.md`, and `CHANGELOG.md`.
+4. Commit and push any release changes.
+5. Create the release on GitHub using GitHub CLI.
