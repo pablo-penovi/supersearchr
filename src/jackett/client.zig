@@ -578,6 +578,7 @@ fn parseTorrents(allocator: std.mem.Allocator, xml: []const u8) ![]Torrent {
             i += xml_tags.item.len;
             var title: ?[]const u8 = null;
             var link: ?[]const u8 = null;
+            var link_priority: u8 = 0;
             var link_source: []const u8 = "none";
             var seeders: u32 = 0;
             var peers: u32 = 0;
@@ -590,18 +591,23 @@ fn parseTorrents(allocator: std.mem.Allocator, xml: []const u8) ![]Torrent {
                     title = result.value;
                     i = result.end;
                 } else if (extractMagnetUrlAttr(xml, i)) |result| {
-                    link = result.value;
-                    link_source = "torznab:attr magneturl";
+                    if (link_priority < 2) {
+                        link = result.value;
+                        link_priority = 2;
+                        link_source = "torznab:attr magneturl";
+                    }
                     i = result.end;
                 } else if (extractStringField(xml, i, xml_tags.link)) |result| {
-                    if (link == null) {
+                    if (link_priority < 1) {
                         link = result.value;
+                        link_priority = 1;
                         link_source = "link";
                     }
                     i = result.end;
                 } else if (extractEnclosureUrl(xml, i)) |result| {
-                    if (link == null) {
+                    if (link_priority < 3) {
                         link = result.value;
+                        link_priority = 3;
                         link_source = "enclosure url";
                     }
                     i = result.end;
@@ -893,6 +899,24 @@ test "sort by seeders descending" {
     try std.testing.expectEqual(@as(u32, 1000), torrents[0].seeders);
     try std.testing.expectEqual(@as(u32, 100), torrents[1].seeders);
     try std.testing.expectEqual(@as(u32, 10), torrents[2].seeders);
+}
+
+test "prefer enclosure over torznab magneturl and link" {
+    const allocator = std.testing.allocator;
+
+    const xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?><rss version=\"1.0\"><channel><item><title>Has All Links</title><link>https://example.com/download.php?id=42</link><torznab:attr name=\"magneturl\" value=\"magnet:?xt=urn:btih:abc123&amp;dn=Test\"/><enclosure url=\"magnet:?xt=urn:btih:enclosure&amp;dn=Preferred\" type=\"application/x-bittorrent;x-scheme-handler/magnet\"/></item></channel></rss>";
+
+    const torrents = try parseTorrents(allocator, xml);
+    defer {
+        for (torrents) |t| {
+            allocator.free(t.title);
+            allocator.free(t.link);
+        }
+        allocator.free(torrents);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), torrents.len);
+    try std.testing.expectEqualStrings("magnet:?xt=urn:btih:enclosure&dn=Preferred", torrents[0].link);
 }
 
 test "prefer torznab magneturl over link and decode entities" {
