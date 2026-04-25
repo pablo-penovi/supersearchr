@@ -7,6 +7,9 @@ All notable changes to this project are documented in this file.
 ### Changed
 - Updated agent workflows so finalizing a feature no longer requires a version bump; unreleased changes stay in `CHANGELOG.md` until an explicit release is requested.
 
+### Fixed
+- Pinned the Coverage Pages workflow to Ubuntu 22.04 so `kcov` can be installed from apt.
+
 ## 0.3.13
 
 ### Added
