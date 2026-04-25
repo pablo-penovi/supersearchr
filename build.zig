@@ -48,7 +48,7 @@ fn addModuleTest(
 }
 
 pub fn build(b: *std.Build) void {
-    const app_version = "0.3.8";
+    const app_version = "0.3.9";
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -151,6 +151,8 @@ pub fn build(b: *std.Build) void {
 
     const update_checker_tests = addModuleTest(b, "test-update-checker", "src/update_checker.zig", target, optimize);
 
+    const term_tests = addModuleTest(b, "test-term", "src/tui/term.zig", target, optimize);
+
     const search_widget_tests = addModuleTest(b, "test-search", "src/tui/widgets/search.zig", target, optimize);
     addImports(search_widget_tests.artifact.root_module, &.{
         .{ .name = "term", .module = term_mod },
@@ -208,6 +210,7 @@ pub fn build(b: *std.Build) void {
         jackett_tests.run,
         superseedr_tests.run,
         update_checker_tests.run,
+        term_tests.run,
         theme_tests.run,
         panels_tests.run,
         search_widget_tests.run,
