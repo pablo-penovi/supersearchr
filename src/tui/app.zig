@@ -38,13 +38,15 @@ const ErrorState = struct {
 const SpinnerContext = struct {
     message: []const u8,
     stop: *std.atomic.Value(bool),
+    progress: ?*jackett.SearchProgress,
     row: u16,
     col: u16,
     color: u8,
 };
 
 const AppDeps = struct {
-    jackett_search_executor: *const fn (allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]Torrent = jackett.defaultSearchExecutor,
+    jackett_body_executor: jackett.BodyExecutor = jackett.defaultBodyExecutor,
+    jackett_parallel_requests: usize = 4,
     superseedr_executor: *const fn (allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void = superseedr.defaultExecutor,
     superseedr_process_checker: *const fn (allocator: std.mem.Allocator) anyerror!bool = superseedr.defaultProcessChecker,
     superseedr_spawner: *const fn (allocator: std.mem.Allocator, terminal: []const u8) anyerror!void = superseedr.defaultSpawner,
@@ -177,17 +179,39 @@ fn spinnerThread(ctx: SpinnerContext) void {
     while (!ctx.stop.load(.acquire)) {
         term.moveCursor(ctx.row, ctx.col);
         term.setFg256(ctx.color);
-        const line = std.fmt.bufPrint(&buf, "{s} {c}", .{ ctx.message, frames[frame] }) catch break;
+        const line = formatSpinnerLine(&buf, ctx, frames[frame]) catch break;
         stdout.writeAll(line) catch break;
+        stdout.writeAll("\x1b[K") catch break;
         term.resetColor();
         frame = (frame + 1) % frames.len;
         std.Thread.sleep(100 * std.time.ns_per_ms);
     }
     term.moveCursor(ctx.row, ctx.col);
     term.setFg256(ctx.color);
-    const line = std.fmt.bufPrint(&buf, "{s}  ", .{ctx.message}) catch return;
+    const line = formatSpinnerLine(&buf, ctx, ' ') catch return;
     stdout.writeAll(line) catch {};
+    stdout.writeAll("\x1b[K") catch {};
     term.resetColor();
+}
+
+fn formatSpinnerLine(buf: []u8, ctx: SpinnerContext, frame: u8) ![]u8 {
+    const progress = ctx.progress orelse return std.fmt.bufPrint(buf, "{s} {c}", .{ ctx.message, frame });
+    const snapshot = progress.snapshot();
+    return switch (snapshot.phase) {
+        .discovering => std.fmt.bufPrint(buf, " Discovering indexers... {c}", .{frame}),
+        .querying => blk: {
+            if (snapshot.failed == 0) {
+                break :blk std.fmt.bufPrint(buf, " Querying indexers {d}/{d} {c}", .{ snapshot.completed, snapshot.total, frame });
+            }
+            break :blk std.fmt.bufPrint(buf, " Querying indexers {d}/{d} ({d} failed) {c}", .{
+                snapshot.completed,
+                snapshot.total,
+                snapshot.failed,
+                frame,
+            });
+        },
+        .done => std.fmt.bufPrint(buf, " Querying indexers {d}/{d}  ", .{ snapshot.completed, snapshot.total }),
+    };
 }
 
 fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
@@ -256,17 +280,19 @@ fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
     }
 
     var stop = std.atomic.Value(bool).init(false);
+    var progress = jackett.SearchProgress.init();
     const spinner_row = if (compact) @as(u16, 3) else @as(u16, @intCast(top_pad + 6));
     const spinner_col = if (compact) @as(u16, 1) else @as(u16, @intCast(left_pad + 3));
     const thread = try std.Thread.spawn(.{}, spinnerThread, .{SpinnerContext{
         .message = " Contacting Jackett...",
         .stop = &stop,
+        .progress = &progress,
         .row = spinner_row,
         .col = spinner_col,
         .color = colors.accent,
     }});
 
-    transitionLoadingToNextState(app, query);
+    transitionLoadingToNextState(app, query, &progress);
     stop.store(true, .release);
     thread.join();
 }
@@ -359,8 +385,13 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
     }
 }
 
-fn searchWithAppDeps(app: *App, query: []const u8) jackett.JackettError![]Torrent {
-    return app.client.searchWithExecutor(query, app.deps.jackett_search_executor);
+fn searchWithAppDeps(app: *App, query: []const u8, progress: *jackett.SearchProgress) jackett.JackettError![]Torrent {
+    return app.client.searchIndexersInParallel(
+        query,
+        app.deps.jackett_body_executor,
+        progress,
+        app.deps.jackett_parallel_requests,
+    );
 }
 
 fn addLinkWithAppDeps(app: *App, link: []const u8) superseedr.AddLinkError!void {
@@ -374,8 +405,8 @@ fn addLinkWithAppDeps(app: *App, link: []const u8) superseedr.AddLinkError!void 
     );
 }
 
-fn transitionLoadingToNextState(app: *App, query: []const u8) void {
-    const torrents = searchWithAppDeps(app, query) catch |err| {
+fn transitionLoadingToNextState(app: *App, query: []const u8, progress: *jackett.SearchProgress) void {
+    const torrents = searchWithAppDeps(app, query, progress) catch |err| {
         app.state = .{ .err = .{ .message = getErrorMessage(err) } };
         return;
     };
@@ -483,17 +514,13 @@ fn loadingQueryWidth(term_cols: u16, panel_width: usize, compact: bool) usize {
 
 test "state transitions smoke path search -> loading -> results with injected deps" {
     const mock = struct {
-        fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]Torrent {
+        fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]u8 {
+            if (std.mem.indexOf(u8, url, "t=indexers&configured=true") != null) {
+                return allocator.dupe(u8, "<indexers><indexer id=\"linuxtracker\"><title>LinuxTracker</title></indexer></indexers>") catch error.OutOfMemory;
+            }
+            if (std.mem.indexOf(u8, url, "/indexers/linuxtracker/") == null) return error.ParseFailed;
             if (std.mem.indexOf(u8, url, "q=ubuntu") == null) return error.ParseFailed;
-
-            var torrents: []Torrent = try allocator.alloc(Torrent, 1);
-            torrents[0] = .{
-                .title = try allocator.dupe(u8, "Ubuntu ISO"),
-                .seeders = 120,
-                .leechers = 4,
-                .link = try allocator.dupe(u8, "magnet:?xt=urn:btih:abc"),
-            };
-            return torrents;
+            return allocator.dupe(u8, "<rss><channel><item><title>Ubuntu ISO</title><link>magnet:?xt=urn:btih:abc</link><torznab:attr name=\"seeders\" value=\"120\"/><torznab:attr name=\"peers\" value=\"4\"/></item></channel></rss>") catch error.OutOfMemory;
         }
     };
 
@@ -501,7 +528,7 @@ test "state transitions smoke path search -> loading -> results with injected de
         .allocator = std.testing.allocator,
         .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
         .deps = .{
-            .jackett_search_executor = mock.exec,
+            .jackett_body_executor = mock.exec,
         },
         .state = .{ .search = .{ .query = "" } },
         .running = true,
@@ -514,7 +541,8 @@ test "state transitions smoke path search -> loading -> results with injected de
     defer std.testing.allocator.free(query);
 
     app.state = .{ .loading = .{ .query = query } };
-    transitionLoadingToNextState(&app, query);
+    var progress = jackett.SearchProgress.init();
+    transitionLoadingToNextState(&app, query, &progress);
 
     switch (app.state) {
         .results => |results_state| {
@@ -528,7 +556,7 @@ test "state transitions smoke path search -> loading -> results with injected de
 
 test "state transitions smoke path loading failure goes to error" {
     const mock = struct {
-        fn exec(_: std.mem.Allocator, _: []const u8) jackett.JackettError![]Torrent {
+        fn exec(_: std.mem.Allocator, _: []const u8) jackett.JackettError![]u8 {
             return error.ConnectionRefused;
         }
     };
@@ -537,7 +565,7 @@ test "state transitions smoke path loading failure goes to error" {
         .allocator = std.testing.allocator,
         .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
         .deps = .{
-            .jackett_search_executor = mock.exec,
+            .jackett_body_executor = mock.exec,
         },
         .state = .{ .search = .{ .query = "" } },
         .running = true,
@@ -550,7 +578,8 @@ test "state transitions smoke path loading failure goes to error" {
     defer std.testing.allocator.free(query);
 
     app.state = .{ .loading = .{ .query = query } };
-    transitionLoadingToNextState(&app, query);
+    var progress = jackett.SearchProgress.init();
+    transitionLoadingToNextState(&app, query, &progress);
 
     switch (app.state) {
         .err => |error_state| try std.testing.expectEqualStrings(
@@ -672,19 +701,25 @@ test "refreshTerminalSize returns true and updates values when changed" {
     try std.testing.expectEqual(size.cols, app.term_cols);
 }
 
-test "searchWithAppDeps uses injected jackett search executor" {
+test "searchWithAppDeps uses injected jackett body executor" {
     const state = struct {
-        var called = false;
+        var indexers_called = false;
+        var search_called = false;
     };
-    state.called = false;
+    state.indexers_called = false;
+    state.search_called = false;
 
     const mock = struct {
-        fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]Torrent {
-            state.called = true;
-            if (std.mem.indexOf(u8, url, "/api/v2.0/indexers/all/results/torznab/api?apikey=test-key&q=ubuntu") == null) {
+        fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]u8 {
+            if (std.mem.indexOf(u8, url, "/api/v2.0/indexers/all/results/torznab/api?apikey=test-key&t=indexers&configured=true") != null) {
+                state.indexers_called = true;
+                return allocator.dupe(u8, "<indexers><indexer id=\"linuxtracker\"><title>LinuxTracker</title></indexer></indexers>") catch error.OutOfMemory;
+            }
+            state.search_called = true;
+            if (std.mem.indexOf(u8, url, "/api/v2.0/indexers/linuxtracker/results/torznab/api?apikey=test-key&t=search&q=ubuntu") == null) {
                 return error.ParseFailed;
             }
-            return allocator.alloc(Torrent, 0);
+            return allocator.dupe(u8, "<rss><channel></channel></rss>") catch error.OutOfMemory;
         }
     };
 
@@ -692,7 +727,8 @@ test "searchWithAppDeps uses injected jackett search executor" {
         .allocator = std.testing.allocator,
         .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
         .deps = .{
-            .jackett_search_executor = mock.exec,
+            .jackett_body_executor = mock.exec,
+            .jackett_parallel_requests = 1,
         },
         .state = .{ .search = .{ .query = "" } },
         .running = true,
@@ -701,10 +737,15 @@ test "searchWithAppDeps uses injected jackett search executor" {
         .terminal = "xterm",
     };
 
-    const torrents = try searchWithAppDeps(&app, "ubuntu");
+    var progress = jackett.SearchProgress.init();
+    const torrents = try searchWithAppDeps(&app, "ubuntu", &progress);
     defer std.testing.allocator.free(torrents);
-    try std.testing.expect(state.called);
+    try std.testing.expect(state.indexers_called);
+    try std.testing.expect(state.search_called);
     try std.testing.expectEqual(@as(usize, 0), torrents.len);
+    const snapshot = progress.snapshot();
+    try std.testing.expectEqual(@as(usize, 1), snapshot.total);
+    try std.testing.expectEqual(@as(usize, 1), snapshot.completed);
 }
 
 test "addLinkWithAppDeps uses injected superseedr dependencies" {

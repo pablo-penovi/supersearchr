@@ -2,8 +2,8 @@
 
 Terminal-first BitTorrent search for [Jackett](https://github.com/Jackett/Jackett) + [Superseedr](https://github.com/Jagalite/superseedr), written in Zig 0.15.2.
 
-`supersearchr` lets you search Jackett from a TUI, browse sorted results, and send a selected magnet/torrent link to `superseedr add`.
-Current project version: `v0.3.9`.
+`supersearchr` lets you search Jackett from a TUI, browse sorted results, and send a selected magnet/torrent link to `superseedr add`. Searches query configured Jackett indexers in parallel and merge the results.
+Current project version: `v0.3.10`.
 
 ## Requirements
 

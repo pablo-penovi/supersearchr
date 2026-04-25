@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.3.10
+
+### Added
+- Query configured Jackett indexers in parallel and merge sorted results instead of using the consolidated all-indexers search endpoint.
+- Show loading progress while discovering and querying Jackett indexers.
+
+### Fixed
+- Decode gzip-compressed Jackett responses before parsing indexer discovery XML.
+- Reject non-indexer discovery responses instead of silently treating them as zero configured indexers.
+
 ## 0.3.9
 
 ### Fixed
