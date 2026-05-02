@@ -110,6 +110,8 @@ Results screen:
 - `n` or `N`: new search
 - `Esc`: exit app
 
+Results show seeders, leechers, and torrent size when Jackett provides size metadata.
+
 State flow: `SEARCH -> LOADING -> RESULTS -> ERROR`
 
 ## Debug Logging
