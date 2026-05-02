@@ -416,23 +416,26 @@ const TableLayout = struct {
     title_col_width: usize,
     seeders_width: usize,
     leechers_width: usize,
+    size_width: usize,
     title_to_seeders_gap: usize,
     between_stats_gap: usize,
 
     const fixed_seeders_width: usize = 4;
     const fixed_leechers_width: usize = 4;
+    const fixed_size_width: usize = 8;
     const fixed_title_to_seeders_gap: usize = 2;
     const fixed_between_stats_gap: usize = 2;
     const fixed_left_padding: usize = 1;
     const fixed_right_padding: usize = 1;
 
     fn forInnerWidth(inner_width: usize) TableLayout {
-        const fixed_suffix = fixed_left_padding + fixed_title_to_seeders_gap + fixed_seeders_width + fixed_between_stats_gap + fixed_leechers_width + fixed_right_padding;
+        const fixed_suffix = fixed_left_padding + fixed_title_to_seeders_gap + fixed_seeders_width + fixed_between_stats_gap + fixed_leechers_width + fixed_between_stats_gap + fixed_size_width + fixed_right_padding;
         const title_width = if (inner_width > fixed_suffix) inner_width - fixed_suffix else 1;
         return .{
             .title_col_width = title_width,
             .seeders_width = fixed_seeders_width,
             .leechers_width = fixed_leechers_width,
+            .size_width = fixed_size_width,
             .title_to_seeders_gap = fixed_title_to_seeders_gap,
             .between_stats_gap = fixed_between_stats_gap,
         };
@@ -443,6 +446,7 @@ const TableLayout = struct {
             .title_col_width = 0,
             .seeders_width = fixed_seeders_width,
             .leechers_width = fixed_leechers_width,
+            .size_width = fixed_size_width,
             .title_to_seeders_gap = fixed_title_to_seeders_gap,
             .between_stats_gap = fixed_between_stats_gap,
         };
@@ -596,7 +600,7 @@ fn drawContentRow(
         selectedTitleForRender(widget, torrent.title, layout.title_col_width, trunc_buf[0..], marquee_buf[0..])
     else
         theme.truncateWithEllipsis(torrent.title, layout.title_col_width, trunc_buf[0..]);
-    const row = buildDataCells(&cell_buf, inner_width, layout, row_title, torrent.seeders, torrent.leechers);
+    const row = buildDataCells(&cell_buf, inner_width, layout, row_title, torrent.seeders, torrent.leechers, torrent.size_bytes);
 
     if (abs_idx == selected_idx) {
         term.setBg256(colors.selected_bg);
@@ -703,6 +707,8 @@ fn buildHeaderCells(buf: []u8, inner_width: usize, layout: TableLayout) []const 
     writeRightAligned(writer, "S", layout.seeders_width) catch return "";
     writeSpaces(writer, layout.between_stats_gap) catch return "";
     writeRightAligned(writer, "L", layout.leechers_width) catch return "";
+    writeSpaces(writer, layout.between_stats_gap) catch return "";
+    writeRightAligned(writer, "Size", layout.size_width) catch return "";
     writer.writeAll(" ") catch return "";
 
     const used = stream.getWritten().len;
@@ -719,6 +725,7 @@ fn buildDataCells(
     title: []const u8,
     seeders: u32,
     leechers: u32,
+    size_bytes: ?u64,
 ) []const u8 {
     var stream = std.io.fixedBufferStream(buf);
     const writer = stream.writer();
@@ -735,6 +742,11 @@ fn buildDataCells(
     var lbuf: [16]u8 = undefined;
     const leechers_text = std.fmt.bufPrint(&lbuf, "{d}", .{leechers}) catch "";
     writeRightAligned(writer, leechers_text, layout.leechers_width) catch return "";
+    writeSpaces(writer, layout.between_stats_gap) catch return "";
+
+    var size_buf: [16]u8 = undefined;
+    const size_text = formatSizeBytes(&size_buf, size_bytes);
+    writeRightAligned(writer, size_text, layout.size_width) catch return "";
     writer.writeAll(" ") catch return "";
 
     const used = stream.getWritten().len;
@@ -742,6 +754,16 @@ fn buildDataCells(
         writeSpaces(writer, inner_width - used) catch {};
     }
     return stream.getWritten();
+}
+
+fn formatSizeBytes(buf: []u8, size_bytes: ?u64) []const u8 {
+    const bytes = size_bytes orelse return "-";
+    const mib: u128 = 1024 * 1024;
+    const gib: u128 = mib * 1024;
+    const divisor = if (bytes >= gib) gib else mib;
+    const unit = if (bytes >= gib) "GB" else "MB";
+    const tenths = (@as(u128, bytes) * 10 + divisor / 2) / divisor;
+    return std.fmt.bufPrint(buf, "{d}.{d} {s}", .{ tenths / 10, tenths % 10, unit }) catch "-";
 }
 
 fn writeRightAligned(writer: anytype, text: []const u8, width: usize) !void {
@@ -961,15 +983,18 @@ test "header and data cells align stats columns for short title" {
     const header = buildHeaderCells(&hbuf, inner_width, layout);
 
     var rbuf: [256]u8 = undefined;
-    const row = buildDataCells(&rbuf, inner_width, layout, "Voyager", 7, 42);
+    const row = buildDataCells(&rbuf, inner_width, layout, "Voyager", 7, 42, 512 * 1024 * 1024);
 
     const s_header = std.mem.indexOfScalar(u8, header, 'S') orelse return error.TestUnexpectedResult;
     const l_header = std.mem.indexOfScalar(u8, header, 'L') orelse return error.TestUnexpectedResult;
-    const s_row = std.mem.lastIndexOfScalar(u8, row, '7') orelse return error.TestUnexpectedResult;
-    const l_row = std.mem.lastIndexOfScalar(u8, row, '2') orelse return error.TestUnexpectedResult;
+    const size_header = std.mem.indexOf(u8, header, "Size") orelse return error.TestUnexpectedResult;
+    const s_row = (std.mem.indexOf(u8, row, "   7") orelse return error.TestUnexpectedResult) + 3;
+    const l_row = (std.mem.indexOf(u8, row, "  42") orelse return error.TestUnexpectedResult) + 3;
+    const size_row = std.mem.indexOf(u8, row, "512.0 MB") orelse return error.TestUnexpectedResult;
 
     try std.testing.expectEqual(s_header, s_row);
     try std.testing.expectEqual(l_header, l_row);
+    try std.testing.expectEqual(size_header, size_row + 4);
 }
 
 test "stats columns stay aligned when title is truncated" {
@@ -984,15 +1009,27 @@ test "stats columns stay aligned when title is truncated" {
     const shown_title = theme.truncateWithEllipsis(long_title, layout.title_col_width, trunc_buf[0..]);
 
     var rbuf: [256]u8 = undefined;
-    const row = buildDataCells(&rbuf, inner_width, layout, shown_title, 999, 1000);
+    const row = buildDataCells(&rbuf, inner_width, layout, shown_title, 999, 1000, 12 * 1024 * 1024 * 1024 + 410 * 1024 * 1024);
 
     const s_header = std.mem.indexOfScalar(u8, header, 'S') orelse return error.TestUnexpectedResult;
     const l_header = std.mem.indexOfScalar(u8, header, 'L') orelse return error.TestUnexpectedResult;
-    const s_row = std.mem.lastIndexOfScalar(u8, row, '9') orelse return error.TestUnexpectedResult;
-    const l_row = std.mem.lastIndexOfScalar(u8, row, '0') orelse return error.TestUnexpectedResult;
+    const size_header = std.mem.indexOf(u8, header, "Size") orelse return error.TestUnexpectedResult;
+    const s_row = (std.mem.indexOf(u8, row, " 999") orelse return error.TestUnexpectedResult) + 3;
+    const l_row = (std.mem.indexOf(u8, row, "1000") orelse return error.TestUnexpectedResult) + 3;
+    const size_row = std.mem.indexOf(u8, row, "12.4 GB") orelse return error.TestUnexpectedResult;
 
     try std.testing.expectEqual(s_header, s_row);
     try std.testing.expectEqual(l_header, l_row);
+    try std.testing.expectEqual(size_header, size_row + 3);
+}
+
+test "formatSizeBytes renders missing megabytes and gigabytes" {
+    var buf: [16]u8 = undefined;
+
+    try std.testing.expectEqualStrings("-", formatSizeBytes(&buf, null));
+    try std.testing.expectEqualStrings("512.0 MB", formatSizeBytes(&buf, 512 * 1024 * 1024));
+    try std.testing.expectEqualStrings("1.0 GB", formatSizeBytes(&buf, 1024 * 1024 * 1024));
+    try std.testing.expectEqualStrings("12.4 GB", formatSizeBytes(&buf, 12 * 1024 * 1024 * 1024 + 410 * 1024 * 1024));
 }
 
 test "ResultsWidget handleEvent j moves cursor down" {

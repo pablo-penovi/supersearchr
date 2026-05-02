@@ -4,6 +4,7 @@ pub const Torrent = struct {
     title: []const u8,
     seeders: u32,
     leechers: u32,
+    size_bytes: ?u64 = null,
     link: []const u8,
 };
 
@@ -18,5 +19,6 @@ test "Torrent stores torrent metadata" {
     try std.testing.expectEqualStrings("Ubuntu ISO", torrent.title);
     try std.testing.expectEqual(@as(u32, 42), torrent.seeders);
     try std.testing.expectEqual(@as(u32, 7), torrent.leechers);
+    try std.testing.expectEqual(@as(?u64, null), torrent.size_bytes);
     try std.testing.expectEqualStrings("magnet:?xt=urn:btih:abc", torrent.link);
 }
