@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.3.14
+
+### Added
+- Display torrent sizes in the non-compact results table when Jackett provides size metadata.
+
 ### Changed
 - Updated agent workflows so finalizing a feature no longer requires a version bump; unreleased changes stay in `CHANGELOG.md` until an explicit release is requested.
 
