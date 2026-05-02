@@ -422,7 +422,7 @@ const TableLayout = struct {
 
     const fixed_seeders_width: usize = 4;
     const fixed_leechers_width: usize = 4;
-    const fixed_size_width: usize = 8;
+    const fixed_size_width: usize = 9;
     const fixed_title_to_seeders_gap: usize = 2;
     const fixed_between_stats_gap: usize = 2;
     const fixed_left_padding: usize = 1;
@@ -763,6 +763,9 @@ fn formatSizeBytes(buf: []u8, size_bytes: ?u64) []const u8 {
     const divisor = if (bytes >= gib) gib else mib;
     const unit = if (bytes >= gib) "GB" else "MB";
     const tenths = (@as(u128, bytes) * 10 + divisor / 2) / divisor;
+    if (tenths % 10 == 0) {
+        return std.fmt.bufPrint(buf, "{d} {s}", .{ tenths / 10, unit }) catch "-";
+    }
     return std.fmt.bufPrint(buf, "{d}.{d} {s}", .{ tenths / 10, tenths % 10, unit }) catch "-";
 }
 
@@ -990,11 +993,11 @@ test "header and data cells align stats columns for short title" {
     const size_header = std.mem.indexOf(u8, header, "Size") orelse return error.TestUnexpectedResult;
     const s_row = (std.mem.indexOf(u8, row, "   7") orelse return error.TestUnexpectedResult) + 3;
     const l_row = (std.mem.indexOf(u8, row, "  42") orelse return error.TestUnexpectedResult) + 3;
-    const size_row = std.mem.indexOf(u8, row, "512.0 MB") orelse return error.TestUnexpectedResult;
+    const size_row = std.mem.indexOf(u8, row, "512 MB") orelse return error.TestUnexpectedResult;
 
     try std.testing.expectEqual(s_header, s_row);
     try std.testing.expectEqual(l_header, l_row);
-    try std.testing.expectEqual(size_header, size_row + 4);
+    try std.testing.expectEqual(size_header + 3, size_row + 5);
 }
 
 test "stats columns stay aligned when title is truncated" {
@@ -1027,8 +1030,10 @@ test "formatSizeBytes renders missing megabytes and gigabytes" {
     var buf: [16]u8 = undefined;
 
     try std.testing.expectEqualStrings("-", formatSizeBytes(&buf, null));
-    try std.testing.expectEqualStrings("512.0 MB", formatSizeBytes(&buf, 512 * 1024 * 1024));
-    try std.testing.expectEqualStrings("1.0 GB", formatSizeBytes(&buf, 1024 * 1024 * 1024));
+    try std.testing.expectEqualStrings("12 MB", formatSizeBytes(&buf, 12 * 1024 * 1024));
+    try std.testing.expectEqualStrings("512 MB", formatSizeBytes(&buf, 512 * 1024 * 1024));
+    try std.testing.expectEqualStrings("1 GB", formatSizeBytes(&buf, 1024 * 1024 * 1024));
+    try std.testing.expectEqualStrings("12 GB", formatSizeBytes(&buf, 12 * 1024 * 1024 * 1024));
     try std.testing.expectEqualStrings("12.4 GB", formatSizeBytes(&buf, 12 * 1024 * 1024 * 1024 + 410 * 1024 * 1024));
 }
 
