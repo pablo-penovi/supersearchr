@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Fixed
+- Updated the Coverage Pages workflow to use Node.js 24-compatible GitHub Pages actions.
+
 ## 0.3.14
 
 ### Added
