@@ -58,7 +58,7 @@ fn addModuleTest(
 }
 
 pub fn build(b: *std.Build) void {
-    const app_version = "0.3.14";
+    const app_version = "0.4.0";
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -69,6 +69,7 @@ pub fn build(b: *std.Build) void {
     const build_options_mod = build_options.createModule();
 
     const config_mod = b.createModule(.{ .root_source_file = b.path("src/config.zig") });
+    const compat_mod = b.createModule(.{ .root_source_file = b.path("src/compat.zig") });
     const jackett_mod = b.createModule(.{ .root_source_file = b.path("src/jackett/client.zig") });
     const superseedr_mod = b.createModule(.{ .root_source_file = b.path("src/superseedr/client.zig") });
     const term_mod = b.createModule(.{ .root_source_file = b.path("src/tui/term.zig") });
@@ -81,30 +82,47 @@ pub fn build(b: *std.Build) void {
     const results_widget_mod = b.createModule(.{ .root_source_file = b.path("src/tui/widgets/results.zig") });
     const app_mod = b.createModule(.{ .root_source_file = b.path("src/tui/app.zig") });
 
+    addImports(config_mod, &.{
+        .{ .name = "compat", .module = compat_mod },
+    });
+    addImports(debug_log_mod, &.{
+        .{ .name = "compat", .module = compat_mod },
+    });
+    addImports(update_checker_mod, &.{
+        .{ .name = "compat", .module = compat_mod },
+    });
+    addImports(term_mod, &.{
+        .{ .name = "compat", .module = compat_mod },
+    });
     addImports(theme_mod, &.{
         .{ .name = "term", .module = term_mod },
     });
     addImports(jackett_mod, &.{
         .{ .name = "torrent", .module = torrent_mod },
         .{ .name = "debug_log", .module = debug_log_mod },
+        .{ .name = "compat", .module = compat_mod },
     });
     addImports(superseedr_mod, &.{
         .{ .name = "debug_log", .module = debug_log_mod },
+        .{ .name = "compat", .module = compat_mod },
     });
     addImports(search_widget_mod, &.{
         .{ .name = "term", .module = term_mod },
         .{ .name = "theme", .module = theme_mod },
         .{ .name = "build_options", .module = build_options_mod },
+        .{ .name = "compat", .module = compat_mod },
     });
     addImports(results_widget_mod, &.{
         .{ .name = "term", .module = term_mod },
         .{ .name = "theme", .module = theme_mod },
         .{ .name = "torrent", .module = torrent_mod },
+        .{ .name = "compat", .module = compat_mod },
     });
     addImports(panels_mod, &.{
         .{ .name = "term", .module = term_mod },
         .{ .name = "theme", .module = theme_mod },
         .{ .name = "results", .module = results_widget_mod },
+        .{ .name = "compat", .module = compat_mod },
     });
     addImports(app_mod, &.{
         .{ .name = "config", .module = config_mod },
@@ -119,6 +137,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "build_options", .module = build_options_mod },
         .{ .name = "torrent", .module = torrent_mod },
         .{ .name = "debug_log", .module = debug_log_mod },
+        .{ .name = "compat", .module = compat_mod },
     });
 
     const exe = b.addExecutable(.{
@@ -148,29 +167,41 @@ pub fn build(b: *std.Build) void {
     }
 
     const config_tests = addModuleTest(b, "test-config", "src/config.zig", target, optimize, strip);
+    addImports(config_tests.artifact.root_module, &.{
+        .{ .name = "compat", .module = compat_mod },
+    });
 
     const jackett_tests = addModuleTest(b, "test-jackett", "src/jackett/client.zig", target, optimize, strip);
     addImports(jackett_tests.artifact.root_module, &.{
         .{ .name = "torrent", .module = torrent_mod },
         .{ .name = "debug_log", .module = debug_log_mod },
+        .{ .name = "compat", .module = compat_mod },
     });
 
     const superseedr_tests = addModuleTest(b, "test-superseedr", "src/superseedr/client.zig", target, optimize, strip);
     addImports(superseedr_tests.artifact.root_module, &.{
         .{ .name = "debug_log", .module = debug_log_mod },
+        .{ .name = "compat", .module = compat_mod },
     });
 
     const update_checker_tests = addModuleTest(b, "test-update-checker", "src/update_checker.zig", target, optimize, strip);
+    addImports(update_checker_tests.artifact.root_module, &.{
+        .{ .name = "compat", .module = compat_mod },
+    });
 
     const torrent_tests = addModuleTest(b, "test-torrent", "src/structs/torrent.zig", target, optimize, strip);
 
     const term_tests = addModuleTest(b, "test-term", "src/tui/term.zig", target, optimize, strip);
+    addImports(term_tests.artifact.root_module, &.{
+        .{ .name = "compat", .module = compat_mod },
+    });
 
     const search_widget_tests = addModuleTest(b, "test-search", "src/tui/widgets/search.zig", target, optimize, strip);
     addImports(search_widget_tests.artifact.root_module, &.{
         .{ .name = "term", .module = term_mod },
         .{ .name = "theme", .module = theme_mod },
         .{ .name = "build_options", .module = build_options_mod },
+        .{ .name = "compat", .module = compat_mod },
     });
 
     const results_widget_tests = addModuleTest(b, "test-results", "src/tui/widgets/results.zig", target, optimize, strip);
@@ -178,6 +209,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "term", .module = term_mod },
         .{ .name = "theme", .module = theme_mod },
         .{ .name = "torrent", .module = torrent_mod },
+        .{ .name = "compat", .module = compat_mod },
     });
 
     const theme_tests = addModuleTest(b, "test-theme", "src/tui/theme.zig", target, optimize, strip);
@@ -190,6 +222,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "term", .module = term_mod },
         .{ .name = "theme", .module = theme_mod },
         .{ .name = "results", .module = results_widget_mod },
+        .{ .name = "compat", .module = compat_mod },
     });
 
     const app_tests = addModuleTest(b, "test-app", "src/tui/app.zig", target, optimize, strip);
@@ -197,6 +230,7 @@ pub fn build(b: *std.Build) void {
     addImports(app_tests_jackett_mod, &.{
         .{ .name = "torrent", .module = torrent_mod },
         .{ .name = "debug_log", .module = debug_log_mod },
+        .{ .name = "compat", .module = compat_mod },
     });
     addImports(app_tests.artifact.root_module, &.{
         .{ .name = "config", .module = config_mod },
@@ -211,6 +245,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "build_options", .module = build_options_mod },
         .{ .name = "torrent", .module = torrent_mod },
         .{ .name = "debug_log", .module = debug_log_mod },
+        .{ .name = "compat", .module = compat_mod },
     });
 
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
@@ -251,7 +286,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = app_tests.name, .artifact = app_tests.artifact },
     };
 
-    const clean_coverage = b.addRemoveDirTree(b.path("coverage"));
+    const clean_coverage = b.addSystemCommand(&.{ "rm", "-rf", "coverage" });
     const mkdir_coverage = b.addSystemCommand(&.{ "mkdir", "-p" });
     mkdir_coverage.step.dependOn(&clean_coverage.step);
     for (coverage_tests) |coverage_test| {

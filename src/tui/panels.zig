@@ -2,6 +2,7 @@ const std = @import("std");
 const term = @import("term");
 const theme = @import("theme");
 const results_widget = @import("results");
+const compat = @import("compat");
 
 pub const RefreshTerminalSizeFn = *const fn (term_rows: *u16, term_cols: *u16) bool;
 
@@ -98,7 +99,7 @@ pub fn renderError(message: []const u8) void {
 }
 
 pub fn renderNoticePanel(title: []const u8, message: []const u8, title_color: u8, clear_backdrop: bool) void {
-    const stdout = std.fs.File.stdout();
+    const stdout = compat.stdoutWriter();
     const colors = theme.superseedr_like;
     const border = theme.unicode_border;
     const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
@@ -172,6 +173,230 @@ pub fn renderNoticePanel(title: []const u8, message: []const u8, title_color: u8
 
     term.moveCursor(layout.top_row + 4, layout.panel_col);
     theme.drawPanelBottom(stdout, layout.panel_width, border, colors) catch {};
+}
+
+pub fn renderFailedIndexersOverlay(
+    term_rows: *u16,
+    term_cols: *u16,
+    refresh_terminal_size: RefreshTerminalSizeFn,
+    widget: *results_widget.ResultsWidget,
+) void {
+    term.discardPendingInput();
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
+
+    while (true) {
+        if (refresh_terminal_size(term_rows, term_cols)) {
+            needs_render = true;
+        }
+
+        if (needs_render) {
+            term.setDimPersistent(true);
+            widget.force_full_redraw = true;
+            widget.render(term_rows.*, term_cols.*);
+            term.setDimPersistent(false);
+
+            drawFailedIndexersModal(widget.failed_indexers.items);
+            needs_render = false;
+        }
+
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return;
+        if (maybe_event != null) {
+            term.discardPendingInput();
+            return;
+        }
+    }
+}
+
+fn drawFailedIndexersModal(failed_indexers: []const []const u8) void {
+    const stdout = compat.stdoutWriter();
+    const colors = theme.superseedr_like;
+    const border = theme.unicode_border;
+    const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
+
+    const is_compact = theme.isCompactViewport(size.rows, size.cols);
+    if (is_compact) {
+        term.moveCursor(1, 1);
+        term.setFg256(colors.err);
+        term.setBold(true);
+        stdout.writeAll("Failed Indexers:\r\n") catch {};
+        term.setBold(false);
+        for (failed_indexers) |name| {
+            term.setFg256(colors.text);
+            var item_buf: [128]u8 = undefined;
+            const item_line = std.fmt.bufPrint(&item_buf, " • {s}\r\n", .{name}) catch name;
+            stdout.writeAll(item_line) catch {};
+        }
+        term.setFg256(colors.accent);
+        stdout.writeAll("Press any key to close...") catch {};
+        term.resetColor();
+        return;
+    }
+
+    const panel_width = @min(@as(usize, 50), @as(usize, @intCast(size.cols - 4)));
+    const left_pad = (@as(usize, @intCast(size.cols)) - panel_width) / 2;
+    const panel_height = 5 + failed_indexers.len;
+    const top_pad = @max(@as(usize, 2), (@as(usize, @intCast(size.rows)) - panel_height) / 2);
+    const panel_col = @as(u16, @intCast(left_pad + 1));
+    const top_row = @as(u16, @intCast(top_pad));
+
+    // Top border
+    term.moveCursor(top_row, panel_col);
+    theme.drawPanelTop(stdout, panel_width, border, colors) catch {};
+
+    // Title row
+    term.moveCursor(top_row + 1, panel_col);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.setFg256(colors.err);
+    term.setBold(true);
+    var title_buf: [64]u8 = undefined;
+    const title_line = std.fmt.bufPrint(&title_buf, " Failed Indexers ", .{}) catch " Failed Indexers ";
+    theme.writePadded(stdout, title_line, panel_width - 2) catch {};
+    term.setBold(false);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.resetColor();
+    stdout.writeAll("\r\n") catch {};
+
+    // List of failed indexers
+    for (failed_indexers, 0..) |name, idx| {
+        term.moveCursor(top_row + 2 + @as(u16, @intCast(idx)), panel_col);
+        var item_buf: [128]u8 = undefined;
+        const item_line = std.fmt.bufPrint(&item_buf, " • {s}", .{name}) catch name;
+        theme.drawPanelRow(stdout, panel_width, item_line, border, colors) catch {};
+    }
+
+    // Call-to-action close row
+    const footer_row = top_row + 2 + @as(u16, @intCast(failed_indexers.len));
+    term.moveCursor(footer_row, panel_col);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.setFg256(colors.accent); // Call-to-action color
+    theme.writePadded(stdout, " Press any key to close ", panel_width - 2) catch {};
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.resetColor();
+    stdout.writeAll("\r\n") catch {};
+
+    // Bottom border
+    term.moveCursor(footer_row + 1, panel_col);
+    theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
+}
+
+pub fn renderExitConfirmationOverlay(
+    term_rows: *u16,
+    term_cols: *u16,
+    refresh_terminal_size: RefreshTerminalSizeFn,
+    context: anytype,
+) bool {
+    term.discardPendingInput();
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
+
+    while (true) {
+        if (refresh_terminal_size(term_rows, term_cols)) {
+            needs_render = true;
+        }
+
+        if (needs_render) {
+            term.setDimPersistent(true);
+            if (comptime @hasField(@TypeOf(context.*), "force_full_redraw")) {
+                context.force_full_redraw = true;
+                context.render(term_rows.*, term_cols.*);
+            } else {
+                context.has_drawn_once = false;
+                context.render();
+            }
+            term.setDimPersistent(false);
+
+            drawExitConfirmationModal();
+            needs_render = false;
+        }
+
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return false;
+        if (maybe_event) |event| {
+            term.discardPendingInput();
+            if (event.key == .escape) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    }
+}
+
+fn drawExitConfirmationModal() void {
+    const stdout = compat.stdoutWriter();
+    const colors = theme.superseedr_like;
+    const border = theme.unicode_border;
+    const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
+
+    const is_compact = theme.isCompactViewport(size.rows, size.cols);
+    if (is_compact) {
+        term.moveCursor(1, 1);
+        term.setFg256(colors.err);
+        term.setBold(true);
+        stdout.writeAll("Exit Confirmation:\r\n") catch {};
+        term.setBold(false);
+        term.setFg256(colors.text);
+        stdout.writeAll("Press ESC again to exit,\r\n") catch {};
+        stdout.writeAll("any other key to cancel.\r\n") catch {};
+        term.resetColor();
+        return;
+    }
+
+    const panel_width = @min(@as(usize, 52), @as(usize, @intCast(size.cols - 4)));
+    const left_pad = (@as(usize, @intCast(size.cols)) - panel_width) / 2;
+    const panel_height = 5;
+    const top_pad = @max(@as(usize, 2), (@as(usize, @intCast(size.rows)) - panel_height) / 2);
+    const panel_col = @as(u16, @intCast(left_pad + 1));
+    const top_row = @as(u16, @intCast(top_pad));
+
+    // Top border
+    term.moveCursor(top_row, panel_col);
+    theme.drawPanelTop(stdout, panel_width, border, colors) catch {};
+
+    // Title row
+    term.moveCursor(top_row + 1, panel_col);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.setFg256(colors.err);
+    term.setBold(true);
+    var title_buf: [64]u8 = undefined;
+    const title_line = std.fmt.bufPrint(&title_buf, " Exit Confirmation ", .{}) catch " Exit Confirmation ";
+    theme.writePadded(stdout, title_line, panel_width - 2) catch {};
+    term.setBold(false);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.resetColor();
+    stdout.writeAll("\r\n") catch {};
+
+    // Message row 1
+    term.moveCursor(top_row + 2, panel_col);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.setFg256(colors.text);
+    theme.writePadded(stdout, " Press ESC again to exit, ", panel_width - 2) catch {};
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.resetColor();
+    stdout.writeAll("\r\n") catch {};
+
+    // Message row 2
+    term.moveCursor(top_row + 3, panel_col);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.setFg256(colors.muted);
+    theme.writePadded(stdout, " any other key to cancel. ", panel_width - 2) catch {};
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.resetColor();
+    stdout.writeAll("\r\n") catch {};
+
+    // Bottom border
+    term.moveCursor(top_row + 4, panel_col);
+    theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 }
 
 test "computeNoticePanelLayout uses compact mode below breakpoint" {

@@ -3,7 +3,6 @@ const config = @import("config");
 const jackett = @import("jackett");
 const superseedr = @import("superseedr");
 const term = @import("term");
-const theme = @import("theme");
 const panels = @import("panels");
 const search_widget = @import("search");
 const results_widget = @import("results");
@@ -11,11 +10,11 @@ const update_checker = @import("update_checker");
 const build_options = @import("build_options");
 const Torrent = @import("torrent").Torrent;
 const debug_log = @import("debug_log");
+const compat = @import("compat");
 
 const State = union(enum) {
     search: SearchState,
     results: ResultsState,
-    loading: LoadingState,
     err: ErrorState,
 };
 
@@ -24,24 +23,14 @@ const SearchState = struct {
 };
 
 const ResultsState = struct {
-    torrents: []Torrent,
-};
-
-const LoadingState = struct {
-    query: []const u8,
+    query: []u8,
+    torrents: std.ArrayList(Torrent),
+    search_session: ?*jackett.SearchSession,
+    live_status: results_widget.ResultsWidget.LiveStatus,
 };
 
 const ErrorState = struct {
     message: []const u8,
-};
-
-const SpinnerContext = struct {
-    message: []const u8,
-    stop: *std.atomic.Value(bool),
-    progress: ?*jackett.SearchProgress,
-    row: u16,
-    col: u16,
-    color: u8,
 };
 
 const AppDeps = struct {
@@ -105,9 +94,6 @@ pub fn runWithDeps(allocator: std.mem.Allocator, cfg: config.Config, deps: AppDe
             .search => {
                 try runSearchState(&app);
             },
-            .loading => |*loading_state| {
-                try runLoadingState(&app, loading_state);
-            },
             .results => |*results_state| {
                 try runResultsState(&app, results_state);
             },
@@ -121,6 +107,13 @@ pub fn runWithDeps(allocator: std.mem.Allocator, cfg: config.Config, deps: AppDe
 fn runSearchState(app: *App) !void {
     var widget = search_widget.SearchWidget.init(app.allocator);
     defer widget.deinit();
+
+    if (app.state.search.query.len > 0) {
+        try widget.setQuery(app.state.search.query);
+        app.allocator.free(app.state.search.query);
+        app.state.search.query = "";
+    }
+
     configureSearchWidgetForApp(&widget, app);
     var needs_render = true;
     const input_poll_ms: i32 = 80;
@@ -147,12 +140,16 @@ fn runSearchState(app: *App) !void {
             .continue_search => {},
             .submit => {
                 const query = try app.allocator.dupe(u8, widget.getQuery());
-                app.state = .{ .loading = .{ .query = query } };
+                transitionSearchToStreamingResults(app, query);
                 return;
             },
             .cancel => {
-                app.running = false;
-                return;
+                if (panels.renderExitConfirmationOverlay(&app.term_rows, &app.term_cols, refreshTerminalSizeValues, &widget)) {
+                    app.running = false;
+                    return;
+                }
+                widget.has_drawn_once = false;
+                needs_render = true;
             },
         }
     }
@@ -171,136 +168,9 @@ fn configureSearchWidgetForApp(widget: *search_widget.SearchWidget, app: *const 
     widget.setLatestVersion(app.latest_version);
 }
 
-fn spinnerThread(ctx: SpinnerContext) void {
-    const frames = [_]u8{ '|', '/', '-', '\\' };
-    var frame: usize = 0;
-    const stdout = std.fs.File.stdout();
-    var buf: [128]u8 = undefined;
-
-    while (!ctx.stop.load(.acquire)) {
-        term.moveCursor(ctx.row, ctx.col);
-        term.setFg256(ctx.color);
-        const line = formatSpinnerLine(&buf, ctx, frames[frame]) catch break;
-        stdout.writeAll(line) catch break;
-        stdout.writeAll("\x1b[K") catch break;
-        term.resetColor();
-        frame = (frame + 1) % frames.len;
-        std.Thread.sleep(100 * std.time.ns_per_ms);
-    }
-    term.moveCursor(ctx.row, ctx.col);
-    term.setFg256(ctx.color);
-    const line = formatSpinnerLine(&buf, ctx, ' ') catch return;
-    stdout.writeAll(line) catch {};
-    stdout.writeAll("\x1b[K") catch {};
-    term.resetColor();
-}
-
-fn formatSpinnerLine(buf: []u8, ctx: SpinnerContext, frame: u8) ![]u8 {
-    const progress = ctx.progress orelse return std.fmt.bufPrint(buf, "{s} {c}", .{ ctx.message, frame });
-    const snapshot = progress.snapshot();
-    return switch (snapshot.phase) {
-        .discovering => std.fmt.bufPrint(buf, " Discovering indexers... {c}", .{frame}),
-        .querying => blk: {
-            if (snapshot.failed == 0) {
-                break :blk std.fmt.bufPrint(buf, " Querying indexers {d}/{d} {c}", .{ snapshot.completed, snapshot.total, frame });
-            }
-            break :blk std.fmt.bufPrint(buf, " Querying indexers {d}/{d} ({d} failed) {c}", .{
-                snapshot.completed,
-                snapshot.total,
-                snapshot.failed,
-                frame,
-            });
-        },
-        .done => std.fmt.bufPrint(buf, " Querying indexers {d}/{d}  ", .{ snapshot.completed, snapshot.total }),
-    };
-}
-
-fn runLoadingState(app: *App, loading_state: *LoadingState) !void {
-    const query = loading_state.query;
-    defer app.allocator.free(query);
-
-    term.hideCursor();
-    defer term.showCursor();
-    _ = refreshTerminalSize(app);
-
-    const stdout = std.fs.File.stdout();
-    const colors = theme.superseedr_like;
-    const border = theme.unicode_border;
-    const compact = theme.isCompactViewport(app.term_rows, app.term_cols);
-    const panel_width = if (compact) @as(usize, 0) else @min(@as(usize, 74), @as(usize, @intCast(app.term_cols - 4)));
-    const left_pad = if (compact) @as(usize, 0) else (@as(usize, @intCast(app.term_cols)) - panel_width) / 2;
-    const top_pad = if (compact) @as(usize, 1) else @max(@as(usize, 2), (@as(usize, @intCast(app.term_rows)) - 8) / 2);
-
-    var query_trunc: [256]u8 = undefined;
-    const query_width = loadingQueryWidth(app.term_cols, panel_width, compact);
-    const shown_query = theme.truncateWithEllipsis(query, query_width, query_trunc[0..]);
-    var query_line_buf: [320]u8 = undefined;
-    const query_line = std.fmt.bufPrint(&query_line_buf, " Query: {s}", .{shown_query}) catch " Query:";
-
-    term.moveCursor(1, 1);
-    term.clearScreen();
-    if (compact) {
-        term.setFg256(colors.panel_title);
-        term.setBold(true);
-        stdout.writeAll("Searching\r\n") catch {};
-        term.setBold(false);
-        term.setFg256(colors.text);
-        stdout.writeAll(query_line) catch {};
-        stdout.writeAll("\r\n") catch {};
-    } else {
-        term.moveCursor(@as(u16, @intCast(top_pad)), 1);
-
-        writeSpaces(stdout, left_pad) catch {};
-        theme.drawPanelTop(stdout, panel_width, border, colors) catch {};
-        writeSpaces(stdout, left_pad) catch {};
-        term.setFg256(colors.panel_border);
-        stdout.writeAll(border.vertical) catch {};
-        term.setFg256(colors.panel_title);
-        term.setBold(true);
-        theme.writePadded(stdout, " Searching ", panel_width - 2) catch {};
-        term.setBold(false);
-        term.setFg256(colors.panel_border);
-        stdout.writeAll(border.vertical) catch {};
-        term.resetColor();
-        stdout.writeAll("\r\n") catch {};
-        writeSpaces(stdout, left_pad) catch {};
-        theme.drawPanelRow(stdout, panel_width, "", border, colors) catch {};
-        writeSpaces(stdout, left_pad) catch {};
-        theme.drawPanelRow(stdout, panel_width, query_line, border, colors) catch {};
-        writeSpaces(stdout, left_pad) catch {};
-        term.setFg256(colors.panel_border);
-        stdout.writeAll(border.vertical) catch {};
-        term.setFg256(colors.muted);
-        theme.writePadded(stdout, "", panel_width - 2) catch {};
-        term.setFg256(colors.panel_border);
-        stdout.writeAll(border.vertical) catch {};
-        term.resetColor();
-        stdout.writeAll("\r\n") catch {};
-        writeSpaces(stdout, left_pad) catch {};
-        theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
-    }
-
-    var stop = std.atomic.Value(bool).init(false);
-    var progress = jackett.SearchProgress.init();
-    const spinner_row = if (compact) @as(u16, 3) else @as(u16, @intCast(top_pad + 6));
-    const spinner_col = if (compact) @as(u16, 1) else @as(u16, @intCast(left_pad + 3));
-    const thread = try std.Thread.spawn(.{}, spinnerThread, .{SpinnerContext{
-        .message = " Contacting Jackett...",
-        .stop = &stop,
-        .progress = &progress,
-        .row = spinner_row,
-        .col = spinner_col,
-        .color = colors.accent,
-    }});
-
-    transitionLoadingToNextState(app, query, &progress);
-    stop.store(true, .release);
-    thread.join();
-}
-
 fn runResultsState(app: *App, results_state: *ResultsState) !void {
-    const torrents = results_state.torrents;
-    defer freeTorrents(app.allocator, torrents);
+    var cleaned_up = false;
+    defer if (!cleaned_up) deinitResultsState(app.allocator, results_state);
 
     term.hideCursor();
     defer term.showCursor();
@@ -308,12 +178,13 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
     var widget = results_widget.ResultsWidget.init(app.allocator);
     defer widget.deinit();
 
-    widget.setTorrents(torrents, torrents.len);
+    widget.setTorrents(results_state.torrents.items, results_state.torrents.items.len);
+    widget.setLiveStatus(results_state.live_status);
     var needs_render = true;
     const input_poll_ms: i32 = 80;
     const marquee_step_interval_ms: i64 = scaledMarqueeIntervalMs(input_poll_ms, 30);
     var marquee_budget_ms: i64 = 0;
-    var last_loop_ms: i64 = std.time.milliTimestamp();
+    var last_loop_ms: i64 = compat.milliTimestamp();
 
     while (true) {
         if (refreshTerminalSize(app)) {
@@ -321,17 +192,34 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
             needs_render = true;
         }
 
-        const now_ms = std.time.milliTimestamp();
+        const previous_cursor_link = if (widget.cursor < widget.torrents.len) widget.torrents[widget.cursor].link else null;
+        const search_changed = updateStreamingResults(app, results_state, &widget) catch |err| {
+            deinitResultsState(app.allocator, results_state);
+            cleaned_up = true;
+            app.state = .{ .err = .{ .message = getErrorMessage(err) } };
+            return;
+        };
+        if (search_changed) {
+            widget.updateTorrents(results_state.torrents.items, results_state.torrents.items.len, previous_cursor_link);
+            needs_render = true;
+        }
+        widget.setLiveStatus(results_state.live_status);
+
+        const now_ms = compat.milliTimestamp();
         const elapsed_ms = nonNegativeElapsedMs(last_loop_ms, now_ms);
         last_loop_ms = now_ms;
         marquee_budget_ms += elapsed_ms;
 
         if (needs_render) {
+            term.beginSyncRender();
             widget.render(app.term_rows, app.term_cols);
+            term.endSyncRender();
             needs_render = false;
         }
 
         const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch {
+            deinitResultsState(app.allocator, results_state);
+            cleaned_up = true;
             app.state = .{ .err = .{ .message = "Failed to read input" } };
             return;
         };
@@ -341,16 +229,37 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
 
             switch (action) {
                 .continue_browsing => {},
+                .review_failures => {
+                    if (widget.failed_indexers.items.len > 0) {
+                        panels.renderFailedIndexersOverlay(
+                            &app.term_rows,
+                            &app.term_cols,
+                            refreshTerminalSizeValues,
+                            &widget,
+                        );
+                        widget.force_full_redraw = true;
+                    }
+                },
                 .new_search => {
-                    app.state = .{ .search = .{ .query = "" } };
+                    const last_query = try app.allocator.dupe(u8, results_state.query);
+                    deinitResultsState(app.allocator, results_state);
+                    cleaned_up = true;
+                    app.state = .{ .search = .{ .query = last_query } };
                     return;
                 },
                 .cancel => {
-                    app.running = false;
-                    return;
+                    if (panels.renderExitConfirmationOverlay(&app.term_rows, &app.term_cols, refreshTerminalSizeValues, &widget)) {
+                        deinitResultsState(app.allocator, results_state);
+                        cleaned_up = true;
+                        app.running = false;
+                        return;
+                    }
+                    widget.force_full_redraw = true;
+                    needs_render = true;
                 },
                 .select => |idx| {
-                    const torrent = torrents[idx];
+                    if (idx >= results_state.torrents.items.len) continue;
+                    const torrent = results_state.torrents.items[idx];
                     const result = addLinkWithAppDeps(app, torrent.link);
 
                     if (result) |_| {
@@ -380,17 +289,20 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                     }
                 },
             }
-        } else if (consumeMarqueeTick(&marquee_budget_ms, marquee_step_interval_ms) and widget.advanceMarquee(app.term_rows, app.term_cols)) {
-            needs_render = true;
+        } else if (consumeMarqueeTick(&marquee_budget_ms, marquee_step_interval_ms)) {
+            const marquee_changed = widget.advanceMarquee(app.term_rows, app.term_cols);
+            const spinner_changed = widget.advanceSpinner();
+            if (marquee_changed or spinner_changed) {
+                needs_render = true;
+            }
         }
     }
 }
 
-fn searchWithAppDeps(app: *App, query: []const u8, progress: *jackett.SearchProgress) jackett.JackettError![]Torrent {
-    return app.client.searchIndexersInParallel(
+fn startSearchWithAppDeps(app: *App, query: []const u8) jackett.JackettError!*jackett.SearchSession {
+    return app.client.startStreamingSearch(
         query,
         app.deps.jackett_body_executor,
-        progress,
         app.deps.jackett_parallel_requests,
     );
 }
@@ -431,12 +343,68 @@ fn selectedLinkKind(link: []const u8) []const u8 {
     return "other";
 }
 
-fn transitionLoadingToNextState(app: *App, query: []const u8, progress: *jackett.SearchProgress) void {
-    const torrents = searchWithAppDeps(app, query, progress) catch |err| {
+fn transitionSearchToStreamingResults(app: *App, query: []u8) void {
+    const session = startSearchWithAppDeps(app, query) catch |err| {
+        app.allocator.free(query);
         app.state = .{ .err = .{ .message = getErrorMessage(err) } };
         return;
     };
-    app.state = .{ .results = .{ .torrents = torrents } };
+    app.state = .{ .results = .{
+        .query = query,
+        .torrents = .empty,
+        .search_session = session,
+        .live_status = liveStatusFromSnapshot(session.snapshot()),
+    } };
+}
+
+fn updateStreamingResults(app: *App, results_state: *ResultsState, widget: ?*results_widget.ResultsWidget) jackett.JackettError!bool {
+    const session = results_state.search_session orelse return false;
+    const previous_status = results_state.live_status;
+
+    if (session.fatalError()) |err| {
+        return err;
+    }
+
+    var changed = try session.drainInto(app.allocator, &results_state.torrents);
+    results_state.live_status = liveStatusFromSnapshot(session.snapshot());
+    if (!std.meta.eql(previous_status, results_state.live_status)) changed = true;
+
+    // Extract failed indexers from search session queue
+    if (widget) |w| {
+        const io = compat.io();
+        session.queue.mutex.lockUncancelable(io);
+        for (session.queue.failed_indexers.items) |name| {
+            w.addFailedIndexer(name) catch {};
+        }
+        session.queue.mutex.unlock(io);
+    }
+
+    if (session.fatalError()) |err| {
+        return err;
+    }
+
+    if (session.isDone()) {
+        _ = try session.drainInto(app.allocator, &results_state.torrents);
+        results_state.live_status = liveStatusFromSnapshot(session.snapshot());
+        session.deinit();
+        results_state.search_session = null;
+        return true;
+    }
+
+    return changed;
+}
+
+fn liveStatusFromSnapshot(snapshot: jackett.SearchProgressSnapshot) results_widget.ResultsWidget.LiveStatus {
+    return .{
+        .phase = switch (snapshot.phase) {
+            .discovering => .discovering,
+            .querying => .querying,
+            .done => .done,
+        },
+        .completed = snapshot.completed,
+        .total = snapshot.total,
+        .failed = snapshot.failed,
+    };
 }
 
 fn runErrorState(app: *App, error_state: *ErrorState) !void {
@@ -488,16 +456,21 @@ fn getSuperseedrErrorMessage(err: superseedr.AddLinkError) []const u8 {
     };
 }
 
-fn freeTorrents(allocator: std.mem.Allocator, torrents: []Torrent) void {
-    for (torrents) |t| {
+fn deinitResultsState(allocator: std.mem.Allocator, results_state: *ResultsState) void {
+    if (results_state.search_session) |session| {
+        if (session.isDone()) {
+            session.deinit();
+        } else {
+            session.abandon();
+        }
+        results_state.search_session = null;
+    }
+    allocator.free(results_state.query);
+    for (results_state.torrents.items) |t| {
         allocator.free(t.title);
         allocator.free(t.link);
     }
-    allocator.free(torrents);
-}
-
-fn writeSpaces(writer: anytype, count: usize) !void {
-    for (0..count) |_| try writer.writeAll(" ");
+    results_state.torrents.deinit(allocator);
 }
 
 fn scaledMarqueeIntervalMs(base_ms: i32, slowdown_percent: u8) i64 {
@@ -517,6 +490,25 @@ fn consumeMarqueeTick(budget_ms: *i64, interval_ms: i64) bool {
     return true;
 }
 
+fn drainUntilDone(app: *App, results_state: *ResultsState) !void {
+    var attempts: usize = 0;
+    while (attempts < 200) : (attempts += 1) {
+        _ = try updateStreamingResults(app, results_state, null);
+        if (results_state.search_session == null) return;
+        compat.sleepNanos(std.time.ns_per_ms);
+    }
+    return error.TestUnexpectedResult;
+}
+
+fn waitForStreamingError(app: *App, results_state: *ResultsState) jackett.JackettError {
+    var attempts: usize = 0;
+    while (attempts < 200) : (attempts += 1) {
+        if (updateStreamingResults(app, results_state, null)) |_| {} else |err| return err;
+        compat.sleepNanos(std.time.ns_per_ms);
+    }
+    return error.ParseFailed;
+}
+
 fn refreshTerminalSize(app: *App) bool {
     return refreshTerminalSizeValues(&app.term_rows, &app.term_cols);
 }
@@ -529,17 +521,7 @@ fn refreshTerminalSizeValues(term_rows: *u16, term_cols: *u16) bool {
     return true;
 }
 
-fn loadingQueryWidth(term_cols: u16, panel_width: usize, compact: bool) usize {
-    if (compact) {
-        const cols: usize = @as(usize, @intCast(term_cols));
-        if (cols <= 8) return 1;
-        return cols - 8;
-    }
-    if (panel_width <= 13) return 1;
-    return panel_width - 13;
-}
-
-test "state transitions smoke path search -> loading -> results with injected deps" {
+test "state transitions smoke path search -> streaming results with injected deps" {
     const mock = struct {
         fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]u8 {
             if (std.mem.indexOf(u8, url, "t=indexers&configured=true") != null) {
@@ -565,23 +547,23 @@ test "state transitions smoke path search -> loading -> results with injected de
     };
 
     const query = try std.testing.allocator.dupe(u8, "ubuntu");
-    defer std.testing.allocator.free(query);
 
-    app.state = .{ .loading = .{ .query = query } };
-    var progress = jackett.SearchProgress.init();
-    transitionLoadingToNextState(&app, query, &progress);
+    transitionSearchToStreamingResults(&app, query);
 
     switch (app.state) {
-        .results => |results_state| {
-            defer freeTorrents(std.testing.allocator, results_state.torrents);
-            try std.testing.expectEqual(@as(usize, 1), results_state.torrents.len);
-            try std.testing.expectEqualStrings("Ubuntu ISO", results_state.torrents[0].title);
+        .results => |*results_state| {
+            defer deinitResultsState(std.testing.allocator, results_state);
+            try std.testing.expectEqual(@as(usize, 0), results_state.torrents.items.len);
+            try drainUntilDone(&app, results_state);
+            try std.testing.expectEqual(@as(usize, 1), results_state.torrents.items.len);
+            try std.testing.expectEqualStrings("Ubuntu ISO", results_state.torrents.items[0].title);
+            try std.testing.expectEqual(results_widget.ResultsWidget.LivePhase.done, results_state.live_status.phase);
         },
         else => return error.UnexpectedState,
     }
 }
 
-test "state transitions smoke path loading failure goes to error" {
+test "state transitions smoke path discovery failure goes to error" {
     const mock = struct {
         fn exec(_: std.mem.Allocator, _: []const u8) jackett.JackettError![]u8 {
             return error.ConnectionRefused;
@@ -602,11 +584,17 @@ test "state transitions smoke path loading failure goes to error" {
     };
 
     const query = try std.testing.allocator.dupe(u8, "ubuntu");
-    defer std.testing.allocator.free(query);
 
-    app.state = .{ .loading = .{ .query = query } };
-    var progress = jackett.SearchProgress.init();
-    transitionLoadingToNextState(&app, query, &progress);
+    transitionSearchToStreamingResults(&app, query);
+
+    switch (app.state) {
+        .results => |*results_state| {
+            const err = waitForStreamingError(&app, results_state);
+            deinitResultsState(std.testing.allocator, results_state);
+            app.state = .{ .err = .{ .message = getErrorMessage(err) } };
+        },
+        else => return error.UnexpectedState,
+    }
 
     switch (app.state) {
         .err => |error_state| try std.testing.expectEqualStrings(
@@ -728,7 +716,7 @@ test "refreshTerminalSize returns true and updates values when changed" {
     try std.testing.expectEqual(size.cols, app.term_cols);
 }
 
-test "searchWithAppDeps uses injected jackett body executor" {
+test "startSearchWithAppDeps uses injected jackett body executor" {
     const state = struct {
         var indexers_called = false;
         var search_called = false;
@@ -764,13 +752,14 @@ test "searchWithAppDeps uses injected jackett body executor" {
         .terminal = "xterm",
     };
 
-    var progress = jackett.SearchProgress.init();
-    const torrents = try searchWithAppDeps(&app, "ubuntu", &progress);
-    defer std.testing.allocator.free(torrents);
+    const session = try startSearchWithAppDeps(&app, "ubuntu");
+    defer session.deinit();
+    while (!session.isDone()) {
+        compat.sleepNanos(std.time.ns_per_ms);
+    }
     try std.testing.expect(state.indexers_called);
     try std.testing.expect(state.search_called);
-    try std.testing.expectEqual(@as(usize, 0), torrents.len);
-    const snapshot = progress.snapshot();
+    const snapshot = session.snapshot();
     try std.testing.expectEqual(@as(usize, 1), snapshot.total);
     try std.testing.expectEqual(@as(usize, 1), snapshot.completed);
 }
@@ -823,16 +812,6 @@ test "addLinkWithAppDeps uses injected superseedr dependencies" {
     try std.testing.expect(state.checker_called);
     try std.testing.expect(state.spawner_called);
     try std.testing.expect(state.executor_called);
-}
-
-test "loadingQueryWidth avoids underflow in compact mode" {
-    try std.testing.expectEqual(@as(usize, 1), loadingQueryWidth(4, 0, true));
-    try std.testing.expectEqual(@as(usize, 12), loadingQueryWidth(20, 0, true));
-}
-
-test "loadingQueryWidth uses panel width in regular mode" {
-    try std.testing.expectEqual(@as(usize, 61), loadingQueryWidth(80, 74, false));
-    try std.testing.expectEqual(@as(usize, 1), loadingQueryWidth(80, 13, false));
 }
 
 test "checkLatestVersionOnStartup stores latest version from injected executor" {

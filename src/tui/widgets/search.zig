@@ -2,6 +2,7 @@ const std = @import("std");
 const term = @import("term");
 const theme = @import("theme");
 const build_options = @import("build_options");
+const compat = @import("compat");
 
 pub const SearchWidget = struct {
     allocator: std.mem.Allocator,
@@ -13,7 +14,7 @@ pub const SearchWidget = struct {
     pub fn init(allocator: std.mem.Allocator) SearchWidget {
         return .{
             .allocator = allocator,
-            .query = .{},
+            .query = .empty,
             .latest_version = null,
             .has_drawn_once = false,
             .last_size = null,
@@ -25,7 +26,7 @@ pub const SearchWidget = struct {
     }
 
     pub fn render(self: *SearchWidget) void {
-        const stdout = std.fs.File.stdout();
+        const stdout = compat.stdoutWriter();
         const colors = theme.superseedr_like;
         const border = theme.unicode_border;
         const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
@@ -65,6 +66,10 @@ pub const SearchWidget = struct {
                 }
                 return .continue_search;
             },
+            .shift_backspace => {
+                self.clear();
+                return .continue_search;
+            },
             .enter => {
                 if (self.query.items.len > 0) {
                     return .submit;
@@ -86,6 +91,11 @@ pub const SearchWidget = struct {
 
     pub fn clear(self: *SearchWidget) void {
         self.query.clearRetainingCapacity();
+    }
+
+    pub fn setQuery(self: *SearchWidget, query: []const u8) !void {
+        self.query.clearRetainingCapacity();
+        try self.query.appendSlice(self.allocator, query);
     }
 
     pub fn setLatestVersion(self: *SearchWidget, latest_version: ?[]const u8) void {
@@ -123,7 +133,7 @@ fn computePanelLayout(size: term.TerminalSize) PanelLayout {
     return .{ .panel_width = panel_width, .left_pad = left_pad, .top_pad = top_pad };
 }
 
-fn drawCompactFull(stdout: std.fs.File, colors: theme.Theme, query: []const u8, latest_version: ?[]const u8) void {
+fn drawCompactFull(stdout: compat.FileWriter, colors: theme.Theme, query: []const u8, latest_version: ?[]const u8) void {
     term.moveCursor(1, 1);
     term.clearScreen();
     term.setFg256(colors.panel_title);
@@ -135,11 +145,11 @@ fn drawCompactFull(stdout: std.fs.File, colors: theme.Theme, query: []const u8, 
     stdout.writeAll(query) catch {};
     stdout.writeAll("\r\n") catch {};
     term.setFg256(colors.muted);
-    stdout.writeAll("ENTER search | ESC exit\r\n") catch {};
+    stdout.writeAll("ENTER search | ESC exit | Ctrl-BS clear\r\n") catch {};
     writeVersionLine(stdout, colors, latest_version);
 }
 
-fn drawCompactInputLine(stdout: std.fs.File, size: term.TerminalSize, colors: theme.Theme, query: []const u8) void {
+fn drawCompactInputLine(stdout: compat.FileWriter, size: term.TerminalSize, colors: theme.Theme, query: []const u8) void {
     term.moveCursor(clampCursorCoord(size.rows, 2), 1);
 
     var trunc_buf: [512]u8 = undefined;
@@ -154,7 +164,7 @@ fn drawCompactInputLine(stdout: std.fs.File, size: term.TerminalSize, colors: th
     term.resetColor();
 }
 
-fn drawPanelFrame(stdout: std.fs.File, colors: theme.Theme, border: theme.BorderChars, layout: PanelLayout, latest_version: ?[]const u8) void {
+fn drawPanelFrame(stdout: compat.FileWriter, colors: theme.Theme, border: theme.BorderChars, layout: PanelLayout, latest_version: ?[]const u8) void {
     term.moveCursor(1, 1);
     term.clearScreen();
     term.moveCursor(@as(u16, @intCast(layout.top_pad)), 1);
@@ -182,7 +192,7 @@ fn drawPanelFrame(stdout: std.fs.File, colors: theme.Theme, border: theme.Border
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.setFg256(colors.muted);
-    theme.writePadded(stdout, " ENTER submit | ESC quit ", layout.panel_width - 2) catch {};
+    theme.writePadded(stdout, " ENTER submit | ESC quit | Ctrl-BS clear ", layout.panel_width - 2) catch {};
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.resetColor();
@@ -195,7 +205,7 @@ fn drawPanelFrame(stdout: std.fs.File, colors: theme.Theme, border: theme.Border
     writeVersionLine(stdout, colors, latest_version);
 }
 
-fn writeVersionLine(stdout: std.fs.File, colors: theme.Theme, latest_version: ?[]const u8) void {
+fn writeVersionLine(stdout: compat.FileWriter, colors: theme.Theme, latest_version: ?[]const u8) void {
     term.setFg256(colors.muted);
     stdout.writeAll("v" ++ build_options.version) catch {};
     if (latest_version) |latest| {
@@ -207,7 +217,7 @@ fn writeVersionLine(stdout: std.fs.File, colors: theme.Theme, latest_version: ?[
     term.resetColor();
 }
 
-fn drawPanelQueryRow(stdout: std.fs.File, size: term.TerminalSize, colors: theme.Theme, border: theme.BorderChars, layout: PanelLayout, query: []const u8) void {
+fn drawPanelQueryRow(stdout: compat.FileWriter, size: term.TerminalSize, colors: theme.Theme, border: theme.BorderChars, layout: PanelLayout, query: []const u8) void {
     const query_row = clampCursorCoord(size.rows, layout.top_pad + 3);
     term.moveCursor(query_row, @as(u16, @intCast(layout.left_pad + 1)));
 
@@ -400,7 +410,7 @@ test "computeRedrawMode resize is full" {
 
 test "writePanelRowNoNewline writes row without CRLF" {
     const allocator = std.testing.allocator;
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     const ascii_border = theme.BorderChars{
@@ -412,13 +422,16 @@ test "writePanelRowNoNewline writes row without CRLF" {
         .vertical = "|",
     };
 
-    try writePanelRowNoNewline(out.writer(allocator), 10, " Query:", ascii_border, theme.superseedr_like, false);
+    var writer = std.Io.Writer.Allocating.fromArrayList(allocator, &out);
+    try writePanelRowNoNewline(&writer.writer, 10, " Query:", ascii_border, theme.superseedr_like, false);
+    try writer.writer.flush();
+    out = writer.toArrayList();
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\r\n") == null);
 }
 
 test "writePanelRowNoNewline fills to width with borders" {
     const allocator = std.testing.allocator;
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
     const ascii_border = theme.BorderChars{
@@ -430,7 +443,34 @@ test "writePanelRowNoNewline fills to width with borders" {
         .vertical = "|",
     };
 
-    try writePanelRowNoNewline(out.writer(allocator), 12, " Query: x", ascii_border, theme.superseedr_like, false);
+    var writer = std.Io.Writer.Allocating.fromArrayList(allocator, &out);
+    try writePanelRowNoNewline(&writer.writer, 12, " Query: x", ascii_border, theme.superseedr_like, false);
+    try writer.writer.flush();
+    out = writer.toArrayList();
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\r\n") == null);
     try std.testing.expectEqual(@as(usize, 12), out.items.len);
+}
+
+test "SearchWidget handleEvent shift_backspace clears query" {
+    const allocator = std.testing.allocator;
+    var widget = SearchWidget.init(allocator);
+    defer widget.deinit();
+
+    try widget.query.append(allocator, 'h');
+    try widget.query.append(allocator, 'i');
+
+    const event = term.Event{ .key = .shift_backspace, .value = 0 };
+    const action = widget.handleEvent(event);
+
+    try std.testing.expectEqual(SearchAction.continue_search, action);
+    try std.testing.expectEqual(@as(usize, 0), widget.query.items.len);
+}
+
+test "SearchWidget setQuery populates query" {
+    const allocator = std.testing.allocator;
+    var widget = SearchWidget.init(allocator);
+    defer widget.deinit();
+
+    try widget.setQuery("test query");
+    try std.testing.expectEqualStrings("test query", widget.query.items);
 }

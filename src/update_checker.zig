@@ -1,4 +1,5 @@
 const std = @import("std");
+const compat = @import("compat");
 
 pub const Repo = struct {
     owner: []const u8,
@@ -26,7 +27,7 @@ const Version = struct {
 };
 
 pub fn defaultLatestVersionExecutor(allocator: std.mem.Allocator, url: []const u8) UpdateError![]u8 {
-    var http_client = std.http.Client{ .allocator = allocator };
+    var http_client = std.http.Client{ .allocator = allocator, .io = compat.io() };
     defer http_client.deinit();
 
     const uri = std.Uri.parse(url) catch return error.InvalidUrl;

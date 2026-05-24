@@ -4,7 +4,22 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.4.0
+
+### Added
+- Pre-populate the search query input with the last searched term when starting a new search from the results screen.
+- Support clearing the search query input by pressing `Shift+Backspace` or `Ctrl+Backspace`.
+- Document the clear shortcut in the search panel UI help texts as `Ctrl-BS`.
+- Show a confirmation modal in the center of the screen when exiting the app with `ESC` from any screen, requiring a second `ESC` press to exit or any other key to cancel.
+
+### Changed
+- Migrated the project tooling and documentation to Zig 0.16.0.
+- Show the results screen immediately after submitting a search and stream Jackett indexer batches into the sorted result list as they finish.
+- Moved live indexer discovery/search progress into the results status row, with per-indexer failures reported inline.
+
 ### Fixed
+- Resolved a segmentation fault in ResultsWidget.updateTorrents caused by a use-after-free when the streaming results array list reallocates.
+- Completed the Zig 0.16.0 migration, resolving all filesystem, network sockets, allocator, and timer test suite and build failures.
 - Updated the Coverage Pages workflow to use Node.js 24-compatible GitHub Pages actions.
 
 ## 0.3.14

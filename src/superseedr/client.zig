@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const debug_log = @import("debug_log");
+const compat = @import("compat");
 
 pub const AddLinkError = error{
     InvalidLink,
@@ -19,8 +20,7 @@ pub const ProcessChecker = *const fn (allocator: std.mem.Allocator) anyerror!boo
 pub const Spawner = *const fn (allocator: std.mem.Allocator, terminal: []const u8) anyerror!void;
 
 pub fn defaultExecutor(allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void {
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
+    const result = std.process.run(allocator, compat.io(), .{
         .argv = argv,
     }) catch |err| {
         debug_log.writef(
@@ -35,7 +35,7 @@ pub fn defaultExecutor(allocator: std.mem.Allocator, argv: []const []const u8) a
         allocator.free(result.stdout);
         allocator.free(result.stderr);
     }
-    if (result.term != .Exited or result.term.Exited != 0) {
+    if (result.term != .exited or result.term.exited != 0) {
         debug_log.writef(
             allocator,
             "superseedr",
@@ -52,8 +52,7 @@ pub fn defaultProcessChecker(allocator: std.mem.Allocator) anyerror!bool {
         else => &.{ "pgrep", "-x", "superseedr" },
     };
 
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
+    const result = std.process.run(allocator, compat.io(), .{
         .argv = argv,
     }) catch return false;
     defer {
@@ -62,41 +61,41 @@ pub fn defaultProcessChecker(allocator: std.mem.Allocator) anyerror!bool {
     }
 
     if (builtin.os.tag == .windows) {
-        if (!(result.term == .Exited and result.term.Exited == 0)) return false;
+        if (!(result.term == .exited and result.term.exited == 0)) return false;
         return std.mem.indexOf(u8, result.stdout, "superseedr.exe") != null;
     }
-    return result.term == .Exited and result.term.Exited == 0;
+    return result.term == .exited and result.term.exited == 0;
 }
 
 pub fn defaultSpawner(allocator: std.mem.Allocator, terminal: []const u8) anyerror!void {
     var argv = try buildSpawnArgv(allocator, terminal);
     defer argv.deinit(allocator);
 
-    var child = std.process.Child.init(argv.items, allocator);
-    configureSpawnerChild(&child);
-    try child.spawn();
-    const reaper = try std.Thread.spawn(.{}, reapChildWhenDone, .{child});
+    const io = compat.io();
+    const child = try std.process.spawn(io, spawnerOptions(argv.items));
+    const reaper = try std.Thread.spawn(.{}, reapChildWhenDone, .{ child, io });
     reaper.detach();
-    std.Thread.sleep(500 * std.time.ns_per_ms);
+    compat.sleepMillis(500);
 }
 
-fn configureSpawnerChild(child: *std.process.Child) void {
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    if (builtin.os.tag != .windows and builtin.os.tag != .wasi) {
+fn spawnerOptions(argv: []const []const u8) std.process.SpawnOptions {
+    return .{
+        .argv = argv,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
         // Put the launcher in a separate process group to avoid parent-terminal HUP propagation.
-        child.pgid = 0;
-    }
+        .pgid = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) 0 else null,
+    };
 }
 
-fn reapChildWhenDone(child: std.process.Child) void {
+fn reapChildWhenDone(child: std.process.Child, io: std.Io) void {
     var mutable_child = child;
-    _ = mutable_child.wait() catch {};
+    _ = mutable_child.wait(io) catch {};
 }
 
 fn buildSpawnArgv(allocator: std.mem.Allocator, terminal: []const u8) !std.ArrayList([]const u8) {
-    var argv: std.ArrayList([]const u8) = .{};
+    var argv: std.ArrayList([]const u8) = .empty;
     errdefer argv.deinit(allocator);
 
     switch (builtin.os.tag) {
@@ -414,14 +413,13 @@ test "buildSpawnArgv uses -- mode for gnome-terminal" {
 }
 
 test "configureSpawnerChild sets detached spawn behaviors" {
-    var child = std.process.Child.init(&.{"superseedr"}, std.testing.allocator);
-    configureSpawnerChild(&child);
+    const options = spawnerOptions(&.{"superseedr"});
 
-    try std.testing.expect(child.stdin_behavior == .Ignore);
-    try std.testing.expect(child.stdout_behavior == .Ignore);
-    try std.testing.expect(child.stderr_behavior == .Ignore);
+    try std.testing.expect(options.stdin == .ignore);
+    try std.testing.expect(options.stdout == .ignore);
+    try std.testing.expect(options.stderr == .ignore);
     if (builtin.os.tag != .windows and builtin.os.tag != .wasi) {
-        try std.testing.expect(child.pgid != null);
-        try std.testing.expectEqual(@as(std.posix.pid_t, 0), child.pgid.?);
+        try std.testing.expect(options.pgid != null);
+        try std.testing.expectEqual(@as(std.posix.pid_t, 0), options.pgid.?);
     }
 }

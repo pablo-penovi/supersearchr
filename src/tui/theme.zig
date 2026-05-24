@@ -199,11 +199,10 @@ test "unicode border is heavy box drawing" {
 
 test "writePadded pads correctly with multi-byte char" {
     var buf: [64]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    const writer = stream.writer();
+    var writer: std.Io.Writer = .fixed(&buf);
     // "⭐" is 3 bytes, 1 char. Total chars = 4. Pad to 6 → 2 spaces added.
-    try writePadded(writer, "abc⭐", 6);
-    try std.testing.expectEqualStrings("abc⭐  ", stream.getWritten());
+    try writePadded(&writer, "abc⭐", 6);
+    try std.testing.expectEqualStrings("abc⭐  ", writer.buffered());
 }
 
 test "truncateWithEllipsis handles multi-byte char in kept region" {
@@ -229,11 +228,10 @@ test "displayWidth returns 1 for narrow char" {
 
 test "writePadded pads correctly with wide emoji" {
     var buf: [64]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    const writer = stream.writer();
+    var writer: std.Io.Writer = .fixed(&buf);
     // "🌟" is 4 bytes, 1 codepoint, display width 2. "abc🌟" = 5 display cols. Pad to 8 → 3 spaces.
-    try writePadded(writer, "abc🌟", 8);
-    try std.testing.expectEqualStrings("abc🌟   ", stream.getWritten());
+    try writePadded(&writer, "abc🌟", 8);
+    try std.testing.expectEqualStrings("abc🌟   ", writer.buffered());
 }
 
 test "truncateWithEllipsis truncates wide emoji correctly" {

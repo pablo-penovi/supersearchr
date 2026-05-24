@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const compat = @import("compat");
 
 pub const Config = struct {
     api_key: []const u8,
@@ -12,16 +13,18 @@ pub fn loadConfig(allocator: std.mem.Allocator) !Config {
     const config_path = try getConfigPath(allocator);
     defer allocator.free(config_path);
 
-    const file = std.fs.openFileAbsolute(config_path, .{}) catch |err| {
+    const io = compat.io();
+    const file = std.Io.Dir.openFileAbsolute(io, config_path, .{}) catch |err| {
         if (err == error.FileNotFound) {
             try createConfigFile(config_path);
             return error.ConfigCreated;
         }
         return err;
     };
-    defer file.close();
+    defer compat.closeFile(file);
 
-    const contents = try file.readToEndAlloc(allocator, std.math.maxInt(usize));
+    var file_reader = file.reader(io, &.{});
+    const contents = file_reader.interface.allocRemaining(allocator, .unlimited) catch return error.InvalidConfig;
     defer allocator.free(contents);
 
     const patched = try patchMissingDefaults(allocator, config_path, contents);
@@ -39,7 +42,8 @@ fn getConfigPath(allocator: std.mem.Allocator) ![]const u8 {
 
 fn createConfigFile(config_path: []const u8) !void {
     const config_dir = std.fs.path.dirname(config_path) orelse ".";
-    try std.fs.cwd().makePath(config_dir);
+    const io = compat.io();
+    try std.Io.Dir.cwd().createDirPath(io, config_dir);
 
     var placeholder_buf: [256]u8 = undefined;
     const placeholder = try std.fmt.bufPrint(
@@ -54,10 +58,10 @@ fn createConfigFile(config_path: []const u8) !void {
         .{defaultTerminal()},
     );
 
-    const file = try std.fs.createFileAbsolute(config_path, .{});
-    defer file.close();
+    const file = try std.Io.Dir.createFileAbsolute(io, config_path, .{});
+    defer compat.closeFile(file);
 
-    try file.writeAll(placeholder);
+    try compat.writeFileAll(file, placeholder);
 
     std.debug.print("Config created at {s}. Please add your Jackett API key, URL and port.\n", .{config_path});
 }
@@ -65,32 +69,32 @@ fn createConfigFile(config_path: []const u8) !void {
 fn getConfigDir(allocator: std.mem.Allocator) ![]const u8 {
     switch (builtin.os.tag) {
         .windows => {
-            if (std.process.getEnvVarOwned(allocator, "LOCALAPPDATA")) |value| {
+            if (compat.getEnvVarOwned(allocator, "LOCALAPPDATA")) |value| {
                 return value;
             } else |_| {}
-            if (std.process.getEnvVarOwned(allocator, "APPDATA")) |value| {
+            if (compat.getEnvVarOwned(allocator, "APPDATA")) |value| {
                 return value;
             } else |_| {}
             return error.HomeNotFound;
         },
         .macos => {
-            const home = std.process.getEnvVarOwned(allocator, "HOME") catch |err| {
-                if (err == error.EnvironmentVariableNotFound) return error.HomeNotFound;
+            const home = compat.getEnvVarOwned(allocator, "HOME") catch |err| {
+                if (err == error.EnvironmentVariableMissing) return error.HomeNotFound;
                 return err;
             };
             defer allocator.free(home);
             return std.fs.path.join(allocator, &.{ home, "Library", "Application Support" });
         },
         else => {
-            if (std.process.getEnvVarOwned(allocator, "XDG_CONFIG_HOME")) |xdg| {
+            if (compat.getEnvVarOwned(allocator, "XDG_CONFIG_HOME")) |xdg| {
                 if (xdg.len > 0) {
                     return xdg;
                 }
                 allocator.free(xdg);
             } else |_| {}
 
-            const home = std.process.getEnvVarOwned(allocator, "HOME") catch |err| {
-                if (err == error.EnvironmentVariableNotFound) return error.HomeNotFound;
+            const home = compat.getEnvVarOwned(allocator, "HOME") catch |err| {
+                if (err == error.EnvironmentVariableMissing) return error.HomeNotFound;
                 return err;
             };
             defer allocator.free(home);
@@ -120,7 +124,7 @@ fn patchMissingDefaults(
     var did_patch = false;
 
     if (config_obj.get("terminal") == null) {
-        try config_obj.put("terminal", .{ .string = defaultTerminal() });
+        try config_obj.put(parsed.arena.allocator(), "terminal", .{ .string = defaultTerminal() });
         did_patch = true;
     }
 
@@ -128,9 +132,10 @@ fn patchMissingDefaults(
 
     const patched = try std.json.Stringify.valueAlloc(allocator, parsed.value, .{ .whitespace = .indent_2 });
 
-    const file = try std.fs.createFileAbsolute(config_path, .{});
-    defer file.close();
-    try file.writeAll(patched);
+    const io = compat.io();
+    const file = try std.Io.Dir.createFileAbsolute(io, config_path, .{});
+    defer compat.closeFile(file);
+    try compat.writeFileAll(file, patched);
 
     return patched;
 }
@@ -380,7 +385,7 @@ test "patchMissingDefaults adds terminal by mutating object and reserializing" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const dir_abs = try tmp.dir.realpathAlloc(allocator, ".");
+    const dir_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", allocator);
     defer allocator.free(dir_abs);
 
     const config_path = try std.fs.path.join(allocator, &.{ dir_abs, "config.json" });

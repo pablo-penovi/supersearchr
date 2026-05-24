@@ -2,15 +2,15 @@
 
 [![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fpablo-penovi.github.io%2Fsupersearchr%2Fcoverage-badge.json%3Fv%3D1&cacheSeconds=300)](https://pablo-penovi.github.io/supersearchr/coverage/)
 
-Terminal-first BitTorrent search for [Jackett](https://github.com/Jackett/Jackett) + [Superseedr](https://github.com/Jagalite/superseedr), written in Zig 0.15.2.
+Terminal-first BitTorrent search for [Jackett](https://github.com/Jackett/Jackett) + [Superseedr](https://github.com/Jagalite/superseedr), written in Zig 0.16.0.
 
-`supersearchr` lets you search Jackett from a TUI, browse sorted results, and send a selected magnet/torrent link to `superseedr add`. Searches query configured Jackett indexers in parallel and merge the results.
-Current project version: `v0.3.14`.
+`supersearchr` lets you search Jackett from a TUI, browse sorted results, and send a selected magnet/torrent link to `superseedr add`. Searches query configured Jackett indexers in parallel, stream result batches as each indexer finishes, and keep the displayed list sorted by seeders while the search continues.
+Current project version: `v0.4.0`.
 
 ## Requirements
 
 - Linux, macOS, or Windows (Windows Terminal recommended on Windows)
-- Zig `0.15.2`
+- Zig `0.16.0`
 - `kcov` for coverage reports
 - A running Jackett instance with API key
 - `superseedr` CLI in your `PATH`
@@ -110,9 +110,9 @@ Results screen:
 - `n` or `N`: new search
 - `Esc`: exit app
 
-Results show seeders, leechers, and torrent size when Jackett provides size metadata.
+Results show seeders, leechers, and torrent size when Jackett provides size metadata. New results appear incrementally while configured indexers are still searching, and the bottom status row shows discovery/search progress plus per-indexer failures.
 
-State flow: `SEARCH -> LOADING -> RESULTS -> ERROR`
+State flow: `SEARCH -> RESULTS -> ERROR`
 
 ## Debug Logging
 

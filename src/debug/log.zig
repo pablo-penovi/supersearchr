@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const compat = @import("compat");
 
 const default_log_filename = "supersearchr-debug.log";
 
@@ -11,13 +12,13 @@ fn parseEnabled(raw: []const u8) bool {
 }
 
 pub fn isEnabled(allocator: std.mem.Allocator) bool {
-    const value = std.process.getEnvVarOwned(allocator, "SUPERSEARCHR_DEBUG") catch return false;
+    const value = compat.getEnvVarOwned(allocator, "SUPERSEARCHR_DEBUG") catch return false;
     defer allocator.free(value);
     return parseEnabled(value);
 }
 
 fn getLogPath(allocator: std.mem.Allocator) ![]const u8 {
-    const value = std.process.getEnvVarOwned(allocator, "SUPERSEARCHR_DEBUG_PATH") catch {
+    const value = compat.getEnvVarOwned(allocator, "SUPERSEARCHR_DEBUG_PATH") catch {
         return defaultLogPath(allocator);
     };
     if (value.len == 0) {
@@ -34,21 +35,21 @@ fn defaultLogPath(allocator: std.mem.Allocator) ![]const u8 {
 }
 
 fn getTempDir(allocator: std.mem.Allocator) ![]const u8 {
-    if (std.process.getEnvVarOwned(allocator, "TMPDIR")) |value| {
+    if (compat.getEnvVarOwned(allocator, "TMPDIR")) |value| {
         if (value.len > 0) return value;
         allocator.free(value);
     } else |_| {}
 
     if (builtin.os.tag == .windows) {
-        if (std.process.getEnvVarOwned(allocator, "TEMP")) |value| {
+        if (compat.getEnvVarOwned(allocator, "TEMP")) |value| {
             if (value.len > 0) return value;
             allocator.free(value);
         } else |_| {}
-        if (std.process.getEnvVarOwned(allocator, "TMP")) |value| {
+        if (compat.getEnvVarOwned(allocator, "TMP")) |value| {
             if (value.len > 0) return value;
             allocator.free(value);
         } else |_| {}
-        if (std.process.getEnvVarOwned(allocator, "LOCALAPPDATA")) |value| {
+        if (compat.getEnvVarOwned(allocator, "LOCALAPPDATA")) |value| {
             if (value.len > 0) return value;
             allocator.free(value);
         } else |_| {}
@@ -68,11 +69,10 @@ pub fn writef(
     const log_path = getLogPath(allocator) catch return;
     defer allocator.free(log_path);
 
-    const file = std.fs.openFileAbsolute(log_path, .{ .mode = .read_write }) catch
-        std.fs.createFileAbsolute(log_path, .{ .read = true, .truncate = false }) catch return;
-    defer file.close();
-
-    file.seekFromEnd(0) catch return;
+    const io = compat.io();
+    const file = std.Io.Dir.openFileAbsolute(io, log_path, .{ .mode = .read_write }) catch
+        std.Io.Dir.createFileAbsolute(io, log_path, .{ .read = true, .truncate = false }) catch return;
+    defer compat.closeFile(file);
 
     var msg_buf: [2048]u8 = undefined;
     const message = std.fmt.bufPrint(&msg_buf, fmt, args) catch return;
@@ -81,8 +81,8 @@ pub fn writef(
     const line = std.fmt.bufPrint(
         &line_buf,
         "[{d}] {s}: {s}\n",
-        .{ std.time.timestamp(), scope, message },
+        .{ @as(i64, @intCast(@divTrunc(std.Io.Clock.real.now(io).nanoseconds, 1_000_000_000))), scope, message },
     ) catch return;
 
-    file.writeAll(line) catch return;
+    compat.appendFileAll(file, line) catch return;
 }

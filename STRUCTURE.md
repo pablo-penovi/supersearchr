@@ -1,11 +1,11 @@
 # Repository Structure
 
 This file summarizes tracked files to avoid re-scanning. Build artifacts in `zig-out/` are excluded by design.
-Current project version: `v0.3.14`.
+Current project version: `v0.4.0`.
 
 ## Root
 
-- `AGENTS.md`: Agent rules, Zig 0.15.2 constraints, feature/release workflows, and project overview.
+- `AGENTS.md`: Agent rules, Zig 0.16.0 constraints, feature/release workflows, and project overview.
 - `CHANGELOG.md`: Project changelog for released and unreleased changes.
 - `CLAUDE.md`: Project summary, architecture notes, and developer guidance.
 - `README.md`: User-facing guide (requirements, setup, usage, troubleshooting).
@@ -27,11 +27,11 @@ Current project version: `v0.3.14`.
 - `src/debug/log.zig`: Optional debug logging controlled by environment variables.
 - `src/update_checker.zig`: Latest-release checker (GitHub API fetch + semantic version comparison).
 - `src/structs/torrent.zig`: `Torrent` struct definition (title, stats, optional byte size, link) and metadata storage test.
-- `src/jackett/client.zig`: Jackett Torznab API client, gzip-aware body reads, configured-indexer discovery, parallel per-indexer searches, XML parsing including size metadata, sorting, and selected download-link resolution.
+- `src/jackett/client.zig`: Jackett Torznab API client, gzip-aware body reads, configured-indexer discovery, blocking and streaming parallel per-indexer searches, XML parsing including size metadata, sorting, and selected download-link resolution.
 - `src/superseedr/client.zig`: Superseedr integration, final magnet/path validation, process checks, spawn/add flow.
 - `src/tui/term.zig`: Terminal raw mode, key reading, ANSI helpers, terminal size.
 - `src/tui/theme.zig`: Color palette, border styles, and rendering helpers.
 - `src/tui/panels.zig`: Shared panel/overlay rendering helpers for notices and errors.
-- `src/tui/app.zig`: App state machine (search/loading/results/error) and orchestration.
+- `src/tui/app.zig`: App state machine (search/results/error), streaming Jackett session orchestration, and Superseedr handoff.
 - `src/tui/widgets/search.zig`: Search input widget and tests.
-- `src/tui/widgets/results.zig`: Results list widget with navigation, stats/size table rendering, and tests.
+- `src/tui/widgets/results.zig`: Results list widget with navigation, live search status, streaming update preservation, stats/size table rendering, and tests.
