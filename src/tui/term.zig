@@ -80,10 +80,28 @@ pub fn readKey() !Event {
     const b = buf[0];
 
     if (b == 0x1b) {
-        if (try consumeEscapeSequence(stdin)) {
-            return Event{ .key = .unknown, .value = 0 };
+        if (builtin.os.tag == .windows) {
+            if (try consumeEscapeSequenceWindows(stdin)) {
+                return Event{ .key = .unknown, .value = 0 };
+            }
+            return Event{ .key = .escape, .value = 0 };
+        } else {
+            var seq_buf: [32]u8 = undefined;
+            const seq_len = try readEscapeSequencePosix(stdin, &seq_buf);
+            if (seq_len > 0) {
+                const seq = seq_buf[0..seq_len];
+                if (std.mem.eql(u8, seq, "[127;2u") or
+                    std.mem.eql(u8, seq, "[8;2u") or
+                    std.mem.eql(u8, seq, "[3;2~") or
+                    std.mem.eql(u8, seq, "[27;2;127~") or
+                    std.mem.eql(u8, seq, "[27;2;8~"))
+                {
+                    return Event{ .key = .shift_backspace, .value = 0 };
+                }
+                return Event{ .key = .unknown, .value = 0 };
+            }
+            return Event{ .key = .escape, .value = 0 };
         }
-        return Event{ .key = .escape, .value = 0 };
     }
 
     if (b == '\r' or b == '\n') {
@@ -121,10 +139,12 @@ fn consumeEscapeSequence(stdin: std.Io.File) !bool {
         return consumeEscapeSequenceWindows(stdin);
     }
 
-    return try consumeEscapeSequencePosix(stdin);
+    var dummy: [32]u8 = undefined;
+    const len = try readEscapeSequencePosix(stdin, &dummy);
+    return len > 0;
 }
 
-fn consumeEscapeSequencePosix(stdin: std.Io.File) !bool {
+fn readEscapeSequencePosix(stdin: std.Io.File, buf: []u8) !usize {
     var poll_fds = [_]std.posix.pollfd{
         .{
             .fd = stdin.handle,
@@ -133,12 +153,23 @@ fn consumeEscapeSequencePosix(stdin: std.Io.File) !bool {
         },
     };
 
-    const ready = try std.posix.poll(&poll_fds, escape_sequence_timeout_ms);
-    if (ready == 0) return false;
-    if ((poll_fds[0].revents & std.posix.POLL.IN) == 0) return false;
+    var idx: usize = 0;
+    while (idx < buf.len) {
+        poll_fds[0].revents = 0;
+        const ready = try std.posix.poll(&poll_fds, escape_sequence_timeout_ms);
+        if (ready == 0) break;
+        if ((poll_fds[0].revents & std.posix.POLL.IN) == 0) break;
 
-    try consumePendingEscapeBytesPosix(stdin);
-    return true;
+        var single_buf: [1]u8 = undefined;
+        const read_n = try compat.readFile(stdin, &single_buf);
+        if (read_n == 0) break;
+
+        buf[idx] = single_buf[0];
+        idx += 1;
+
+        if (endsEscapeSequence(buf[0..idx])) break;
+    }
+    return idx;
 }
 
 fn consumeEscapeSequenceWindows(stdin: std.Io.File) !bool {
@@ -167,28 +198,6 @@ fn consumePendingEscapeBytesWindows(stdin: std.Io.File, stdin_handle: windows.HA
             error.WaitTimeOut => return,
             else => return err,
         };
-    }
-}
-
-fn consumePendingEscapeBytesPosix(stdin: std.Io.File) !void {
-    var poll_fds = [_]std.posix.pollfd{
-        .{
-            .fd = stdin.handle,
-            .events = std.posix.POLL.IN,
-            .revents = 0,
-        },
-    };
-    var buf: [16]u8 = undefined;
-
-    while (true) {
-        const read_n = try compat.readFile(stdin, &buf);
-        if (read_n == 0) return;
-        if (endsEscapeSequence(buf[0..read_n])) return;
-
-        poll_fds[0].revents = 0;
-        const ready = try std.posix.poll(&poll_fds, 0);
-        if (ready == 0) return;
-        if ((poll_fds[0].revents & std.posix.POLL.IN) == 0) return;
     }
 }
 
