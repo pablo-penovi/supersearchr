@@ -207,7 +207,9 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
         marquee_budget_ms += elapsed_ms;
 
         if (needs_render) {
+            term.beginSyncRender();
             widget.render(app.term_rows, app.term_cols);
+            term.endSyncRender();
             needs_render = false;
         }
 

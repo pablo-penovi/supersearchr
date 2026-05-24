@@ -219,7 +219,6 @@ pub const ResultsWidget = struct {
                     );
                 } else {
                     term.moveCursor(1, 1);
-                    term.clearScreen();
                     drawPanelFrame(stdout, panel_width, inner_width, border, colors, layout);
                     drawPanelDivider(stdout, panel_width, border, colors) catch {};
                     for (0..self.display_count) |rel_idx| {
@@ -250,6 +249,7 @@ pub const ResultsWidget = struct {
                     term.setFg256(colors.muted);
                     stdout.writeAll("  ENTER select | n search | ESC exit | j/k line down/up | J/K page down/up") catch {};
                     term.resetColor();
+                    term.clearBelow();
                 }
             },
             .partial_window => {
@@ -605,7 +605,6 @@ fn drawCompact(
     end_idx: usize,
 ) void {
     term.moveCursor(1, 1);
-    term.clearScreen();
     term.setFg256(colors.panel_title);
     term.setBold(true);
     stdout.writeAll("Results\r\n") catch {};
@@ -634,6 +633,7 @@ fn drawCompact(
     term.setFg256(colors.muted);
     stdout.writeAll("ENTER select | n search | ESC exit | j/k line down/up") catch {};
     term.resetColor();
+    term.clearBelow();
 }
 
 fn drawCompactDivider(stdout: compat.FileWriter, colors: theme.Theme, border: theme.BorderChars, max_cols: u16) void {

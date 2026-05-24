@@ -259,6 +259,18 @@ pub fn clearScreen() void {
     compat.stdoutWriteAll("\x1b[2J");
 }
 
+pub fn clearBelow() void {
+    compat.stdoutWriteAll("\x1b[J");
+}
+
+pub fn beginSyncRender() void {
+    compat.stdoutWriteAll("\x1b[?2026h");
+}
+
+pub fn endSyncRender() void {
+    compat.stdoutWriteAll("\x1b[?2026l");
+}
+
 pub fn hideCursor() void {
     compat.stdoutWriteAll("\x1b[?25l");
 }
