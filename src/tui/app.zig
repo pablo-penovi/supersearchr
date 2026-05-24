@@ -168,6 +168,40 @@ fn configureSearchWidgetForApp(widget: *search_widget.SearchWidget, app: *const 
     widget.setLatestVersion(app.latest_version);
 }
 
+const ResultsBgUpdate = struct {
+    app: *App,
+    results_state: *ResultsState,
+    widget: *results_widget.ResultsWidget,
+    marquee_budget_ms: *i64,
+    last_loop_ms: *i64,
+    marquee_step_interval_ms: i64,
+
+    fn update(ptr: ?*anyopaque) anyerror!bool {
+        const self: *ResultsBgUpdate = @alignCast(@ptrCast(ptr orelse return false));
+        const previous_cursor_link = if (self.widget.cursor < self.widget.torrents.len) self.widget.torrents[self.widget.cursor].link else null;
+
+        var changed = try updateStreamingResults(self.app, self.results_state, self.widget);
+        if (changed) {
+            self.widget.updateTorrents(self.results_state.torrents.items, self.results_state.torrents.items.len, previous_cursor_link);
+        }
+        self.widget.setLiveStatus(self.results_state.live_status);
+
+        const now_ms = compat.milliTimestamp();
+        const elapsed_ms = nonNegativeElapsedMs(self.last_loop_ms.*, now_ms);
+        self.last_loop_ms.* = now_ms;
+        self.marquee_budget_ms.* += elapsed_ms;
+
+        if (consumeMarqueeTick(self.marquee_budget_ms, self.marquee_step_interval_ms)) {
+            const marquee_changed = self.widget.advanceMarquee(self.app.term_rows, self.app.term_cols);
+            const spinner_changed = self.widget.advanceSpinner();
+            if (marquee_changed or spinner_changed) {
+                changed = true;
+            }
+        }
+        return changed;
+    }
+};
+
 fn runResultsState(app: *App, results_state: *ResultsState) !void {
     var cleaned_up = false;
     defer if (!cleaned_up) deinitResultsState(app.allocator, results_state);
@@ -241,12 +275,40 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                     }
                 },
                 .open_list_search => {
-                    try panels.renderListSearchOverlay(
+                    var bg_update = ResultsBgUpdate{
+                        .app = app,
+                        .results_state = results_state,
+                        .widget = &widget,
+                        .marquee_budget_ms = &marquee_budget_ms,
+                        .last_loop_ms = &last_loop_ms,
+                        .marquee_step_interval_ms = marquee_step_interval_ms,
+                    };
+                    panels.renderListSearchOverlay(
                         &app.term_rows,
                         &app.term_cols,
                         refreshTerminalSizeValues,
                         &widget,
-                    );
+                        .{
+                            .ptr = &bg_update,
+                            .update_fn = ResultsBgUpdate.update,
+                        },
+                    ) catch |err| {
+                        deinitResultsState(app.allocator, results_state);
+                        cleaned_up = true;
+
+                        const msg = switch (err) {
+                            error.ConnectionRefused => "Cannot connect to Jackett. Is it running?",
+                            error.InvalidUrl => "Invalid Jackett URL in config",
+                            error.RequestCreateFailed => "Failed to create Jackett request",
+                            error.RequestSendFailed => "Failed to send Jackett request",
+                            error.ResponseEmpty => "Empty response from Jackett",
+                            error.XmlParsingFailed => "Failed to parse Torznab XML response from Jackett",
+                            error.OutOfMemory => "Out of memory",
+                            else => "Unexpected error in search overlay",
+                        };
+                        app.state = .{ .err = .{ .message = msg } };
+                        return;
+                    };
                     widget.force_full_redraw = true;
                     needs_render = true;
                 },

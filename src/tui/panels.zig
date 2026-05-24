@@ -399,13 +399,20 @@ fn drawExitConfirmationModal() void {
     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 }
 
+pub const BackgroundUpdateContext = struct {
+    ptr: ?*anyopaque,
+    update_fn: *const fn (ptr: ?*anyopaque) anyerror!bool,
+};
+
 pub fn renderListSearchOverlay(
     term_rows: *u16,
     term_cols: *u16,
     refresh_terminal_size: RefreshTerminalSizeFn,
     widget: *results_widget.ResultsWidget,
+    bg_update: ?BackgroundUpdateContext,
 ) !void {
     term.discardPendingInput();
+    defer term.hideCursor();
     var query_buf = std.ArrayList(u8).empty;
     defer query_buf.deinit(widget.allocator);
 
@@ -415,6 +422,16 @@ pub fn renderListSearchOverlay(
     while (true) {
         if (refresh_terminal_size(term_rows, term_cols)) {
             needs_render = true;
+        }
+
+        if (bg_update) |bg| {
+            if (bg.update_fn(bg.ptr)) |changed| {
+                if (changed) {
+                    needs_render = true;
+                }
+            } else |err| {
+                return err;
+            }
         }
 
         if (needs_render) {
