@@ -4,6 +4,9 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Fixed
+- Fixed release artifact size issue where the Linux executable was not being stripped (resulting in a 9.18 MB binary). The root cause was `exe_tests` sharing the main executable's `root_module`, which allowed the coverage setup loop to mutate the `strip` property of both to `false` on every build graph construction. Now, `exe_tests` uses an isolated root module to prevent cross-mutation.
+
 ## 0.4.0
 
 ### Added
