@@ -4,6 +4,19 @@ const theme = @import("theme");
 const Torrent = @import("torrent").Torrent;
 const compat = @import("compat");
 
+const spinner_frames = [_][]const u8{
+    "⣎⡇",
+    "⣇⡇",
+    "⣏⡆",
+    "⣏⡅",
+    "⣏⡃",
+    "⣏⠇",
+    "⡏⡇",
+    "⢏⡇",
+    "⣋⡇",
+    "⣍⡇",
+};
+
 pub const ResultsWidget = struct {
     allocator: std.mem.Allocator,
     torrents: []const Torrent,
@@ -23,6 +36,7 @@ pub const ResultsWidget = struct {
     marquee_title_col_width: usize,
     sent_torrents: std.ArrayList(SentTorrent),
     live_status: LiveStatus,
+    spinner_frame: usize,
 
     const marquee_edge_hold_ticks: u8 = 2;
 
@@ -70,11 +84,18 @@ pub const ResultsWidget = struct {
             .marquee_title_col_width = 0,
             .sent_torrents = .empty,
             .live_status = .{},
+            .spinner_frame = 0,
         };
     }
 
     pub fn deinit(self: *ResultsWidget) void {
         self.sent_torrents.deinit(self.allocator);
+    }
+
+    pub fn advanceSpinner(self: *ResultsWidget) bool {
+        if (self.live_status.phase == .done) return false;
+        self.spinner_frame = (self.spinner_frame + 1) % spinner_frames.len;
+        return true;
     }
 
     pub fn setTorrents(self: *ResultsWidget, torrents: []const Torrent, total: usize) void {
@@ -159,6 +180,7 @@ pub const ResultsWidget = struct {
             .torrents_len = self.torrents.len,
             .total_count = self.total_count,
             .live_status = self.live_status,
+            .spinner_frame = self.spinner_frame,
         };
         const redraw_mode = computeRedrawMode(
             self.has_drawn_once,
@@ -175,14 +197,10 @@ pub const ResultsWidget = struct {
                         stdout,
                         colors,
                         border,
-                        self.torrents,
-                        self.cursor,
+                        self,
                         max_cols,
                         self.getSendState(self.cursor),
-                        self.live_status,
-                        self.scroll_offset,
                         end_idx,
-                        self.total_count,
                     );
                 } else {
                     term.moveCursor(1, 1);
@@ -210,7 +228,7 @@ pub const ResultsWidget = struct {
                         }
                     }
                     drawPanelDivider(stdout, panel_width, border, colors) catch {};
-                    drawStatusRow(stdout, panel_width, border, colors, self.scroll_offset, end_idx, self.total_count, self.torrents.len, self.live_status) catch {};
+                    drawStatusRow(stdout, panel_width, border, colors, self, end_idx) catch {};
                     writeSpaces(stdout, 1) catch {};
                     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 
@@ -242,7 +260,7 @@ pub const ResultsWidget = struct {
                     }
                 }
                 drawPanelDivider(stdout, panel_width, border, colors) catch {};
-                drawStatusRow(stdout, panel_width, border, colors, self.scroll_offset, end_idx, self.total_count, self.torrents.len, self.live_status) catch {};
+                drawStatusRow(stdout, panel_width, border, colors, self, end_idx) catch {};
             },
             .partial_cursor => {
                 const prev = self.last_snapshot orelse snapshot;
@@ -475,6 +493,7 @@ const RenderSnapshot = struct {
     torrents_len: usize,
     total_count: usize,
     live_status: ResultsWidget.LiveStatus,
+    spinner_frame: usize = 0,
 };
 
 const TableLayout = struct {
@@ -536,6 +555,7 @@ fn computeRedrawMode(
     if (prev.torrents_len != current.torrents_len) return .full;
     if (prev.total_count != current.total_count) return .full;
     if (!std.meta.eql(prev.live_status, current.live_status)) return .partial_window;
+    if (prev.spinner_frame != current.spinner_frame) return .partial_window;
 
     if (prev.scroll_offset != current.scroll_offset) return .partial_window;
     if (prev.cursor != current.cursor) return .partial_cursor;
@@ -560,14 +580,10 @@ fn drawCompact(
     stdout: compat.FileWriter,
     colors: theme.Theme,
     border: theme.BorderChars,
-    torrents: []const Torrent,
-    cursor: usize,
+    self: *ResultsWidget,
     max_cols: u16,
     selected_send_state: ResultsWidget.SendState,
-    live_status: ResultsWidget.LiveStatus,
-    scroll_offset: usize,
     end_idx: usize,
-    total_count: usize,
 ) void {
     term.moveCursor(1, 1);
     term.clearScreen();
@@ -577,13 +593,13 @@ fn drawCompact(
     term.setBold(false);
     drawCompactDivider(stdout, colors, border, max_cols);
     term.setFg256(colorForSendState(colors, selected_send_state));
-    if (torrents.len == 0) {
+    if (self.torrents.len == 0) {
         var status_buf: [128]u8 = undefined;
-        const status = formatStatusText(&status_buf, scroll_offset, end_idx, total_count, torrents.len, live_status);
+        const status = formatStatusText(&status_buf, self.scroll_offset, end_idx, self.total_count, self.torrents.len, self.live_status, self.spinner_frame);
         stdout.writeAll(status) catch {};
         stdout.writeAll("\r\n") catch {};
     } else {
-        const current = torrents[cursor];
+        const current = self.torrents[self.cursor];
         var trunc_buf: [512]u8 = undefined;
         const shown = theme.truncateWithEllipsis(current.title, compactTitleWidth(max_cols), trunc_buf[0..]);
         stdout.writeAll("> ") catch {};
@@ -591,7 +607,7 @@ fn drawCompact(
         stdout.writeAll("\r\n") catch {};
         term.setFg256(colors.panel_title);
         var status_buf: [128]u8 = undefined;
-        const status = formatStatusText(&status_buf, scroll_offset, end_idx, total_count, torrents.len, live_status);
+        const status = formatStatusText(&status_buf, self.scroll_offset, end_idx, self.total_count, self.torrents.len, self.live_status, self.spinner_frame);
         stdout.writeAll(status) catch {};
         stdout.writeAll("\r\n") catch {};
     }
@@ -868,14 +884,11 @@ fn drawStatusRow(
     panel_width: usize,
     border: theme.BorderChars,
     colors: theme.Theme,
-    scroll_offset: usize,
+    self: *ResultsWidget,
     end_idx: usize,
-    total_count: usize,
-    torrents_len: usize,
-    live_status: ResultsWidget.LiveStatus,
 ) !void {
     var status_buf: [128]u8 = undefined;
-    const status = formatStatusText(&status_buf, scroll_offset, end_idx, total_count, torrents_len, live_status);
+    const status = formatStatusText(&status_buf, self.scroll_offset, end_idx, self.total_count, self.torrents.len, self.live_status, self.spinner_frame);
     try writeSpaces(stdout, 1);
     const inner_width = panel_width - 2;
     term.setFg256(colors.panel_border);
@@ -895,34 +908,36 @@ fn formatStatusText(
     total_count: usize,
     torrents_len: usize,
     live_status: ResultsWidget.LiveStatus,
+    spinner_frame: usize,
 ) []const u8 {
     const base = switch (live_status.phase) {
         .discovering => if (torrents_len == 0)
-            std.fmt.bufPrint(buf, "No results yet | Discovering indexers...", .{}) catch "No results yet"
+            std.fmt.bufPrint(buf, "No results yet | Discovering indexers... {s}", .{spinner_frames[spinner_frame % spinner_frames.len]}) catch "No results yet"
         else
             formatShowing(buf, scroll_offset, end_idx, total_count),
         .querying => querying: {
+            const spinner = spinner_frames[spinner_frame % spinner_frames.len];
             if (torrents_len == 0) {
                 if (live_status.failed == 0) {
-                    break :querying std.fmt.bufPrint(buf, "No results yet | Searching {d}/{d}", .{ live_status.completed, live_status.total }) catch "No results yet";
+                    break :querying std.fmt.bufPrint(buf, "No results yet | Searching {d}/{d} {s}", .{ live_status.completed, live_status.total, spinner }) catch "No results yet";
                 }
                 break :querying std.fmt.bufPrint(
                     buf,
-                    "No results yet | Searching {d}/{d}, {d} failed",
-                    .{ live_status.completed, live_status.total, live_status.failed },
+                    "No results yet | Searching {d}/{d}, {d} failed {s}",
+                    .{ live_status.completed, live_status.total, live_status.failed, spinner },
                 ) catch "No results yet";
             }
             if (live_status.failed == 0) {
                 break :querying std.fmt.bufPrint(
                     buf,
-                    "Showing {d}-{d} of {d} | Searching {d}/{d}",
-                    .{ scroll_offset + 1, end_idx, total_count, live_status.completed, live_status.total },
+                    "Showing {d}-{d} of {d} | Searching {d}/{d} {s}",
+                    .{ scroll_offset + 1, end_idx, total_count, live_status.completed, live_status.total, spinner },
                 ) catch "Showing";
             }
             break :querying std.fmt.bufPrint(
                 buf,
-                "Showing {d}-{d} of {d} | Searching {d}/{d}, {d} failed",
-                .{ scroll_offset + 1, end_idx, total_count, live_status.completed, live_status.total, live_status.failed },
+                "Showing {d}-{d} of {d} | Searching {d}/{d}, {d} failed {s}",
+                .{ scroll_offset + 1, end_idx, total_count, live_status.completed, live_status.total, live_status.failed, spinner },
             ) catch "Showing";
         },
         .done => done: {
@@ -1542,26 +1557,51 @@ test "formatStatusText renders live search phases" {
     var buf: [128]u8 = undefined;
 
     try std.testing.expectEqualStrings(
-        "No results yet | Discovering indexers...",
-        formatStatusText(&buf, 0, 0, 0, 0, .{ .phase = .discovering }),
+        "No results yet | Discovering indexers... ⣎⡇",
+        formatStatusText(&buf, 0, 0, 0, 0, .{ .phase = .discovering }, 0),
     );
     try std.testing.expectEqualStrings(
-        "Showing 1-10 of 42 | Searching 3/8",
-        formatStatusText(&buf, 0, 10, 42, 42, .{ .phase = .querying, .completed = 3, .total = 8 }),
+        "Showing 1-10 of 42 | Searching 3/8 ⣎⡇",
+        formatStatusText(&buf, 0, 10, 42, 42, .{ .phase = .querying, .completed = 3, .total = 8 }, 0),
     );
     try std.testing.expectEqualStrings(
-        "Showing 1-10 of 42 | Searching 3/8, 1 failed",
-        formatStatusText(&buf, 0, 10, 42, 42, .{ .phase = .querying, .completed = 3, .total = 8, .failed = 1 }),
+        "Showing 1-10 of 42 | Searching 3/8, 1 failed ⣇⡇",
+        formatStatusText(&buf, 0, 10, 42, 42, .{ .phase = .querying, .completed = 3, .total = 8, .failed = 1 }, 1),
     );
     try std.testing.expectEqualStrings(
         "Showing 1-10 of 42",
-        formatStatusText(&buf, 0, 10, 42, 42, .{ .phase = .done }),
+        formatStatusText(&buf, 0, 10, 42, 42, .{ .phase = .done }, 0),
     );
     try std.testing.expectEqualStrings(
         "No results found",
-        formatStatusText(&buf, 0, 0, 0, 0, .{ .phase = .done }),
+        formatStatusText(&buf, 0, 0, 0, 0, .{ .phase = .done }, 0),
     );
 }
+
+test "ResultsWidget advanceSpinner ticks frame correctly" {
+    var widget = ResultsWidget.init(std.testing.allocator);
+    defer widget.deinit();
+
+    // done phase: should not tick
+    widget.live_status = .{ .phase = .done };
+    try std.testing.expect(!widget.advanceSpinner());
+    try std.testing.expectEqual(@as(usize, 0), widget.spinner_frame);
+
+    // querying phase: should tick and wrap around spinner_frames
+    widget.live_status = .{ .phase = .querying };
+    try std.testing.expect(widget.advanceSpinner());
+    try std.testing.expectEqual(@as(usize, 1), widget.spinner_frame);
+
+    for (0..8) |_| {
+        try std.testing.expect(widget.advanceSpinner());
+    }
+    try std.testing.expectEqual(@as(usize, 9), widget.spinner_frame);
+
+    // 10th tick should wrap around to 0
+    try std.testing.expect(widget.advanceSpinner());
+    try std.testing.expectEqual(@as(usize, 0), widget.spinner_frame);
+}
+
 
 test "stepMarqueeState bounces and flips direction" {
     var offset: usize = 0;

@@ -260,8 +260,12 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                     }
                 },
             }
-        } else if (consumeMarqueeTick(&marquee_budget_ms, marquee_step_interval_ms) and widget.advanceMarquee(app.term_rows, app.term_cols)) {
-            needs_render = true;
+        } else if (consumeMarqueeTick(&marquee_budget_ms, marquee_step_interval_ms)) {
+            const marquee_changed = widget.advanceMarquee(app.term_rows, app.term_cols);
+            const spinner_changed = widget.advanceSpinner();
+            if (marquee_changed or spinner_changed) {
+                needs_render = true;
+            }
         }
     }
 }
