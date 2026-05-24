@@ -107,6 +107,13 @@ pub fn runWithDeps(allocator: std.mem.Allocator, cfg: config.Config, deps: AppDe
 fn runSearchState(app: *App) !void {
     var widget = search_widget.SearchWidget.init(app.allocator);
     defer widget.deinit();
+
+    if (app.state.search.query.len > 0) {
+        try widget.setQuery(app.state.search.query);
+        app.allocator.free(app.state.search.query);
+        app.state.search.query = "";
+    }
+
     configureSearchWidgetForApp(&widget, app);
     var needs_render = true;
     const input_poll_ms: i32 = 80;
@@ -228,9 +235,10 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                     }
                 },
                 .new_search => {
+                    const last_query = try app.allocator.dupe(u8, results_state.query);
                     deinitResultsState(app.allocator, results_state);
                     cleaned_up = true;
-                    app.state = .{ .search = .{ .query = "" } };
+                    app.state = .{ .search = .{ .query = last_query } };
                     return;
                 },
                 .cancel => {

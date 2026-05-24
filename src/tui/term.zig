@@ -6,6 +6,7 @@ pub const Key = enum {
     escape,
     enter,
     backspace,
+    shift_backspace,
     digit,
     char,
     unknown,
@@ -90,7 +91,18 @@ pub fn readKey() !Event {
     }
 
     if (b == 0x7f or b == 0x08) {
-        return Event{ .key = .backspace, .value = 0 };
+        if (builtin.os.tag == .windows) {
+            if (b == 0x08) return Event{ .key = .backspace, .value = 0 };
+            return Event{ .key = .shift_backspace, .value = 0 };
+        } else {
+            const erase_char = original_termios.cc[@intFromEnum(std.posix.V.ERASE)];
+            const is_backspace = if (erase_char != 0) b == erase_char else b == 0x7f;
+            if (is_backspace) {
+                return Event{ .key = .backspace, .value = 0 };
+            } else {
+                return Event{ .key = .shift_backspace, .value = 0 };
+            }
+        }
     }
 
     if (b >= '0' and b <= '9') {

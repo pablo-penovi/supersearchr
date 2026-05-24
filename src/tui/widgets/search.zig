@@ -66,6 +66,10 @@ pub const SearchWidget = struct {
                 }
                 return .continue_search;
             },
+            .shift_backspace => {
+                self.clear();
+                return .continue_search;
+            },
             .enter => {
                 if (self.query.items.len > 0) {
                     return .submit;
@@ -87,6 +91,11 @@ pub const SearchWidget = struct {
 
     pub fn clear(self: *SearchWidget) void {
         self.query.clearRetainingCapacity();
+    }
+
+    pub fn setQuery(self: *SearchWidget, query: []const u8) !void {
+        self.query.clearRetainingCapacity();
+        try self.query.appendSlice(self.allocator, query);
     }
 
     pub fn setLatestVersion(self: *SearchWidget, latest_version: ?[]const u8) void {
@@ -136,7 +145,7 @@ fn drawCompactFull(stdout: compat.FileWriter, colors: theme.Theme, query: []cons
     stdout.writeAll(query) catch {};
     stdout.writeAll("\r\n") catch {};
     term.setFg256(colors.muted);
-    stdout.writeAll("ENTER search | ESC exit\r\n") catch {};
+    stdout.writeAll("ENTER search | ESC exit | Shift-BS clear\r\n") catch {};
     writeVersionLine(stdout, colors, latest_version);
 }
 
@@ -183,7 +192,7 @@ fn drawPanelFrame(stdout: compat.FileWriter, colors: theme.Theme, border: theme.
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.setFg256(colors.muted);
-    theme.writePadded(stdout, " ENTER submit | ESC quit ", layout.panel_width - 2) catch {};
+    theme.writePadded(stdout, " ENTER submit | ESC quit | Shift-BS clear ", layout.panel_width - 2) catch {};
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.resetColor();
@@ -441,3 +450,28 @@ test "writePanelRowNoNewline fills to width with borders" {
     try std.testing.expect(std.mem.indexOf(u8, out.items, "\r\n") == null);
     try std.testing.expectEqual(@as(usize, 12), out.items.len);
 }
+
+test "SearchWidget handleEvent shift_backspace clears query" {
+    const allocator = std.testing.allocator;
+    var widget = SearchWidget.init(allocator);
+    defer widget.deinit();
+
+    try widget.query.append(allocator, 'h');
+    try widget.query.append(allocator, 'i');
+
+    const event = term.Event{ .key = .shift_backspace, .value = 0 };
+    const action = widget.handleEvent(event);
+
+    try std.testing.expectEqual(SearchAction.continue_search, action);
+    try std.testing.expectEqual(@as(usize, 0), widget.query.items.len);
+}
+
+test "SearchWidget setQuery populates query" {
+    const allocator = std.testing.allocator;
+    var widget = SearchWidget.init(allocator);
+    defer widget.deinit();
+
+    try widget.setQuery("test query");
+    try std.testing.expectEqualStrings("test query", widget.query.items);
+}
+

@@ -4,6 +4,11 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Added
+- Pre-populate the search query input with the last searched term when starting a new search from the results screen.
+- Support clearing the search query input by pressing `Shift+Backspace`.
+- Document the new clear shortcut in the search panel UI help texts as `Shift-BS`.
+
 ### Changed
 - Migrated the project tooling and documentation to Zig 0.16.0.
 - Show the results screen immediately after submitting a search and stream Jackett indexer batches into the sorted result list as they finish.
