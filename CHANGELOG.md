@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file.
 - Pre-populate the search query input with the last searched term when starting a new search from the results screen.
 - Support clearing the search query input by pressing `Shift+Backspace`.
 - Document the new clear shortcut in the search panel UI help texts as `Shift-BS`.
+- Show a confirmation modal in the center of the screen when exiting the app with `ESC` from any screen, requiring a second `ESC` press to exit or any other key to cancel.
 
 ### Changed
 - Migrated the project tooling and documentation to Zig 0.16.0.

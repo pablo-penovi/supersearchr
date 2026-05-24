@@ -284,6 +284,121 @@ fn drawFailedIndexersModal(failed_indexers: []const []const u8) void {
     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 }
 
+pub fn renderExitConfirmationOverlay(
+    term_rows: *u16,
+    term_cols: *u16,
+    refresh_terminal_size: RefreshTerminalSizeFn,
+    context: anytype,
+) bool {
+    term.discardPendingInput();
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
+
+    while (true) {
+        if (refresh_terminal_size(term_rows, term_cols)) {
+            needs_render = true;
+        }
+
+        if (needs_render) {
+            term.setDimPersistent(true);
+            if (comptime @hasField(@TypeOf(context.*), "force_full_redraw")) {
+                context.force_full_redraw = true;
+                context.render(term_rows.*, term_cols.*);
+            } else {
+                context.has_drawn_once = false;
+                context.render();
+            }
+            term.setDimPersistent(false);
+
+            drawExitConfirmationModal();
+            needs_render = false;
+        }
+
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return false;
+        if (maybe_event) |event| {
+            term.discardPendingInput();
+            if (event.key == .escape) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    }
+}
+
+fn drawExitConfirmationModal() void {
+    const stdout = compat.stdoutWriter();
+    const colors = theme.superseedr_like;
+    const border = theme.unicode_border;
+    const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
+
+    const is_compact = theme.isCompactViewport(size.rows, size.cols);
+    if (is_compact) {
+        term.moveCursor(1, 1);
+        term.setFg256(colors.err);
+        term.setBold(true);
+        stdout.writeAll("Exit Confirmation:\r\n") catch {};
+        term.setBold(false);
+        term.setFg256(colors.text);
+        stdout.writeAll("Press ESC again to exit,\r\n") catch {};
+        stdout.writeAll("any other key to cancel.\r\n") catch {};
+        term.resetColor();
+        return;
+    }
+
+    const panel_width = @min(@as(usize, 52), @as(usize, @intCast(size.cols - 4)));
+    const left_pad = (@as(usize, @intCast(size.cols)) - panel_width) / 2;
+    const panel_height = 5;
+    const top_pad = @max(@as(usize, 2), (@as(usize, @intCast(size.rows)) - panel_height) / 2);
+    const panel_col = @as(u16, @intCast(left_pad + 1));
+    const top_row = @as(u16, @intCast(top_pad));
+
+    // Top border
+    term.moveCursor(top_row, panel_col);
+    theme.drawPanelTop(stdout, panel_width, border, colors) catch {};
+
+    // Title row
+    term.moveCursor(top_row + 1, panel_col);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.setFg256(colors.err);
+    term.setBold(true);
+    var title_buf: [64]u8 = undefined;
+    const title_line = std.fmt.bufPrint(&title_buf, " Exit Confirmation ", .{}) catch " Exit Confirmation ";
+    theme.writePadded(stdout, title_line, panel_width - 2) catch {};
+    term.setBold(false);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.resetColor();
+    stdout.writeAll("\r\n") catch {};
+
+    // Message row 1
+    term.moveCursor(top_row + 2, panel_col);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.setFg256(colors.text);
+    theme.writePadded(stdout, " Press ESC again to exit, ", panel_width - 2) catch {};
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.resetColor();
+    stdout.writeAll("\r\n") catch {};
+
+    // Message row 2
+    term.moveCursor(top_row + 3, panel_col);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.setFg256(colors.muted);
+    theme.writePadded(stdout, " any other key to cancel. ", panel_width - 2) catch {};
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.resetColor();
+    stdout.writeAll("\r\n") catch {};
+
+    // Bottom border
+    term.moveCursor(top_row + 4, panel_col);
+    theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
+}
+
 test "computeNoticePanelLayout uses compact mode below breakpoint" {
     const compact = computeNoticePanelLayout(.{ .rows = 9, .cols = 80 });
     try std.testing.expect(compact.compact);

@@ -144,8 +144,12 @@ fn runSearchState(app: *App) !void {
                 return;
             },
             .cancel => {
-                app.running = false;
-                return;
+                if (panels.renderExitConfirmationOverlay(&app.term_rows, &app.term_cols, refreshTerminalSizeValues, &widget)) {
+                    app.running = false;
+                    return;
+                }
+                widget.has_drawn_once = false;
+                needs_render = true;
             },
         }
     }
@@ -244,10 +248,14 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                     return;
                 },
                 .cancel => {
-                    deinitResultsState(app.allocator, results_state);
-                    cleaned_up = true;
-                    app.running = false;
-                    return;
+                    if (panels.renderExitConfirmationOverlay(&app.term_rows, &app.term_cols, refreshTerminalSizeValues, &widget)) {
+                        deinitResultsState(app.allocator, results_state);
+                        cleaned_up = true;
+                        app.running = false;
+                        return;
+                    }
+                    widget.force_full_redraw = true;
+                    needs_render = true;
                 },
                 .select => |idx| {
                     if (idx >= results_state.torrents.items.len) continue;
