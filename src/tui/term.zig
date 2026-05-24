@@ -7,6 +7,10 @@ pub const Key = enum {
     enter,
     backspace,
     shift_backspace,
+    arrow_up,
+    arrow_down,
+    shift_arrow_up,
+    shift_arrow_down,
     digit,
     char,
     unknown,
@@ -81,24 +85,17 @@ pub fn readKey() !Event {
 
     if (b == 0x1b) {
         if (builtin.os.tag == .windows) {
-            if (try consumeEscapeSequenceWindows(stdin)) {
-                return Event{ .key = .unknown, .value = 0 };
+            var seq_buf: [32]u8 = undefined;
+            const seq_len = try readEscapeSequenceWindows(stdin, &seq_buf);
+            if (seq_len > 0) {
+                return classifyEscapeSequence(seq_buf[0..seq_len]);
             }
             return Event{ .key = .escape, .value = 0 };
         } else {
             var seq_buf: [32]u8 = undefined;
             const seq_len = try readEscapeSequencePosix(stdin, &seq_buf);
             if (seq_len > 0) {
-                const seq = seq_buf[0..seq_len];
-                if (std.mem.eql(u8, seq, "[127;2u") or
-                    std.mem.eql(u8, seq, "[8;2u") or
-                    std.mem.eql(u8, seq, "[3;2~") or
-                    std.mem.eql(u8, seq, "[27;2;127~") or
-                    std.mem.eql(u8, seq, "[27;2;8~"))
-                {
-                    return Event{ .key = .shift_backspace, .value = 0 };
-                }
-                return Event{ .key = .unknown, .value = 0 };
+                return classifyEscapeSequence(seq_buf[0..seq_len]);
             }
             return Event{ .key = .escape, .value = 0 };
         }
@@ -132,6 +129,25 @@ pub fn readKey() !Event {
     }
 
     return Event{ .key = .unknown, .value = b };
+}
+
+fn classifyEscapeSequence(seq: []const u8) Event {
+    // Arrow keys: \x1b[A (up), \x1b[B (down)
+    if (std.mem.eql(u8, seq, "[A")) return Event{ .key = .arrow_up, .value = 0 };
+    if (std.mem.eql(u8, seq, "[B")) return Event{ .key = .arrow_down, .value = 0 };
+    // Shift+arrow: \x1b[1;2A (shift+up), \x1b[1;2B (shift+down)
+    if (std.mem.eql(u8, seq, "[1;2A")) return Event{ .key = .shift_arrow_up, .value = 0 };
+    if (std.mem.eql(u8, seq, "[1;2B")) return Event{ .key = .shift_arrow_down, .value = 0 };
+    // Shift+backspace variants
+    if (std.mem.eql(u8, seq, "[127;2u") or
+        std.mem.eql(u8, seq, "[8;2u") or
+        std.mem.eql(u8, seq, "[3;2~") or
+        std.mem.eql(u8, seq, "[27;2;127~") or
+        std.mem.eql(u8, seq, "[27;2;8~"))
+    {
+        return Event{ .key = .shift_backspace, .value = 0 };
+    }
+    return Event{ .key = .unknown, .value = 0 };
 }
 
 fn consumeEscapeSequence(stdin: std.Io.File) !bool {
@@ -172,33 +188,37 @@ fn readEscapeSequencePosix(stdin: std.Io.File, buf: []u8) !usize {
     return idx;
 }
 
-fn consumeEscapeSequenceWindows(stdin: std.Io.File) !bool {
+fn readEscapeSequenceWindows(stdin: std.Io.File, buf: []u8) !usize {
     const stdin_handle = try windows.GetStdHandle(windows.STD_INPUT_HANDLE);
     const wait_ms: windows.DWORD = @intCast(escape_sequence_timeout_ms);
     windows.WaitForSingleObject(stdin_handle, wait_ms) catch |err| switch (err) {
-        error.WaitAbandoned => return false,
-        error.WaitTimeOut => return false,
+        error.WaitAbandoned => return 0,
+        error.WaitTimeOut => return 0,
         else => return err,
     };
 
-    try consumePendingEscapeBytesWindows(stdin, stdin_handle);
-    return true;
-}
-
-fn consumePendingEscapeBytesWindows(stdin: std.Io.File, stdin_handle: windows.HANDLE) !void {
-    var buf: [16]u8 = undefined;
-
-    while (true) {
-        const read_n = try compat.readFile(stdin, &buf);
-        if (read_n == 0) return;
-        if (endsEscapeSequence(buf[0..read_n])) return;
+    var idx: usize = 0;
+    while (idx < buf.len) {
+        var single_buf: [1]u8 = undefined;
+        const read_n = try compat.readFile(stdin, &single_buf);
+        if (read_n == 0) break;
+        buf[idx] = single_buf[0];
+        idx += 1;
+        if (endsEscapeSequence(buf[0..idx])) break;
 
         windows.WaitForSingleObject(stdin_handle, 0) catch |err| switch (err) {
-            error.WaitAbandoned => return,
-            error.WaitTimeOut => return,
+            error.WaitAbandoned => break,
+            error.WaitTimeOut => break,
             else => return err,
         };
     }
+    return idx;
+}
+
+fn consumeEscapeSequenceWindows(stdin: std.Io.File) !bool {
+    var dummy: [32]u8 = undefined;
+    const len = try readEscapeSequenceWindows(stdin, &dummy);
+    return len > 0;
 }
 
 fn endsEscapeSequence(bytes: []const u8) bool {

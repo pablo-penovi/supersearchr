@@ -247,7 +247,7 @@ pub const ResultsWidget = struct {
                     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 
                     term.setFg256(colors.muted);
-                    stdout.writeAll("  ENTER select | n search | ESC exit | j/k line down/up | J/K page down/up") catch {};
+                    stdout.writeAll("  ENTER select | n search | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line | J/K/shift+\xe2\x86\x91\xe2\x86\x93 page") catch {};
                     term.resetColor();
                     term.clearBelow();
                 }
@@ -389,40 +389,26 @@ pub const ResultsWidget = struct {
                     if (self.live_status.phase == .done and self.live_status.failed > 0) return .review_failures;
                 }
                 if (event.value == 'j') {
-                    if (self.cursor < self.torrents.len - 1) {
-                        self.cursor += 1;
-                        self.adjustScroll();
-                        self.resetMarqueeState();
-                    }
-                    return .continue_browsing;
+                    return self.moveCursorDown();
                 }
                 if (event.value == 'k') {
-                    if (self.cursor > 0) {
-                        self.cursor -= 1;
-                        self.adjustScroll();
-                        self.resetMarqueeState();
-                    }
-                    return .continue_browsing;
+                    return self.moveCursorUp();
                 }
                 if (event.value == 'J') {
-                    const step = @min(self.display_count, self.torrents.len - 1 - self.cursor);
-                    self.cursor += step;
-                    self.adjustScroll();
-                    if (step > 0) self.resetMarqueeState();
-                    return .continue_browsing;
+                    return self.moveCursorPageDown();
                 }
                 if (event.value == 'K') {
-                    const step = @min(self.display_count, self.cursor);
-                    self.cursor -= step;
-                    self.adjustScroll();
-                    if (step > 0) self.resetMarqueeState();
-                    return .continue_browsing;
+                    return self.moveCursorPageUp();
                 }
                 if (event.value == 'n' or event.value == 'N') {
                     return .new_search;
                 }
                 return .continue_browsing;
             },
+            .arrow_down => return self.moveCursorDown(),
+            .arrow_up => return self.moveCursorUp(),
+            .shift_arrow_down => return self.moveCursorPageDown(),
+            .shift_arrow_up => return self.moveCursorPageUp(),
             .enter => {
                 return .{ .select = self.cursor };
             },
@@ -494,6 +480,40 @@ pub const ResultsWidget = struct {
         self.marquee_cursor = 0;
         self.marquee_title_col_width = 0;
         self.force_selected_redraw = false;
+    }
+
+    fn moveCursorDown(self: *ResultsWidget) ResultsAction {
+        if (self.cursor < self.torrents.len - 1) {
+            self.cursor += 1;
+            self.adjustScroll();
+            self.resetMarqueeState();
+        }
+        return .continue_browsing;
+    }
+
+    fn moveCursorUp(self: *ResultsWidget) ResultsAction {
+        if (self.cursor > 0) {
+            self.cursor -= 1;
+            self.adjustScroll();
+            self.resetMarqueeState();
+        }
+        return .continue_browsing;
+    }
+
+    fn moveCursorPageDown(self: *ResultsWidget) ResultsAction {
+        const step = @min(self.display_count, self.torrents.len - 1 - self.cursor);
+        self.cursor += step;
+        self.adjustScroll();
+        if (step > 0) self.resetMarqueeState();
+        return .continue_browsing;
+    }
+
+    fn moveCursorPageUp(self: *ResultsWidget) ResultsAction {
+        const step = @min(self.display_count, self.cursor);
+        self.cursor -= step;
+        self.adjustScroll();
+        if (step > 0) self.resetMarqueeState();
+        return .continue_browsing;
     }
 };
 
@@ -631,7 +651,7 @@ fn drawCompact(
     }
     drawCompactDivider(stdout, colors, border, max_cols);
     term.setFg256(colors.muted);
-    stdout.writeAll("ENTER select | n search | ESC exit | j/k line down/up") catch {};
+    stdout.writeAll("ENTER select | n search | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line") catch {};
     term.resetColor();
     term.clearBelow();
 }
