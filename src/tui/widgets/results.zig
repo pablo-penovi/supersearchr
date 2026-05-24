@@ -52,6 +52,8 @@ pub const ResultsWidget = struct {
     sort_column: SortColumn,
     sort_order: SortOrder,
     header_cursor: SortColumn,
+    list_search_query: ?[]const u8,
+    list_search_active: bool,
 
     const marquee_edge_hold_ticks: u8 = 2;
 
@@ -104,6 +106,8 @@ pub const ResultsWidget = struct {
             .sort_column = .seeders,
             .sort_order = .desc,
             .header_cursor = .seeders,
+            .list_search_query = null,
+            .list_search_active = false,
         };
     }
 
@@ -113,6 +117,9 @@ pub const ResultsWidget = struct {
             self.allocator.free(name);
         }
         self.failed_indexers.deinit(self.allocator);
+        if (self.list_search_query) |q| {
+            self.allocator.free(q);
+        }
     }
 
     pub fn addFailedIndexer(self: *ResultsWidget, name: []const u8) !void {
@@ -266,7 +273,7 @@ pub const ResultsWidget = struct {
                     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 
                     term.setFg256(colors.muted);
-                    stdout.writeAll("  ENTER select | n search | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line | J/K/shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort") catch {};
+                    stdout.writeAll("  ENTER select | s search | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line | J/K/shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort") catch {};
                     term.resetColor();
                     term.clearBelow();
                 }
@@ -352,6 +359,22 @@ pub const ResultsWidget = struct {
         self.force_full_redraw = false;
         self.force_selected_redraw = false;
         self.last_snapshot = snapshot;
+    }
+
+    pub fn renderStatusOnly(self: *ResultsWidget, max_rows: u16, max_cols: u16) bool {
+        const compact = theme.isCompactViewport(max_rows, max_cols);
+        if (compact) return false;
+
+        const stdout = compat.stdoutWriter();
+        const colors = theme.superseedr_like;
+        const border = theme.unicode_border;
+        const panel_width = @as(usize, @intCast(max_cols - 2));
+        self.display_count = computeDisplayCount(max_rows, self.torrents.len);
+        const end_idx = @min(self.scroll_offset + self.display_count, self.torrents.len);
+
+        term.moveCursor(statusRowFromDisplayCount(self.display_count), 1);
+        drawStatusRow(stdout, panel_width, border, colors, self, end_idx) catch {};
+        return true;
     }
 
     fn drawBorder(char: u8, width: u16) void {
@@ -446,7 +469,7 @@ pub const ResultsWidget = struct {
                     if (event.value == 'e' or event.value == 'E') {
                         if (self.live_status.phase == .done and self.live_status.failed > 0) return .review_failures;
                     }
-                    if (event.value == 'n' or event.value == 'N') return .new_search;
+                    if (event.value == 's' or event.value == 'S') return .new_search;
                     return .continue_browsing;
                 },
                 .escape => return .cancel,
@@ -473,8 +496,23 @@ pub const ResultsWidget = struct {
                 if (event.value == 'K') {
                     return self.moveCursorPageUp();
                 }
-                if (event.value == 'n' or event.value == 'N') {
+                if (event.value == 's' or event.value == 'S') {
                     return .new_search;
+                }
+                if (event.value == '/') {
+                    return .open_list_search;
+                }
+                if (event.value == 'n') {
+                    if (self.list_search_active and self.list_search_query != null) {
+                        self.moveNextMatch();
+                    }
+                    return .continue_browsing;
+                }
+                if (event.value == 'N') {
+                    if (self.list_search_active and self.list_search_query != null) {
+                        self.movePrevMatch();
+                    }
+                    return .continue_browsing;
                 }
                 return .continue_browsing;
             },
@@ -486,6 +524,10 @@ pub const ResultsWidget = struct {
                 return .{ .select = self.cursor };
             },
             .escape => {
+                if (self.list_search_active) {
+                    self.clearListSearch();
+                    return .continue_browsing;
+                }
                 return .cancel;
             },
             else => {
@@ -588,6 +630,69 @@ pub const ResultsWidget = struct {
         if (step > 0) self.resetMarqueeState();
         return .continue_browsing;
     }
+
+    pub fn applyListSearch(self: *ResultsWidget, query: []const u8) !void {
+        if (self.list_search_query) |existing| {
+            self.allocator.free(existing);
+        }
+        self.list_search_query = try self.allocator.dupe(u8, query);
+        self.list_search_active = true;
+        self.force_full_redraw = true;
+
+        // Jump to the first match starting from current cursor (inclusive)
+        if (self.torrents.len > 0) {
+            var i: usize = 0;
+            while (i < self.torrents.len) : (i += 1) {
+                const idx = (self.cursor + i) % self.torrents.len;
+                if (titleContains(self.torrents[idx].title, query)) {
+                    self.cursor = idx;
+                    self.adjustScroll();
+                    break;
+                }
+            }
+        }
+    }
+
+    pub fn clearListSearch(self: *ResultsWidget) void {
+        if (self.list_search_query) |existing| {
+            self.allocator.free(existing);
+            self.list_search_query = null;
+        }
+        self.list_search_active = false;
+        self.force_full_redraw = true;
+    }
+
+    pub fn moveNextMatch(self: *ResultsWidget) void {
+        const query = self.list_search_query orelse return;
+        if (self.torrents.len == 0) return;
+
+        var i: usize = 1;
+        while (i <= self.torrents.len) : (i += 1) {
+            const idx = (self.cursor + i) % self.torrents.len;
+            if (titleContains(self.torrents[idx].title, query)) {
+                self.cursor = idx;
+                self.adjustScroll();
+                self.force_full_redraw = true;
+                return;
+            }
+        }
+    }
+
+    pub fn movePrevMatch(self: *ResultsWidget) void {
+        const query = self.list_search_query orelse return;
+        if (self.torrents.len == 0) return;
+
+        var i: usize = 1;
+        while (i <= self.torrents.len) : (i += 1) {
+            const idx = (self.cursor + self.torrents.len * i - i) % self.torrents.len;
+            if (titleContains(self.torrents[idx].title, query)) {
+                self.cursor = idx;
+                self.adjustScroll();
+                self.force_full_redraw = true;
+                return;
+            }
+        }
+    }
 };
 
 const RenderMode = enum {
@@ -676,6 +781,78 @@ fn computeRedrawMode(
     return .none;
 }
 
+fn titleContains(title: []const u8, query: []const u8) bool {
+    if (query.len == 0) return false;
+    if (title.len < query.len) return false;
+
+    var i: usize = 0;
+    while (i <= title.len - query.len) : (i += 1) {
+        if (std.ascii.eqlIgnoreCase(title[i .. i + query.len], query)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn padTitle(buf: []u8, text: []const u8, width: usize) []const u8 {
+    if (width == 0) return "";
+    const disp_width = theme.displayWidthOfText(text);
+    if (disp_width >= width) return text;
+
+    @memcpy(buf[0..text.len], text);
+    var idx = text.len;
+    for (0..(width - disp_width)) |_| {
+        buf[idx] = ' ';
+        idx += 1;
+    }
+    return buf[0..idx];
+}
+
+fn highlightSearchTerm(
+    dest: []u8,
+    title: []const u8,
+    search_term: []const u8,
+    is_selected: bool,
+    colors: theme.Theme,
+    send_state: ResultsWidget.SendState,
+) []const u8 {
+    if (search_term.len == 0 or title.len == 0) return title;
+
+    var writer: std.Io.Writer = .fixed(dest);
+
+    var i: usize = 0;
+    while (i < title.len) {
+        if (i + search_term.len <= title.len and
+            std.ascii.eqlIgnoreCase(title[i .. i + search_term.len], search_term))
+        {
+            // Match found! Write highlight ANSI sequence.
+            writer.writeAll("\x1b[48;5;220m\x1b[38;5;16m\x1b[1m") catch break;
+            writer.writeAll(title[i .. i + search_term.len]) catch break;
+
+            // Restore styling:
+            writer.writeAll("\x1b[0m") catch break;
+            if (is_selected) {
+                var buf: [64]u8 = undefined;
+                const fg = selectedColorForSendState(colors, send_state);
+                const style = std.fmt.bufPrint(&buf, "\x1b[48;5;{d}m\x1b[38;5;{d}m\x1b[1m", .{ colors.selected_bg, fg }) catch "";
+                writer.writeAll(style) catch break;
+            } else {
+                var buf: [32]u8 = undefined;
+                const fg = colorForSendState(colors, send_state);
+                const style = std.fmt.bufPrint(&buf, "\x1b[38;5;{d}m", .{fg}) catch "";
+                writer.writeAll(style) catch break;
+            }
+
+            i += search_term.len;
+        } else {
+            writer.writeByte(title[i]) catch break;
+            i += 1;
+        }
+    }
+
+    return writer.buffered();
+}
+
 fn computeDisplayCount(max_rows: u16, torrents_len: usize) usize {
     _ = torrents_len;
     return if (max_rows > 7) @as(usize, @intCast(max_rows - 7)) else 1;
@@ -746,9 +923,21 @@ fn drawCompact(
     } else {
         const current = self.torrents[self.cursor];
         var trunc_buf: [512]u8 = undefined;
+        var highlight_buf: [1024]u8 = undefined;
         const shown = theme.truncateWithEllipsis(current.title, compactTitleWidth(max_cols), trunc_buf[0..]);
+        const final_shown = if (self.list_search_active and self.list_search_query != null)
+            highlightSearchTerm(
+                highlight_buf[0..],
+                shown,
+                self.list_search_query.?,
+                true,
+                colors,
+                selected_send_state,
+            )
+        else
+            shown;
         stdout.writeAll("> ") catch {};
-        stdout.writeAll(shown) catch {};
+        stdout.writeAll(final_shown) catch {};
         stdout.writeAll("\r\n") catch {};
         term.setFg256(colors.panel_title);
         var status_buf: [128]u8 = undefined;
@@ -758,7 +947,7 @@ fn drawCompact(
     }
     drawCompactDivider(stdout, colors, border, max_cols);
     term.setFg256(colors.muted);
-    stdout.writeAll("ENTER select | n search | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line") catch {};
+    stdout.writeAll("ENTER select | s search | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line") catch {};
     term.resetColor();
     term.clearBelow();
 }
@@ -842,12 +1031,29 @@ fn drawContentRow(
     var trunc_buf: [512]u8 = undefined;
     var marquee_buf: [768]u8 = undefined;
     var cell_buf: [768]u8 = undefined;
+    var pad_buf: [512]u8 = undefined;
+    var highlight_buf: [1024]u8 = undefined;
+
     const torrent = torrents[abs_idx];
     const row_title = if (abs_idx == selected_idx)
         selectedTitleForRender(widget, torrent.title, layout.title_col_width, trunc_buf[0..], marquee_buf[0..])
     else
         theme.truncateWithEllipsis(torrent.title, layout.title_col_width, trunc_buf[0..]);
-    const row = buildDataCells(&cell_buf, inner_width, layout, row_title, torrent.seeders, torrent.leechers, torrent.size_bytes);
+
+    const is_selected = (abs_idx == selected_idx);
+    const final_title = if (widget.list_search_active and widget.list_search_query != null) final_title: {
+        const padded = padTitle(pad_buf[0..], row_title, layout.title_col_width);
+        break :final_title highlightSearchTerm(
+            highlight_buf[0..],
+            padded,
+            widget.list_search_query.?,
+            is_selected,
+            colors,
+            widget.getSendState(abs_idx),
+        );
+    } else row_title;
+
+    const row = buildDataCells(&cell_buf, inner_width, layout, final_title, torrent.seeders, torrent.leechers, torrent.size_bytes);
 
     if (abs_idx == selected_idx) {
         term.setBg256(colors.selected_bg);
@@ -1274,6 +1480,11 @@ fn contentRowFromRelative(rel_idx: usize) u16 {
     return @as(u16, @intCast(row));
 }
 
+fn statusRowFromDisplayCount(display_count: usize) u16 {
+    const row = 5 + display_count;
+    return @as(u16, @intCast(row));
+}
+
 fn writeSpaces(writer: anytype, count: usize) !void {
     for (0..count) |_| try writer.writeAll(" ");
 }
@@ -1284,6 +1495,7 @@ pub const ResultsAction = union(enum) {
     new_search,
     cancel,
     review_failures,
+    open_list_search,
 };
 
 test "computeRedrawMode uses full on first draw" {
@@ -1533,15 +1745,97 @@ test "ResultsWidget handleEvent j moves cursor down" {
     try std.testing.expectEqual(@as(usize, 1), widget.scroll_offset);
 }
 
-test "ResultsWidget handleEvent char n returns new_search" {
+test "ResultsWidget handleEvent char s returns new_search" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
-    const event = term.Event{ .key = .char, .value = 'n' };
+    const event = term.Event{ .key = .char, .value = 's' };
     const action = widget.handleEvent(event, 20);
 
     try std.testing.expectEqual(ResultsAction.new_search, action);
+}
+
+test "ResultsWidget handleEvent char / returns open_list_search" {
+    const allocator = std.testing.allocator;
+    var widget = ResultsWidget.init(allocator);
+    defer widget.deinit();
+
+    var torrents = std.ArrayList(Torrent).empty;
+    defer torrents.deinit(allocator);
+    try torrents.append(allocator, .{
+        .title = "Ubuntu ISO",
+        .seeders = 10,
+        .leechers = 2,
+        .link = "magnet:?xt=urn:btih:123",
+    });
+    widget.setTorrents(torrents.items, torrents.items.len);
+
+    const event = term.Event{ .key = .char, .value = '/' };
+    const action = widget.handleEvent(event, 20);
+
+    try std.testing.expectEqual(ResultsAction.open_list_search, action);
+}
+
+test "ResultsWidget list search apply, navigation and clear" {
+    const allocator = std.testing.allocator;
+    var widget = ResultsWidget.init(allocator);
+    defer widget.deinit();
+
+    var torrents = std.ArrayList(Torrent).empty;
+    defer torrents.deinit(allocator);
+    try torrents.append(allocator, .{
+        .title = "Ubuntu ISO",
+        .seeders = 10,
+        .leechers = 2,
+        .link = "magnet:?xt=urn:btih:1",
+    });
+    try torrents.append(allocator, .{
+        .title = "Debian ISO",
+        .seeders = 5,
+        .leechers = 1,
+        .link = "magnet:?xt=urn:btih:2",
+    });
+    try torrents.append(allocator, .{
+        .title = "Ubuntu Netinstaller",
+        .seeders = 8,
+        .leechers = 3,
+        .link = "magnet:?xt=urn:btih:3",
+    });
+    widget.setTorrents(torrents.items, torrents.items.len);
+
+    // Apply list search for "Ubuntu"
+    try widget.applyListSearch("Ubuntu");
+    try std.testing.expect(widget.list_search_active);
+    try std.testing.expectEqualStrings("Ubuntu", widget.list_search_query.?);
+
+    // Since Debian is at index 1 and Ubuntu is at index 0 and 2,
+    // when we sort (by default seeders desc):
+    // seeders: Ubuntu ISO (10) -> Ubuntu Netinstaller (8) -> Debian ISO (5)
+    // So torrents[0] is Ubuntu ISO, torrents[1] is Ubuntu Netinstaller, torrents[2] is Debian ISO.
+    // Initial cursor should be at 0 (Ubuntu ISO).
+    try std.testing.expectEqual(@as(usize, 0), widget.cursor);
+
+    // Press 'n' to go to next match (index 1: Ubuntu Netinstaller)
+    const next_event = term.Event{ .key = .char, .value = 'n' };
+    _ = widget.handleEvent(next_event, 20);
+    try std.testing.expectEqual(@as(usize, 1), widget.cursor);
+
+    // Press 'n' again. Since Debian doesn't match, it wraps around to Ubuntu ISO (index 0)
+    _ = widget.handleEvent(next_event, 20);
+    try std.testing.expectEqual(@as(usize, 0), widget.cursor);
+
+    // Press 'N' to go to previous match (index 1: Ubuntu Netinstaller)
+    const prev_event = term.Event{ .key = .char, .value = 'N' };
+    _ = widget.handleEvent(prev_event, 20);
+    try std.testing.expectEqual(@as(usize, 1), widget.cursor);
+
+    // Escape clears the search and continues browsing
+    const esc_event = term.Event{ .key = .escape, .value = 0 };
+    const esc_action = widget.handleEvent(esc_event, 20);
+    try std.testing.expectEqual(ResultsAction.continue_browsing, esc_action);
+    try std.testing.expect(!widget.list_search_active);
+    try std.testing.expect(widget.list_search_query == null);
 }
 
 test "ResultsWidget handleEvent enter returns select with cursor" {
