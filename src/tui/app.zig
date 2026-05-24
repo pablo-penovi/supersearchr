@@ -240,6 +240,16 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                         widget.force_full_redraw = true;
                     }
                 },
+                .open_list_search => {
+                    try panels.renderListSearchOverlay(
+                        &app.term_rows,
+                        &app.term_cols,
+                        refreshTerminalSizeValues,
+                        &widget,
+                    );
+                    widget.force_full_redraw = true;
+                    needs_render = true;
+                },
                 .new_search => {
                     const last_query = try app.allocator.dupe(u8, results_state.query);
                     deinitResultsState(app.allocator, results_state);

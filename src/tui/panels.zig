@@ -399,6 +399,179 @@ fn drawExitConfirmationModal() void {
     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 }
 
+pub fn renderListSearchOverlay(
+    term_rows: *u16,
+    term_cols: *u16,
+    refresh_terminal_size: RefreshTerminalSizeFn,
+    widget: *results_widget.ResultsWidget,
+) !void {
+    term.discardPendingInput();
+    var query_buf = std.ArrayList(u8).empty;
+    defer query_buf.deinit(widget.allocator);
+
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
+
+    while (true) {
+        if (refresh_terminal_size(term_rows, term_cols)) {
+            needs_render = true;
+        }
+
+        if (needs_render) {
+            term.setDimPersistent(true);
+            widget.force_full_redraw = true;
+            widget.render(term_rows.*, term_cols.*);
+            term.setDimPersistent(false);
+
+            drawListSearchModal(query_buf.items);
+            needs_render = false;
+        }
+
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return;
+        if (maybe_event) |event| {
+            switch (event.key) {
+                .char, .digit => {
+                    try query_buf.append(widget.allocator, event.value);
+                    needs_render = true;
+                },
+                .backspace => {
+                    if (query_buf.items.len > 0) {
+                        _ = query_buf.pop();
+                    }
+                    needs_render = true;
+                },
+                .shift_backspace => {
+                    query_buf.clearRetainingCapacity();
+                    needs_render = true;
+                },
+                .enter => {
+                    var non_space_count: usize = 0;
+                    for (query_buf.items) |c| {
+                        if (c != ' ') non_space_count += 1;
+                    }
+                    if (non_space_count >= 2) {
+                        try widget.applyListSearch(query_buf.items);
+                        return;
+                    }
+                },
+                .escape => {
+                    return;
+                },
+                else => {},
+            }
+        }
+    }
+}
+
+fn drawListSearchModal(query: []const u8) void {
+    const stdout = compat.stdoutWriter();
+    const colors = theme.superseedr_like;
+    const border = theme.unicode_border;
+    const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
+
+    const is_compact = theme.isCompactViewport(size.rows, size.cols);
+
+    var non_space_count: usize = 0;
+    for (query) |c| {
+        if (c != ' ') non_space_count += 1;
+    }
+    const unlocked = (non_space_count >= 2);
+
+    if (is_compact) {
+        term.moveCursor(1, 1);
+        term.setFg256(colors.accent);
+        term.setBold(true);
+        stdout.writeAll("Search in results:\r\n") catch {};
+        term.setBold(false);
+        term.setFg256(colors.text);
+        var input_buf: [128]u8 = undefined;
+        const input_line = std.fmt.bufPrint(&input_buf, "> {s}\r\n", .{query}) catch "> ";
+        stdout.writeAll(input_line) catch {};
+        term.setFg256(colors.muted);
+        if (unlocked) {
+            stdout.writeAll("ENTER search | ESC cancel\r\n") catch {};
+        } else {
+            stdout.writeAll("Type >= 2 chars...\r\n") catch {};
+        }
+        term.resetColor();
+        return;
+    }
+
+    const panel_width = @min(@as(usize, 52), @as(usize, @intCast(size.cols - 4)));
+    const left_pad = (@as(usize, @intCast(size.cols)) - panel_width) / 2;
+    const panel_height = 5;
+    const top_pad = @max(@as(usize, 2), (@as(usize, @intCast(size.rows)) - panel_height) / 2);
+    const panel_col = @as(u16, @intCast(left_pad + 1));
+    const top_row = @as(u16, @intCast(top_pad));
+
+    // Top border
+    term.moveCursor(top_row, panel_col);
+    theme.drawPanelTop(stdout, panel_width, border, colors) catch {};
+
+    // Title row
+    term.moveCursor(top_row + 1, panel_col);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.setFg256(colors.panel_title);
+    term.setBold(true);
+    var title_buf: [64]u8 = undefined;
+    const title_line = std.fmt.bufPrint(&title_buf, " Search in results ", .{}) catch " Search in results ";
+    theme.writePadded(stdout, title_line, panel_width - 2) catch {};
+    term.setBold(false);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.resetColor();
+    stdout.writeAll("\r\n") catch {};
+
+    // Input row
+    term.moveCursor(top_row + 2, panel_col);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+
+    term.setFg256(colors.text);
+    var input_buf: [256]u8 = undefined;
+    const input_text = std.fmt.bufPrint(&input_buf, " Search: {s}", .{query}) catch " Search: ";
+
+    const disp_w = theme.displayWidthOfText(input_text);
+    stdout.writeAll(input_text) catch {};
+    if (disp_w < panel_width - 2) {
+        const remaining = panel_width - 2 - disp_w;
+        for (0..remaining) |_| stdout.writeAll(" ") catch {};
+    }
+
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.resetColor();
+    stdout.writeAll("\r\n") catch {};
+
+    // Help/status row
+    term.moveCursor(top_row + 3, panel_col);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+
+    if (unlocked) {
+        term.setFg256(colors.accent);
+        theme.writePadded(stdout, " Press ENTER to search | ESC to cancel ", panel_width - 2) catch {};
+    } else {
+        term.setFg256(colors.muted);
+        theme.writePadded(stdout, " Type at least 2 characters to search ", panel_width - 2) catch {};
+    }
+
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.resetColor();
+    stdout.writeAll("\r\n") catch {};
+
+    // Bottom border
+    term.moveCursor(top_row + 4, panel_col);
+    theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
+
+    const prompt_len = theme.displayWidthOfText(" Search: ");
+    const cursor_col = panel_col + 1 + prompt_len + theme.displayWidthOfText(query);
+    term.moveCursor(top_row + 2, @as(u16, @intCast(cursor_col)));
+    term.showCursor();
+}
+
 test "computeNoticePanelLayout uses compact mode below breakpoint" {
     const compact = computeNoticePanelLayout(.{ .rows = 9, .cols = 80 });
     try std.testing.expect(compact.compact);
