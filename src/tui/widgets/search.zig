@@ -145,7 +145,7 @@ fn drawCompactFull(stdout: compat.FileWriter, colors: theme.Theme, query: []cons
     stdout.writeAll(query) catch {};
     stdout.writeAll("\r\n") catch {};
     term.setFg256(colors.muted);
-    stdout.writeAll("ENTER search | ESC exit | Shift-BS clear\r\n") catch {};
+    stdout.writeAll("ENTER search | ESC exit | Ctrl-BS clear\r\n") catch {};
     writeVersionLine(stdout, colors, latest_version);
 }
 
@@ -192,7 +192,7 @@ fn drawPanelFrame(stdout: compat.FileWriter, colors: theme.Theme, border: theme.
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.setFg256(colors.muted);
-    theme.writePadded(stdout, " ENTER submit | ESC quit | Shift-BS clear ", layout.panel_width - 2) catch {};
+    theme.writePadded(stdout, " ENTER submit | ESC quit | Ctrl-BS clear ", layout.panel_width - 2) catch {};
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.resetColor();
