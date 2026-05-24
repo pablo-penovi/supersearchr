@@ -56,7 +56,6 @@ fn addModuleTest(
         .run = b.addRunArtifact(artifact),
     };
 }
-
 pub fn build(b: *std.Build) void {
     const app_version = "0.4.0";
 
@@ -248,7 +247,21 @@ pub fn build(b: *std.Build) void {
         .{ .name = "compat", .module = compat_mod },
     });
 
-    const exe_tests = b.addTest(.{ .root_module = exe.root_module });
+    const exe_tests = b.addTest(.{
+        .name = "test-main",
+        .root_module = createTargetedModule(b, "src/main.zig", target, optimize, false),
+    });
+    addImports(exe_tests.root_module, &.{
+        .{ .name = "config", .module = config_mod },
+        .{ .name = "jackett", .module = jackett_mod },
+        .{ .name = "superseedr", .module = superseedr_mod },
+        .{ .name = "term", .module = term_mod },
+        .{ .name = "theme", .module = theme_mod },
+        .{ .name = "torrent", .module = torrent_mod },
+        .{ .name = "search", .module = search_widget_mod },
+        .{ .name = "results", .module = results_widget_mod },
+        .{ .name = "tui/app", .module = app_mod },
+    });
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
     const test_step = b.step("test", "Run tests");
