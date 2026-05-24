@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Changed
+- Show the results screen immediately after submitting a search and stream Jackett indexer batches into the sorted result list as they finish.
+- Moved live indexer discovery/search progress into the results status row, with per-indexer failures reported inline.
+
 ### Fixed
 - Updated the Coverage Pages workflow to use Node.js 24-compatible GitHub Pages actions.
 
