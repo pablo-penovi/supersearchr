@@ -40,11 +40,47 @@ pub const Color = enum {
     bright_white,
 };
 
-const windows = std.os.windows;
+const win32 = struct {
+    pub const HANDLE = *anyopaque;
+    pub const DWORD = u32;
+    pub const WORD = u16;
+    pub const SHORT = i16;
+    pub const BOOL = i32;
+
+    pub const COORD = extern struct {
+        X: SHORT,
+        Y: SHORT,
+    };
+
+    pub const SMALL_RECT = extern struct {
+        Left: SHORT,
+        Top: SHORT,
+        Right: SHORT,
+        Bottom: SHORT,
+    };
+
+    pub const CONSOLE_SCREEN_BUFFER_INFO = extern struct {
+        dwSize: COORD,
+        dwCursorPosition: COORD,
+        wAttributes: WORD,
+        srWindow: SMALL_RECT,
+        dwMaximumWindowSize: COORD,
+    };
+
+    pub const INFINITE: DWORD = 0xFFFFFFFF;
+    pub const STD_INPUT_HANDLE: DWORD = @bitCast(@as(i32, -10));
+    pub const STD_OUTPUT_HANDLE: DWORD = @bitCast(@as(i32, -11));
+
+    pub extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) ?HANDLE;
+    pub extern "kernel32" fn GetConsoleMode(hConsoleHandle: ?HANDLE, lpMode: *DWORD) callconv(.winapi) BOOL;
+    pub extern "kernel32" fn SetConsoleMode(hConsoleHandle: ?HANDLE, dwMode: DWORD) callconv(.winapi) BOOL;
+    pub extern "kernel32" fn GetConsoleScreenBufferInfo(hConsoleOutput: ?HANDLE, lpConsoleScreenBufferInfo: *CONSOLE_SCREEN_BUFFER_INFO) callconv(.winapi) BOOL;
+    pub extern "kernel32" fn WaitForSingleObject(hHandle: ?HANDLE, dwMilliseconds: DWORD) callconv(.winapi) DWORD;
+};
 
 var original_termios: std.posix.termios = undefined;
-var original_windows_input_mode: windows.DWORD = 0;
-var original_windows_output_mode: windows.DWORD = 0;
+var original_windows_input_mode: win32.DWORD = 0;
+var original_windows_output_mode: win32.DWORD = 0;
 var term_initialized: bool = false;
 var dim_persistent: bool = false;
 const escape_sequence_timeout_ms: i32 = 10;
@@ -189,13 +225,12 @@ fn readEscapeSequencePosix(stdin: std.Io.File, buf: []u8) !usize {
 }
 
 fn readEscapeSequenceWindows(stdin: std.Io.File, buf: []u8) !usize {
-    const stdin_handle = try windows.GetStdHandle(windows.STD_INPUT_HANDLE);
-    const wait_ms: windows.DWORD = @intCast(escape_sequence_timeout_ms);
-    windows.WaitForSingleObject(stdin_handle, wait_ms) catch |err| switch (err) {
-        error.WaitAbandoned => return 0,
-        error.WaitTimeOut => return 0,
-        else => return err,
-    };
+    const stdin_handle = win32.GetStdHandle(win32.STD_INPUT_HANDLE) orelse return error.Unexpected;
+    const wait_ms: win32.DWORD = @intCast(escape_sequence_timeout_ms);
+    const wait_res = win32.WaitForSingleObject(stdin_handle, wait_ms);
+    if (wait_res == 0x00000102 or wait_res == 0x00000080 or wait_res == 0xFFFFFFFF) {
+        return 0;
+    }
 
     var idx: usize = 0;
     while (idx < buf.len) {
@@ -206,11 +241,10 @@ fn readEscapeSequenceWindows(stdin: std.Io.File, buf: []u8) !usize {
         idx += 1;
         if (endsEscapeSequence(buf[0..idx])) break;
 
-        windows.WaitForSingleObject(stdin_handle, 0) catch |err| switch (err) {
-            error.WaitAbandoned => break,
-            error.WaitTimeOut => break,
-            else => return err,
-        };
+        const loop_res = win32.WaitForSingleObject(stdin_handle, 0);
+        if (loop_res == 0x00000102 or loop_res == 0x00000080 or loop_res == 0xFFFFFFFF) {
+            break;
+        }
     }
     return idx;
 }
@@ -422,22 +456,22 @@ fn deinitPosix() void {
 }
 
 fn initWindows() !void {
-    const stdin_handle = try windows.GetStdHandle(windows.STD_INPUT_HANDLE);
-    const stdout_handle = try windows.GetStdHandle(windows.STD_OUTPUT_HANDLE);
+    const stdin_handle = win32.GetStdHandle(win32.STD_INPUT_HANDLE) orelse return error.Unexpected;
+    const stdout_handle = win32.GetStdHandle(win32.STD_OUTPUT_HANDLE) orelse return error.Unexpected;
 
-    if (windows.kernel32.GetConsoleMode(stdin_handle, &original_windows_input_mode) == 0) {
+    if (win32.GetConsoleMode(stdin_handle, &original_windows_input_mode) == 0) {
         return error.Unexpected;
     }
-    if (windows.kernel32.GetConsoleMode(stdout_handle, &original_windows_output_mode) == 0) {
+    if (win32.GetConsoleMode(stdout_handle, &original_windows_output_mode) == 0) {
         return error.Unexpected;
     }
 
-    const ENABLE_PROCESSED_INPUT: windows.DWORD = 0x0001;
-    const ENABLE_LINE_INPUT: windows.DWORD = 0x0002;
-    const ENABLE_ECHO_INPUT: windows.DWORD = 0x0004;
-    const ENABLE_QUICK_EDIT_MODE: windows.DWORD = 0x0040;
-    const ENABLE_EXTENDED_FLAGS: windows.DWORD = 0x0080;
-    const ENABLE_VIRTUAL_TERMINAL_INPUT: windows.DWORD = 0x0200;
+    const ENABLE_PROCESSED_INPUT: win32.DWORD = 0x0001;
+    const ENABLE_LINE_INPUT: win32.DWORD = 0x0002;
+    const ENABLE_ECHO_INPUT: win32.DWORD = 0x0004;
+    const ENABLE_QUICK_EDIT_MODE: win32.DWORD = 0x0040;
+    const ENABLE_EXTENDED_FLAGS: win32.DWORD = 0x0080;
+    const ENABLE_VIRTUAL_TERMINAL_INPUT: win32.DWORD = 0x0200;
 
     var input_mode = original_windows_input_mode;
     input_mode &= ~ENABLE_LINE_INPUT;
@@ -447,7 +481,7 @@ fn initWindows() !void {
     input_mode |= ENABLE_EXTENDED_FLAGS;
     input_mode |= ENABLE_VIRTUAL_TERMINAL_INPUT;
 
-    if (windows.kernel32.SetConsoleMode(stdin_handle, input_mode) == 0) {
+    if (win32.SetConsoleMode(stdin_handle, input_mode) == 0) {
         return error.Unexpected;
     }
 
@@ -455,20 +489,19 @@ fn initWindows() !void {
 }
 
 fn deinitWindows() void {
-    const stdin_handle = windows.GetStdHandle(windows.STD_INPUT_HANDLE) catch return;
-    const stdout_handle = windows.GetStdHandle(windows.STD_OUTPUT_HANDLE) catch return;
-    _ = windows.kernel32.SetConsoleMode(stdin_handle, original_windows_input_mode);
-    _ = windows.kernel32.SetConsoleMode(stdout_handle, original_windows_output_mode);
+    const stdin_handle = win32.GetStdHandle(win32.STD_INPUT_HANDLE) orelse return;
+    const stdout_handle = win32.GetStdHandle(win32.STD_OUTPUT_HANDLE) orelse return;
+    _ = win32.SetConsoleMode(stdin_handle, original_windows_input_mode);
+    _ = win32.SetConsoleMode(stdout_handle, original_windows_output_mode);
 }
 
 fn readKeyWithTimeoutWindows(timeout_ms: i32) !?Event {
-    const stdin_handle = try windows.GetStdHandle(windows.STD_INPUT_HANDLE);
-    const wait_ms: windows.DWORD = if (timeout_ms < 0) windows.INFINITE else @intCast(timeout_ms);
-    windows.WaitForSingleObject(stdin_handle, wait_ms) catch |err| switch (err) {
-        error.WaitAbandoned => return null,
-        error.WaitTimeOut => return null,
-        else => return err,
-    };
+    const stdin_handle = win32.GetStdHandle(win32.STD_INPUT_HANDLE) orelse return error.Unexpected;
+    const wait_ms: win32.DWORD = if (timeout_ms < 0) win32.INFINITE else @intCast(timeout_ms);
+    const wait_res = win32.WaitForSingleObject(stdin_handle, wait_ms);
+    if (wait_res == 0x00000102 or wait_res == 0x00000080 or wait_res == 0xFFFFFFFF) {
+        return null;
+    }
     return try readKey();
 }
 
@@ -495,9 +528,9 @@ fn getTerminalSizePosixIoctl() !TerminalSize {
 }
 
 fn getTerminalSizeWindows() !TerminalSize {
-    const stdout_handle = try windows.GetStdHandle(windows.STD_OUTPUT_HANDLE);
-    var info: windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
-    if (windows.kernel32.GetConsoleScreenBufferInfo(stdout_handle, &info) == 0) {
+    const stdout_handle = win32.GetStdHandle(win32.STD_OUTPUT_HANDLE) orelse return error.Unexpected;
+    var info: win32.CONSOLE_SCREEN_BUFFER_INFO = undefined;
+    if (win32.GetConsoleScreenBufferInfo(stdout_handle, &info) == 0) {
         return error.Unexpected;
     }
 

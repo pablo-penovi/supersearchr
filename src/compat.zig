@@ -65,4 +65,3 @@ pub fn appendFileAll(file: std.Io.File, bytes: []const u8) !void {
 pub fn milliTimestamp() i64 {
     return @intCast(@divTrunc(std.Io.Clock.real.now(io()).nanoseconds, 1_000_000));
 }
-

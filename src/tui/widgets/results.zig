@@ -998,7 +998,7 @@ fn formatStatusText(
                     break :done std.fmt.bufPrint(
                         buf,
                         "No results found | {d} indexers failed ('e' to review)",
-                        .{ live_status.failed },
+                        .{live_status.failed},
                     ) catch "No results found";
                 }
                 break :done std.fmt.bufPrint(
@@ -1662,7 +1662,6 @@ test "ResultsWidget advanceSpinner ticks frame correctly" {
     try std.testing.expect(widget.advanceSpinner());
     try std.testing.expectEqual(@as(usize, 0), widget.spinner_frame);
 }
-
 
 test "stepMarqueeState bounces and flips direction" {
     var offset: usize = 0;

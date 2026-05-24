@@ -474,4 +474,3 @@ test "SearchWidget setQuery populates query" {
     try widget.setQuery("test query");
     try std.testing.expectEqualStrings("test query", widget.query.items);
 }
-

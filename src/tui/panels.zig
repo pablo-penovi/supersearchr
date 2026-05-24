@@ -195,7 +195,7 @@ pub fn renderFailedIndexersOverlay(
             widget.force_full_redraw = true;
             widget.render(term_rows.*, term_cols.*);
             term.setDimPersistent(false);
-            
+
             drawFailedIndexersModal(widget.failed_indexers.items);
             needs_render = false;
         }
@@ -213,7 +213,7 @@ fn drawFailedIndexersModal(failed_indexers: []const []const u8) void {
     const colors = theme.superseedr_like;
     const border = theme.unicode_border;
     const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
-    
+
     const is_compact = theme.isCompactViewport(size.rows, size.cols);
     if (is_compact) {
         term.moveCursor(1, 1);
