@@ -181,6 +181,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
             needs_render = true;
         }
 
+        const previous_cursor_link = if (widget.cursor < widget.torrents.len) widget.torrents[widget.cursor].link else null;
         const search_changed = updateStreamingResults(app, results_state) catch |err| {
             deinitResultsState(app.allocator, results_state);
             cleaned_up = true;
@@ -188,7 +189,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
             return;
         };
         if (search_changed) {
-            widget.updateTorrents(results_state.torrents.items, results_state.torrents.items.len);
+            widget.updateTorrents(results_state.torrents.items, results_state.torrents.items.len, previous_cursor_link);
             needs_render = true;
         }
         widget.setLiveStatus(results_state.live_status);

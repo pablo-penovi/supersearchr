@@ -10,6 +10,7 @@ All notable changes to this project are documented in this file.
 - Moved live indexer discovery/search progress into the results status row, with per-indexer failures reported inline.
 
 ### Fixed
+- Resolved a segmentation fault in ResultsWidget.updateTorrents caused by a use-after-free when the streaming results array list reallocates.
 - Completed the Zig 0.16.0 migration, resolving all filesystem, network sockets, allocator, and timer test suite and build failures.
 - Updated the Coverage Pages workflow to use Node.js 24-compatible GitHub Pages actions.
 

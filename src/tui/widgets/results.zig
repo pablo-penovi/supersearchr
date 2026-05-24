@@ -21,7 +21,7 @@ pub const ResultsWidget = struct {
     marquee_target_set: bool,
     marquee_cursor: usize,
     marquee_title_col_width: usize,
-    send_states: std.ArrayList(SendState),
+    sent_torrents: std.ArrayList(SentTorrent),
     live_status: LiveStatus,
 
     const marquee_edge_hold_ticks: u8 = 2;
@@ -30,6 +30,11 @@ pub const ResultsWidget = struct {
         none,
         success,
         failed,
+    };
+
+    pub const SentTorrent = struct {
+        link: []const u8,
+        state: SendState,
     };
 
     pub const LivePhase = enum {
@@ -63,13 +68,13 @@ pub const ResultsWidget = struct {
             .marquee_target_set = false,
             .marquee_cursor = 0,
             .marquee_title_col_width = 0,
-            .send_states = .empty,
+            .sent_torrents = .empty,
             .live_status = .{},
         };
     }
 
     pub fn deinit(self: *ResultsWidget) void {
-        self.send_states.deinit(self.allocator);
+        self.sent_torrents.deinit(self.allocator);
     }
 
     pub fn setTorrents(self: *ResultsWidget, torrents: []const Torrent, total: usize) void {
@@ -79,39 +84,12 @@ pub const ResultsWidget = struct {
         self.scroll_offset = 0;
         self.force_full_redraw = true;
         self.resetMarqueeState();
-        self.send_states.resize(self.allocator, torrents.len) catch {};
-        for (self.send_states.items) |*state| {
-            state.* = .none;
-        }
+        self.sent_torrents.clearRetainingCapacity();
     }
 
-    pub fn updateTorrents(self: *ResultsWidget, torrents: []const Torrent, total: usize) void {
-        const previous_cursor_link = if (self.cursor < self.torrents.len) self.torrents[self.cursor].link else null;
-        const previous_torrents = self.torrents;
-        const previous_states = self.send_states.items;
-
+    pub fn updateTorrents(self: *ResultsWidget, torrents: []const Torrent, total: usize, previous_cursor_link: ?[]const u8) void {
         self.torrents = torrents;
         self.total_count = total;
-
-        var next_states: std.ArrayList(SendState) = .empty;
-        next_states.resize(self.allocator, torrents.len) catch {
-            self.force_full_redraw = true;
-            return;
-        };
-        for (next_states.items) |*state| {
-            state.* = .none;
-        }
-
-        for (torrents, 0..) |torrent, new_idx| {
-            if (findTorrentByLink(previous_torrents, torrent.link)) |old_idx| {
-                if (old_idx < previous_states.len) {
-                    next_states.items[new_idx] = previous_states[old_idx];
-                }
-            }
-        }
-
-        self.send_states.deinit(self.allocator);
-        self.send_states = next_states;
 
         const previous_cursor = self.cursor;
         if (previous_cursor_link) |link| {
@@ -137,14 +115,28 @@ pub const ResultsWidget = struct {
     }
 
     pub fn setSendState(self: *ResultsWidget, idx: usize, state: SendState) void {
-        if (idx >= self.send_states.items.len) return;
-        self.send_states.items[idx] = state;
+        if (idx >= self.torrents.len) return;
+        const link = self.torrents[idx].link;
+        for (self.sent_torrents.items) |*sent| {
+            if (std.mem.eql(u8, sent.link, link)) {
+                sent.state = state;
+                self.force_selected_redraw = true;
+                return;
+            }
+        }
+        self.sent_torrents.append(self.allocator, .{ .link = link, .state = state }) catch {};
         self.force_selected_redraw = true;
     }
 
     fn getSendState(self: *ResultsWidget, idx: usize) SendState {
-        if (idx >= self.send_states.items.len) return .none;
-        return self.send_states.items[idx];
+        if (idx >= self.torrents.len) return .none;
+        const link = self.torrents[idx].link;
+        for (self.sent_torrents.items) |sent| {
+            if (std.mem.eql(u8, sent.link, link)) {
+                return sent.state;
+            }
+        }
+        return .none;
     }
 
     pub fn render(self: *ResultsWidget, max_rows: u16, max_cols: u16) void {
@@ -1538,7 +1530,8 @@ test "ResultsWidget updateTorrents preserves cursor and send state by link" {
         .{ .title = "Selected", .seeders = 5, .leechers = 0, .link = "magnet:selected" },
         .{ .title = "Low", .seeders = 1, .leechers = 0, .link = "magnet:low" },
     };
-    widget.updateTorrents(torrents2, 3);
+    const previous_cursor_link = if (widget.cursor < widget.torrents.len) widget.torrents[widget.cursor].link else null;
+    widget.updateTorrents(torrents2, 3, previous_cursor_link);
 
     try std.testing.expectEqual(@as(usize, 1), widget.cursor);
     try std.testing.expectEqual(ResultsWidget.SendState.none, widget.getSendState(0));
