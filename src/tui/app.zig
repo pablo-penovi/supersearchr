@@ -179,7 +179,7 @@ const ResultsBgUpdate = struct {
     animation_step_interval_ms: i64,
 
     fn update(ptr: ?*anyopaque) anyerror!panels.BackgroundUpdateDelta {
-        const self: *ResultsBgUpdate = @alignCast(@ptrCast(ptr orelse return .{}));
+        const self: *ResultsBgUpdate = @ptrCast(@alignCast(ptr orelse return .{}));
         const previous_cursor_link = if (self.widget.cursor < self.widget.torrents.len) self.widget.torrents[self.widget.cursor].link else null;
         var delta = panels.BackgroundUpdateDelta{};
 
