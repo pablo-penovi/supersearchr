@@ -401,7 +401,12 @@ fn drawExitConfirmationModal() void {
 
 pub const BackgroundUpdateContext = struct {
     ptr: ?*anyopaque,
-    update_fn: *const fn (ptr: ?*anyopaque) anyerror!bool,
+    update_fn: *const fn (ptr: ?*anyopaque) anyerror!BackgroundUpdateDelta,
+};
+
+pub const BackgroundUpdateDelta = struct {
+    backdrop_changed: bool = false,
+    status_changed: bool = false,
 };
 
 pub fn renderListSearchOverlay(
@@ -416,32 +421,63 @@ pub fn renderListSearchOverlay(
     var query_buf = std.ArrayList(u8).empty;
     defer query_buf.deinit(widget.allocator);
 
-    var needs_render = true;
+    var needs_backdrop_render = true;
+    var needs_modal_render = true;
+    var force_backdrop_full_redraw = true;
     const input_poll_ms: i32 = 80;
 
     while (true) {
         if (refresh_terminal_size(term_rows, term_cols)) {
-            needs_render = true;
+            needs_backdrop_render = true;
+            needs_modal_render = true;
+            force_backdrop_full_redraw = true;
         }
 
         if (bg_update) |bg| {
-            if (bg.update_fn(bg.ptr)) |changed| {
-                if (changed) {
-                    needs_render = true;
+            if (bg.update_fn(bg.ptr)) |delta| {
+                if (delta.backdrop_changed) {
+                    needs_backdrop_render = true;
+                    needs_modal_render = true;
+                } else if (delta.status_changed and !needs_backdrop_render and !needs_modal_render) {
+                    term.beginSyncRender();
+                    term.hideCursor();
+                    term.setDimPersistent(true);
+                    const rendered_status_only = widget.renderStatusOnly(term_rows.*, term_cols.*);
+                    term.setDimPersistent(false);
+                    if (!rendered_status_only) {
+                        needs_backdrop_render = true;
+                        needs_modal_render = true;
+                    }
+                    term.endSyncRender();
                 }
             } else |err| {
                 return err;
             }
         }
 
-        if (needs_render) {
-            term.setDimPersistent(true);
-            widget.force_full_redraw = true;
-            widget.render(term_rows.*, term_cols.*);
-            term.setDimPersistent(false);
+        if (needs_backdrop_render or needs_modal_render) {
+            term.beginSyncRender();
+            term.hideCursor();
 
-            drawListSearchModal(query_buf.items);
-            needs_render = false;
+            if (needs_backdrop_render) {
+                if (force_backdrop_full_redraw) {
+                    widget.force_full_redraw = true;
+                    force_backdrop_full_redraw = false;
+                }
+
+                term.setDimPersistent(true);
+                widget.render(term_rows.*, term_cols.*);
+                term.setDimPersistent(false);
+                needs_backdrop_render = false;
+                needs_modal_render = true;
+            }
+
+            if (needs_modal_render) {
+                drawListSearchModal(query_buf.items);
+                needs_modal_render = false;
+            }
+
+            term.endSyncRender();
         }
 
         const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return;
@@ -449,17 +485,17 @@ pub fn renderListSearchOverlay(
             switch (event.key) {
                 .char, .digit => {
                     try query_buf.append(widget.allocator, event.value);
-                    needs_render = true;
+                    needs_modal_render = true;
                 },
                 .backspace => {
                     if (query_buf.items.len > 0) {
                         _ = query_buf.pop();
                     }
-                    needs_render = true;
+                    needs_modal_render = true;
                 },
                 .shift_backspace => {
                     query_buf.clearRetainingCapacity();
-                    needs_render = true;
+                    needs_modal_render = true;
                 },
                 .enter => {
                     var non_space_count: usize = 0;
@@ -511,6 +547,10 @@ fn drawListSearchModal(query: []const u8) void {
             stdout.writeAll("Type >= 2 chars...\r\n") catch {};
         }
         term.resetColor();
+        const compact_cursor_col_usize = @min(@as(usize, @intCast(size.cols)), 3 + theme.displayWidthOfText(query));
+        const compact_cursor_col = @as(u16, @intCast(compact_cursor_col_usize));
+        term.moveCursor(2, compact_cursor_col);
+        term.showCursor();
         return;
     }
 

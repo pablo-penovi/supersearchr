@@ -174,31 +174,34 @@ const ResultsBgUpdate = struct {
     widget: *results_widget.ResultsWidget,
     marquee_budget_ms: *i64,
     last_loop_ms: *i64,
-    marquee_step_interval_ms: i64,
+    animation_step_interval_ms: i64,
 
-    fn update(ptr: ?*anyopaque) anyerror!bool {
-        const self: *ResultsBgUpdate = @alignCast(@ptrCast(ptr orelse return false));
+    fn update(ptr: ?*anyopaque) anyerror!panels.BackgroundUpdateDelta {
+        const self: *ResultsBgUpdate = @alignCast(@ptrCast(ptr orelse return .{}));
         const previous_cursor_link = if (self.widget.cursor < self.widget.torrents.len) self.widget.torrents[self.widget.cursor].link else null;
+        var delta = panels.BackgroundUpdateDelta{};
 
-        var changed = try updateStreamingResults(self.app, self.results_state, self.widget);
+        const changed = try updateStreamingResults(self.app, self.results_state, self.widget);
         if (changed) {
             self.widget.updateTorrents(self.results_state.torrents.items, self.results_state.torrents.items.len, previous_cursor_link);
+            delta.backdrop_changed = true;
         }
+        const previous_status = self.widget.live_status;
         self.widget.setLiveStatus(self.results_state.live_status);
+        if (!std.meta.eql(previous_status, self.widget.live_status)) {
+            delta.backdrop_changed = true;
+        }
 
         const now_ms = compat.milliTimestamp();
         const elapsed_ms = nonNegativeElapsedMs(self.last_loop_ms.*, now_ms);
         self.last_loop_ms.* = now_ms;
         self.marquee_budget_ms.* += elapsed_ms;
-
-        if (consumeMarqueeTick(self.marquee_budget_ms, self.marquee_step_interval_ms)) {
-            const marquee_changed = self.widget.advanceMarquee(self.app.term_rows, self.app.term_cols);
-            const spinner_changed = self.widget.advanceSpinner();
-            if (marquee_changed or spinner_changed) {
-                changed = true;
+        if (consumeMarqueeTick(self.marquee_budget_ms, self.animation_step_interval_ms)) {
+            if (self.widget.advanceSpinner()) {
+                delta.status_changed = true;
             }
         }
-        return changed;
+        return delta;
     }
 };
 
@@ -281,7 +284,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                         .widget = &widget,
                         .marquee_budget_ms = &marquee_budget_ms,
                         .last_loop_ms = &last_loop_ms,
-                        .marquee_step_interval_ms = marquee_step_interval_ms,
+                        .animation_step_interval_ms = marquee_step_interval_ms,
                     };
                     panels.renderListSearchOverlay(
                         &app.term_rows,

@@ -361,6 +361,22 @@ pub const ResultsWidget = struct {
         self.last_snapshot = snapshot;
     }
 
+    pub fn renderStatusOnly(self: *ResultsWidget, max_rows: u16, max_cols: u16) bool {
+        const compact = theme.isCompactViewport(max_rows, max_cols);
+        if (compact) return false;
+
+        const stdout = compat.stdoutWriter();
+        const colors = theme.superseedr_like;
+        const border = theme.unicode_border;
+        const panel_width = @as(usize, @intCast(max_cols - 2));
+        self.display_count = computeDisplayCount(max_rows, self.torrents.len);
+        const end_idx = @min(self.scroll_offset + self.display_count, self.torrents.len);
+
+        term.moveCursor(statusRowFromDisplayCount(self.display_count), 1);
+        drawStatusRow(stdout, panel_width, border, colors, self, end_idx) catch {};
+        return true;
+    }
+
     fn drawBorder(char: u8, width: u16) void {
         const stdout = compat.stdoutWriter();
         const buf: [1]u8 = .{char};
@@ -1461,6 +1477,11 @@ fn formatShowing(buf: []u8, scroll_offset: usize, end_idx: usize, total_count: u
 
 fn contentRowFromRelative(rel_idx: usize) u16 {
     const row = 4 + rel_idx;
+    return @as(u16, @intCast(row));
+}
+
+fn statusRowFromDisplayCount(display_count: usize) u16 {
+    const row = 5 + display_count;
     return @as(u16, @intCast(row));
 }
 
