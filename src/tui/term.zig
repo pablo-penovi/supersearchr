@@ -9,10 +9,13 @@ pub const Key = enum {
     shift_backspace,
     arrow_up,
     arrow_down,
+    arrow_left,
+    arrow_right,
     shift_arrow_up,
     shift_arrow_down,
     digit,
     char,
+    tab,
     unknown,
 };
 
@@ -141,6 +144,10 @@ pub fn readKey() !Event {
         return Event{ .key = .enter, .value = 0 };
     }
 
+    if (b == 0x09) {
+        return Event{ .key = .tab, .value = 0 };
+    }
+
     if (b == 0x7f or b == 0x08) {
         if (builtin.os.tag == .windows) {
             if (b == 0x08) return Event{ .key = .backspace, .value = 0 };
@@ -168,9 +175,11 @@ pub fn readKey() !Event {
 }
 
 fn classifyEscapeSequence(seq: []const u8) Event {
-    // Arrow keys: \x1b[A (up), \x1b[B (down)
+    // Arrow keys: \x1b[A (up), \x1b[B (down), \x1b[D (left), \x1b[C (right)
     if (std.mem.eql(u8, seq, "[A")) return Event{ .key = .arrow_up, .value = 0 };
     if (std.mem.eql(u8, seq, "[B")) return Event{ .key = .arrow_down, .value = 0 };
+    if (std.mem.eql(u8, seq, "[D")) return Event{ .key = .arrow_left, .value = 0 };
+    if (std.mem.eql(u8, seq, "[C")) return Event{ .key = .arrow_right, .value = 0 };
     // Shift+arrow: \x1b[1;2A (shift+up), \x1b[1;2B (shift+down)
     if (std.mem.eql(u8, seq, "[1;2A")) return Event{ .key = .shift_arrow_up, .value = 0 };
     if (std.mem.eql(u8, seq, "[1;2B")) return Event{ .key = .shift_arrow_down, .value = 0 };

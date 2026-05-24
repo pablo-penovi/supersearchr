@@ -17,9 +17,20 @@ const spinner_frames = [_][]const u8{
     "⣍⡇",
 };
 
+pub const SortColumn = enum {
+    seeders,
+    leechers,
+    size,
+};
+
+pub const SortOrder = enum {
+    asc,
+    desc,
+};
+
 pub const ResultsWidget = struct {
     allocator: std.mem.Allocator,
-    torrents: []const Torrent,
+    torrents: []Torrent,
     total_count: usize,
     scroll_offset: usize,
     cursor: usize,
@@ -38,6 +49,9 @@ pub const ResultsWidget = struct {
     failed_indexers: std.ArrayList([]const u8),
     live_status: LiveStatus,
     spinner_frame: usize,
+    sort_column: SortColumn,
+    sort_order: SortOrder,
+    header_cursor: SortColumn,
 
     const marquee_edge_hold_ticks: u8 = 2;
 
@@ -87,6 +101,9 @@ pub const ResultsWidget = struct {
             .failed_indexers = .empty,
             .live_status = .{},
             .spinner_frame = 0,
+            .sort_column = .seeders,
+            .sort_order = .desc,
+            .header_cursor = .seeders,
         };
     }
 
@@ -113,7 +130,8 @@ pub const ResultsWidget = struct {
         return true;
     }
 
-    pub fn setTorrents(self: *ResultsWidget, torrents: []const Torrent, total: usize) void {
+    pub fn setTorrents(self: *ResultsWidget, torrents: []Torrent, total: usize) void {
+        sortTorrentsBy(torrents, self.sort_column, self.sort_order);
         self.torrents = torrents;
         self.total_count = total;
         self.cursor = 0;
@@ -123,7 +141,8 @@ pub const ResultsWidget = struct {
         self.sent_torrents.clearRetainingCapacity();
     }
 
-    pub fn updateTorrents(self: *ResultsWidget, torrents: []const Torrent, total: usize, previous_cursor_link: ?[]const u8) void {
+    pub fn updateTorrents(self: *ResultsWidget, torrents: []Torrent, total: usize, previous_cursor_link: ?[]const u8) void {
+        sortTorrentsBy(torrents, self.sort_column, self.sort_order);
         self.torrents = torrents;
         self.total_count = total;
 
@@ -219,7 +238,7 @@ pub const ResultsWidget = struct {
                     );
                 } else {
                     term.moveCursor(1, 1);
-                    drawPanelFrame(stdout, panel_width, inner_width, border, colors, layout);
+                    drawPanelFrame(stdout, panel_width, inner_width, border, colors, layout, self);
                     drawPanelDivider(stdout, panel_width, border, colors) catch {};
                     for (0..self.display_count) |rel_idx| {
                         const abs_idx = self.scroll_offset + rel_idx;
@@ -247,7 +266,7 @@ pub const ResultsWidget = struct {
                     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 
                     term.setFg256(colors.muted);
-                    stdout.writeAll("  ENTER select | n search | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line | J/K/shift+\xe2\x86\x91\xe2\x86\x93 page") catch {};
+                    stdout.writeAll("  ENTER select | n search | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line | J/K/shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort") catch {};
                     term.resetColor();
                     term.clearBelow();
                 }
@@ -367,6 +386,60 @@ pub const ResultsWidget = struct {
     }
 
     pub fn handleEvent(self: *ResultsWidget, event: term.Event, max_rows: u16) ResultsAction {
+        switch (event.key) {
+            .arrow_left => {
+                switch (self.header_cursor) {
+                    .seeders => {},
+                    .leechers => {
+                        self.header_cursor = .seeders;
+                        self.force_full_redraw = true;
+                    },
+                    .size => {
+                        self.header_cursor = .leechers;
+                        self.force_full_redraw = true;
+                    },
+                }
+                return .continue_browsing;
+            },
+            .arrow_right => {
+                switch (self.header_cursor) {
+                    .seeders => {
+                        self.header_cursor = .leechers;
+                        self.force_full_redraw = true;
+                    },
+                    .leechers => {
+                        self.header_cursor = .size;
+                        self.force_full_redraw = true;
+                    },
+                    .size => {},
+                }
+                return .continue_browsing;
+            },
+            .tab => {
+                if (self.sort_column == self.header_cursor) {
+                    self.sort_order = switch (self.sort_order) {
+                        .asc => .desc,
+                        .desc => .asc,
+                    };
+                } else {
+                    self.sort_column = self.header_cursor;
+                    self.sort_order = .asc;
+                }
+
+                if (self.torrents.len > 0) {
+                    const mutable_torrents = @constCast(self.torrents);
+                    sortTorrentsBy(mutable_torrents, self.sort_column, self.sort_order);
+
+                    self.cursor = 0;
+                    self.scroll_offset = 0;
+                    self.resetMarqueeState();
+                }
+                self.force_full_redraw = true;
+                return .continue_browsing;
+            },
+            else => {},
+        }
+
         if (self.torrents.len == 0) {
             switch (event.key) {
                 .char => {
@@ -615,6 +688,40 @@ fn findTorrentByLink(torrents: []const Torrent, link: []const u8) ?usize {
     return null;
 }
 
+fn sortTorrentsBy(torrents: []Torrent, col: SortColumn, order: SortOrder) void {
+    const Context = struct {
+        col: SortColumn,
+        order: SortOrder,
+
+        fn lessThan(ctx: @This(), a: Torrent, b: Torrent) bool {
+            switch (ctx.col) {
+                .seeders => {
+                    return switch (ctx.order) {
+                        .asc => a.seeders < b.seeders,
+                        .desc => a.seeders > b.seeders,
+                    };
+                },
+                .leechers => {
+                    return switch (ctx.order) {
+                        .asc => a.leechers < b.leechers,
+                        .desc => a.leechers > b.leechers,
+                    };
+                },
+                .size => {
+                    const a_size = a.size_bytes orelse 0;
+                    const b_size = b.size_bytes orelse 0;
+                    return switch (ctx.order) {
+                        .asc => a_size < b_size,
+                        .desc => a_size > b_size,
+                    };
+                },
+            }
+        }
+    };
+
+    std.mem.sort(Torrent, torrents, Context{ .col = col, .order = order }, Context.lessThan);
+}
+
 fn drawCompact(
     stdout: compat.FileWriter,
     colors: theme.Theme,
@@ -679,6 +786,7 @@ fn drawPanelFrame(
     border: theme.BorderChars,
     colors: theme.Theme,
     layout: TableLayout,
+    widget: *ResultsWidget,
 ) void {
     writeSpaces(stdout, 1) catch {};
     theme.drawPanelTop(stdout, panel_width, border, colors) catch {};
@@ -686,8 +794,7 @@ fn drawPanelFrame(
     writeSpaces(stdout, 1) catch {};
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
-    term.setFg256(colors.muted);
-    writeHeaderCells(stdout, inner_width, layout) catch {};
+    writeHeaderCells(stdout, inner_width, layout, colors, widget) catch {};
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.resetColor();
@@ -831,10 +938,156 @@ fn stepMarqueeState(
     return false;
 }
 
-fn writeHeaderCells(stdout: compat.FileWriter, inner_width: usize, layout: TableLayout) !void {
-    var buf: [256]u8 = undefined;
-    const header = buildHeaderCells(&buf, inner_width, layout);
-    try stdout.writeAll(header);
+fn formatColumnHeader(
+    buf: []u8,
+    col: SortColumn,
+    active_col: SortColumn,
+    order: SortOrder,
+    cursor_col: SortColumn,
+) []const u8 {
+    var writer: std.Io.Writer = .fixed(buf);
+
+    const has_cursor = (col == cursor_col);
+    const is_active = (col == active_col);
+
+    switch (col) {
+        .seeders => {
+            if (has_cursor and is_active) {
+                const arrow = if (order == .asc) "↑" else "↓";
+                writer.writeAll("<S") catch {};
+                writer.writeAll(arrow) catch {};
+                writer.writeAll(">") catch {};
+            } else if (has_cursor and !is_active) {
+                writer.writeAll("<S> ") catch {};
+            } else if (!has_cursor and is_active) {
+                const arrow = if (order == .asc) "↑" else "↓";
+                writer.writeAll(" S") catch {};
+                writer.writeAll(arrow) catch {};
+                writer.writeAll(" ") catch {};
+            } else {
+                writer.writeAll(" S  ") catch {};
+            }
+        },
+        .leechers => {
+            if (has_cursor and is_active) {
+                const arrow = if (order == .asc) "↑" else "↓";
+                writer.writeAll("<L") catch {};
+                writer.writeAll(arrow) catch {};
+                writer.writeAll(">") catch {};
+            } else if (has_cursor and !is_active) {
+                writer.writeAll("<L> ") catch {};
+            } else if (!has_cursor and is_active) {
+                const arrow = if (order == .asc) "↑" else "↓";
+                writer.writeAll(" L") catch {};
+                writer.writeAll(arrow) catch {};
+                writer.writeAll(" ") catch {};
+            } else {
+                writer.writeAll(" L  ") catch {};
+            }
+        },
+        .size => {
+            if (has_cursor and is_active) {
+                const arrow = if (order == .asc) "↑" else "↓";
+                writer.writeAll(" <Size") catch {};
+                writer.writeAll(arrow) catch {};
+                writer.writeAll("> ") catch {};
+            } else if (has_cursor and !is_active) {
+                writer.writeAll(" <Size>  ") catch {};
+            } else if (!has_cursor and is_active) {
+                const arrow = if (order == .asc) "↑" else "↓";
+                writer.writeAll("  Size") catch {};
+                writer.writeAll(arrow) catch {};
+                writer.writeAll("  ") catch {};
+            } else {
+                writer.writeAll("  Size   ") catch {};
+            }
+        },
+    }
+
+    return writer.buffered();
+}
+
+fn writeHeaderRightAligned(writer: anytype, text: []const u8, width: usize) !void {
+    if (width == 0) return;
+    const disp_width = theme.displayWidthOfText(text);
+    if (disp_width >= width) {
+        try writer.writeAll(text);
+        return;
+    }
+    try writeSpaces(writer, width - disp_width);
+    try writer.writeAll(text);
+}
+
+fn writeHeaderCells(
+    stdout: compat.FileWriter,
+    inner_width: usize,
+    layout: TableLayout,
+    colors: theme.Theme,
+    widget: *ResultsWidget,
+) !void {
+    try stdout.writeAll(" ");
+    term.setFg256(colors.muted);
+    try theme.writePadded(stdout, "Title", layout.title_col_width);
+    try writeSpaces(stdout, layout.title_to_seeders_gap);
+
+    // S column
+    var s_buf: [32]u8 = undefined;
+    const s_text = formatColumnHeader(&s_buf, .seeders, widget.sort_column, widget.sort_order, widget.header_cursor);
+    if (widget.sort_column == .seeders) {
+        term.setFg256(colors.accent);
+        term.setBold(true);
+    } else if (widget.header_cursor == .seeders) {
+        term.setFg256(colors.text);
+        term.setBold(true);
+    } else {
+        term.setFg256(colors.muted);
+    }
+    try stdout.writeAll(s_text);
+    term.setBold(false);
+
+    term.setFg256(colors.muted);
+    try writeSpaces(stdout, layout.between_stats_gap);
+
+    // L column
+    var l_buf: [32]u8 = undefined;
+    const l_text = formatColumnHeader(&l_buf, .leechers, widget.sort_column, widget.sort_order, widget.header_cursor);
+    if (widget.sort_column == .leechers) {
+        term.setFg256(colors.accent);
+        term.setBold(true);
+    } else if (widget.header_cursor == .leechers) {
+        term.setFg256(colors.text);
+        term.setBold(true);
+    } else {
+        term.setFg256(colors.muted);
+    }
+    try stdout.writeAll(l_text);
+    term.setBold(false);
+
+    term.setFg256(colors.muted);
+    try writeSpaces(stdout, layout.between_stats_gap);
+
+    // Size column
+    var size_buf: [32]u8 = undefined;
+    const size_text = formatColumnHeader(&size_buf, .size, widget.sort_column, widget.sort_order, widget.header_cursor);
+    if (widget.sort_column == .size) {
+        term.setFg256(colors.accent);
+        term.setBold(true);
+    } else if (widget.header_cursor == .size) {
+        term.setFg256(colors.text);
+        term.setBold(true);
+    } else {
+        term.setFg256(colors.muted);
+    }
+    try stdout.writeAll(size_text);
+    term.setBold(false);
+
+    term.setFg256(colors.muted);
+    try stdout.writeAll(" ");
+
+    const used = 1 + layout.title_col_width + layout.title_to_seeders_gap + layout.seeders_width + layout.between_stats_gap + layout.leechers_width + layout.between_stats_gap + layout.size_width + 1;
+    if (used < inner_width) {
+        try writeSpaces(stdout, inner_width - used);
+    }
 }
 
 fn buildHeaderCells(buf: []u8, inner_width: usize, layout: TableLayout) []const u8 {
@@ -1260,7 +1513,7 @@ test "ResultsWidget handleEvent j moves cursor down" {
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
-    const torrents = &[_]Torrent{
+    var torrents = [_]Torrent{
         .{ .title = "Test1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
         .{ .title = "Test2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
         .{ .title = "Test3", .seeders = 3, .leechers = 0, .link = "magnet:3" },
@@ -1268,7 +1521,7 @@ test "ResultsWidget handleEvent j moves cursor down" {
         .{ .title = "Test5", .seeders = 5, .leechers = 0, .link = "magnet:5" },
         .{ .title = "Test6", .seeders = 6, .leechers = 0, .link = "magnet:6" },
     };
-    widget.setTorrents(torrents, 6);
+    widget.setTorrents(&torrents, 6);
 
     try std.testing.expectEqual(@as(usize, 0), widget.cursor);
 
@@ -1296,11 +1549,11 @@ test "ResultsWidget handleEvent enter returns select with cursor" {
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
-    const torrents = &[_]Torrent{
+    var torrents = [_]Torrent{
         .{ .title = "Test1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
         .{ .title = "Test2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
     };
-    widget.setTorrents(torrents, 2);
+    widget.setTorrents(&torrents, 2);
     widget.cursor = 1;
 
     const event = term.Event{ .key = .enter, .value = 0 };
@@ -1325,11 +1578,11 @@ test "ResultsWidget handleEvent unsupported key does nothing" {
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
-    const torrents = &[_]Torrent{
+    var torrents = [_]Torrent{
         .{ .title = "Test1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
         .{ .title = "Test2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
     };
-    widget.setTorrents(torrents, 2);
+    widget.setTorrents(&torrents, 2);
 
     const event = term.Event{ .key = .unknown, .value = 0 };
     const action = widget.handleEvent(event, 20);
@@ -1355,7 +1608,7 @@ test "ResultsWidget handleEvent j adjusts scroll when cursor leaves window" {
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
-    const torrents = &[_]Torrent{
+    var torrents = [_]Torrent{
         .{ .title = "T1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
         .{ .title = "T2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
         .{ .title = "T3", .seeders = 3, .leechers = 0, .link = "magnet:3" },
@@ -1363,7 +1616,7 @@ test "ResultsWidget handleEvent j adjusts scroll when cursor leaves window" {
         .{ .title = "T5", .seeders = 5, .leechers = 0, .link = "magnet:5" },
         .{ .title = "T6", .seeders = 6, .leechers = 0, .link = "magnet:6" },
     };
-    widget.setTorrents(torrents, 6);
+    widget.setTorrents(&torrents, 6);
     // max_rows=8, display_count=1. cursor at 0 (last visible), j pushes it to 1 and scrolls.
     widget.cursor = 0;
 
@@ -1380,7 +1633,7 @@ test "ResultsWidget handleEvent k moves cursor up" {
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
-    const torrents = &[_]Torrent{
+    var torrents = [_]Torrent{
         .{ .title = "Test1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
         .{ .title = "Test2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
         .{ .title = "Test3", .seeders = 3, .leechers = 0, .link = "magnet:3" },
@@ -1388,7 +1641,7 @@ test "ResultsWidget handleEvent k moves cursor up" {
         .{ .title = "Test5", .seeders = 5, .leechers = 0, .link = "magnet:5" },
         .{ .title = "Test6", .seeders = 6, .leechers = 0, .link = "magnet:6" },
     };
-    widget.setTorrents(torrents, 6);
+    widget.setTorrents(&torrents, 6);
     widget.cursor = 1;
 
     const event = term.Event{ .key = .char, .value = 'k' };
@@ -1403,7 +1656,7 @@ test "ResultsWidget handleEvent j at last torrent does nothing" {
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
-    const torrents = &[_]Torrent{
+    var torrents = [_]Torrent{
         .{ .title = "Test1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
         .{ .title = "Test2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
         .{ .title = "Test3", .seeders = 3, .leechers = 0, .link = "magnet:3" },
@@ -1411,7 +1664,7 @@ test "ResultsWidget handleEvent j at last torrent does nothing" {
         .{ .title = "Test5", .seeders = 5, .leechers = 0, .link = "magnet:5" },
         .{ .title = "Test6", .seeders = 6, .leechers = 0, .link = "magnet:6" },
     };
-    widget.setTorrents(torrents, 6);
+    widget.setTorrents(&torrents, 6);
     widget.cursor = 5; // last torrent
 
     const event = term.Event{ .key = .char, .value = 'j' };
@@ -1426,10 +1679,10 @@ test "ResultsWidget handleEvent k at cursor 0 does nothing" {
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
-    const torrents = &[_]Torrent{
+    var torrents = [_]Torrent{
         .{ .title = "Test1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
     };
-    widget.setTorrents(torrents, 1);
+    widget.setTorrents(&torrents, 1);
 
     try std.testing.expectEqual(@as(usize, 0), widget.cursor);
 
@@ -1445,7 +1698,7 @@ test "ResultsWidget handleEvent J moves cursor by display_count" {
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
-    const torrents = &[_]Torrent{
+    var torrents = [_]Torrent{
         .{ .title = "T1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
         .{ .title = "T2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
         .{ .title = "T3", .seeders = 3, .leechers = 0, .link = "magnet:3" },
@@ -1455,7 +1708,7 @@ test "ResultsWidget handleEvent J moves cursor by display_count" {
         .{ .title = "T7", .seeders = 7, .leechers = 0, .link = "magnet:7" },
         .{ .title = "T8", .seeders = 8, .leechers = 0, .link = "magnet:8" },
     };
-    widget.setTorrents(torrents, 8);
+    widget.setTorrents(&torrents, 8);
     // max_rows=8, display_count=1, cursor=0 -> J moves cursor to 1
     const event = term.Event{ .key = .char, .value = 'J' };
     const action = widget.handleEvent(event, 8);
@@ -1470,7 +1723,7 @@ test "ResultsWidget handleEvent K retreats cursor by display_count" {
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
-    const torrents = &[_]Torrent{
+    var torrents = [_]Torrent{
         .{ .title = "T1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
         .{ .title = "T2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
         .{ .title = "T3", .seeders = 3, .leechers = 0, .link = "magnet:3" },
@@ -1480,7 +1733,7 @@ test "ResultsWidget handleEvent K retreats cursor by display_count" {
         .{ .title = "T7", .seeders = 7, .leechers = 0, .link = "magnet:7" },
         .{ .title = "T8", .seeders = 8, .leechers = 0, .link = "magnet:8" },
     };
-    widget.setTorrents(torrents, 8);
+    widget.setTorrents(&torrents, 8);
     widget.cursor = 1;
     widget.scroll_offset = 0;
     // max_rows=8, display_count=1, cursor=1 -> K moves cursor to 0
@@ -1497,7 +1750,7 @@ test "ResultsWidget handleEvent J at last torrent does nothing" {
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
-    const torrents = &[_]Torrent{
+    var torrents = [_]Torrent{
         .{ .title = "T1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
         .{ .title = "T2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
         .{ .title = "T3", .seeders = 3, .leechers = 0, .link = "magnet:3" },
@@ -1507,7 +1760,7 @@ test "ResultsWidget handleEvent J at last torrent does nothing" {
         .{ .title = "T7", .seeders = 7, .leechers = 0, .link = "magnet:7" },
         .{ .title = "T8", .seeders = 8, .leechers = 0, .link = "magnet:8" },
     };
-    widget.setTorrents(torrents, 8);
+    widget.setTorrents(&torrents, 8);
     widget.cursor = 7; // last torrent
     widget.scroll_offset = 7;
     const event = term.Event{ .key = .char, .value = 'J' };
@@ -1523,13 +1776,13 @@ test "ResultsWidget handleEvent K at cursor 0 does nothing" {
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
-    const torrents = &[_]Torrent{
+    var torrents = [_]Torrent{
         .{ .title = "T1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
         .{ .title = "T2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
         .{ .title = "T3", .seeders = 3, .leechers = 0, .link = "magnet:3" },
         .{ .title = "T4", .seeders = 4, .leechers = 0, .link = "magnet:4" },
     };
-    widget.setTorrents(torrents, 4);
+    widget.setTorrents(&torrents, 4);
     // cursor starts at 0
     const event = term.Event{ .key = .char, .value = 'K' };
     const action = widget.handleEvent(event, 10);
@@ -1544,19 +1797,19 @@ test "ResultsWidget cursor resets on new search" {
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
-    const torrents1 = &[_]Torrent{
+    var torrents1 = [_]Torrent{
         .{ .title = "Test1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
         .{ .title = "Test2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
         .{ .title = "Test3", .seeders = 3, .leechers = 0, .link = "magnet:3" },
     };
-    widget.setTorrents(torrents1, 3);
+    widget.setTorrents(&torrents1, 3);
     widget.cursor = 2;
     widget.scroll_offset = 1;
 
-    const torrents2 = &[_]Torrent{
+    var torrents2 = [_]Torrent{
         .{ .title = "Test4", .seeders = 4, .leechers = 0, .link = "magnet:4" },
     };
-    widget.setTorrents(torrents2, 1);
+    widget.setTorrents(&torrents2, 1);
 
     try std.testing.expectEqual(@as(usize, 0), widget.cursor);
     try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
@@ -1567,19 +1820,19 @@ test "ResultsWidget send state persists and resets on new results" {
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
-    const torrents1 = &[_]Torrent{
+    var torrents1 = [_]Torrent{
         .{ .title = "Test1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
         .{ .title = "Test2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
     };
-    widget.setTorrents(torrents1, 2);
+    widget.setTorrents(&torrents1, 2);
     widget.setSendState(1, .success);
 
     try std.testing.expectEqual(ResultsWidget.SendState.success, widget.getSendState(1));
 
-    const torrents2 = &[_]Torrent{
+    var torrents2 = [_]Torrent{
         .{ .title = "Test3", .seeders = 3, .leechers = 0, .link = "magnet:3" },
     };
-    widget.setTorrents(torrents2, 1);
+    widget.setTorrents(&torrents2, 1);
 
     try std.testing.expectEqual(ResultsWidget.SendState.none, widget.getSendState(0));
 }
@@ -1589,21 +1842,21 @@ test "ResultsWidget updateTorrents preserves cursor and send state by link" {
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
-    const torrents1 = &[_]Torrent{
-        .{ .title = "Low", .seeders = 1, .leechers = 0, .link = "magnet:low" },
+    var torrents1 = [_]Torrent{
         .{ .title = "Selected", .seeders = 5, .leechers = 0, .link = "magnet:selected" },
+        .{ .title = "Low", .seeders = 1, .leechers = 0, .link = "magnet:low" },
     };
-    widget.setTorrents(torrents1, 2);
-    widget.cursor = 1;
-    widget.setSendState(1, .success);
+    widget.setTorrents(&torrents1, 2);
+    widget.cursor = 0;
+    widget.setSendState(0, .success);
 
-    const torrents2 = &[_]Torrent{
+    var torrents2 = [_]Torrent{
         .{ .title = "New High", .seeders = 50, .leechers = 0, .link = "magnet:new" },
         .{ .title = "Selected", .seeders = 5, .leechers = 0, .link = "magnet:selected" },
         .{ .title = "Low", .seeders = 1, .leechers = 0, .link = "magnet:low" },
     };
     const previous_cursor_link = if (widget.cursor < widget.torrents.len) widget.torrents[widget.cursor].link else null;
-    widget.updateTorrents(torrents2, 3, previous_cursor_link);
+    widget.updateTorrents(&torrents2, 3, previous_cursor_link);
 
     try std.testing.expectEqual(@as(usize, 1), widget.cursor);
     try std.testing.expectEqual(ResultsWidget.SendState.none, widget.getSendState(0));
@@ -1699,10 +1952,10 @@ test "advanceMarquee does not animate when title fits" {
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
 
-    const torrents = &[_]Torrent{
+    var torrents = [_]Torrent{
         .{ .title = "Short", .seeders = 1, .leechers = 0, .link = "magnet:1" },
     };
-    widget.setTorrents(torrents, 1);
+    widget.setTorrents(&torrents, 1);
     widget.cursor = 0;
 
     try std.testing.expectEqual(false, widget.advanceMarquee(24, 120));
@@ -1732,4 +1985,120 @@ test "selectedColorForSendState uses darker tones for selected rows" {
     try std.testing.expectEqual(colors.selected_fg, selectedColorForSendState(colors, .none));
     try std.testing.expectEqual(@as(u8, 22), selectedColorForSendState(colors, .success));
     try std.testing.expectEqual(@as(u8, 88), selectedColorForSendState(colors, .failed));
+}
+
+test "ResultsWidget sorting header cursor movement" {
+    const allocator = std.testing.allocator;
+    var widget = ResultsWidget.init(allocator);
+    defer widget.deinit();
+
+    try std.testing.expectEqual(SortColumn.seeders, widget.header_cursor);
+
+    // Press right -> goes to leechers
+    _ = widget.handleEvent(.{ .key = .arrow_right, .value = 0 }, 10);
+    try std.testing.expectEqual(SortColumn.leechers, widget.header_cursor);
+
+    // Press right -> goes to size
+    _ = widget.handleEvent(.{ .key = .arrow_right, .value = 0 }, 10);
+    try std.testing.expectEqual(SortColumn.size, widget.header_cursor);
+
+    // Press right at boundary -> stays size (no wrap)
+    _ = widget.handleEvent(.{ .key = .arrow_right, .value = 0 }, 10);
+    try std.testing.expectEqual(SortColumn.size, widget.header_cursor);
+
+    // Press left -> goes to leechers
+    _ = widget.handleEvent(.{ .key = .arrow_left, .value = 0 }, 10);
+    try std.testing.expectEqual(SortColumn.leechers, widget.header_cursor);
+
+    // Press left -> goes to seeders
+    _ = widget.handleEvent(.{ .key = .arrow_left, .value = 0 }, 10);
+    try std.testing.expectEqual(SortColumn.seeders, widget.header_cursor);
+
+    // Press left at boundary -> stays seeders (no wrap)
+    _ = widget.handleEvent(.{ .key = .arrow_left, .value = 0 }, 10);
+    try std.testing.expectEqual(SortColumn.seeders, widget.header_cursor);
+}
+
+test "ResultsWidget TAB key triggers sorting and toggles order" {
+    const allocator = std.testing.allocator;
+    var widget = ResultsWidget.init(allocator);
+    defer widget.deinit();
+
+    var torrents = [_]Torrent{
+        .{ .title = "Test Low", .seeders = 1, .leechers = 10, .size_bytes = 100, .link = "magnet:low" },
+        .{ .title = "Test Mid", .seeders = 5, .leechers = 2, .size_bytes = 500, .link = "magnet:mid" },
+        .{ .title = "Test High", .seeders = 10, .leechers = 5, .size_bytes = 1000, .link = "magnet:high" },
+    };
+    widget.setTorrents(&torrents, 3);
+
+    // By default, sorted by seeders descending: High, Mid, Low
+    try std.testing.expectEqualStrings("Test High", widget.torrents[0].title);
+    try std.testing.expectEqualStrings("Test Mid", widget.torrents[1].title);
+    try std.testing.expectEqualStrings("Test Low", widget.torrents[2].title);
+
+    // Move cursor to Leechers (right once) and sort (TAB)
+    _ = widget.handleEvent(.{ .key = .arrow_right, .value = 0 }, 10); // cursor at leechers
+    _ = widget.handleEvent(.{ .key = .tab, .value = 0 }, 10); // TAB -> sorts by leechers ascending
+    try std.testing.expectEqual(SortColumn.leechers, widget.sort_column);
+    try std.testing.expectEqual(SortOrder.asc, widget.sort_order);
+
+    // Leechers ascending: Mid (2), High (5), Low (10)
+    try std.testing.expectEqualStrings("Test Mid", widget.torrents[0].title);
+    try std.testing.expectEqualStrings("Test High", widget.torrents[1].title);
+    try std.testing.expectEqualStrings("Test Low", widget.torrents[2].title);
+
+    // TAB again on same column -> toggles to descending
+    _ = widget.handleEvent(.{ .key = .tab, .value = 0 }, 10);
+    try std.testing.expectEqual(SortOrder.desc, widget.sort_order);
+
+    // Leechers descending: Low (10), High (5), Mid (2)
+    try std.testing.expectEqualStrings("Test Low", widget.torrents[0].title);
+    try std.testing.expectEqualStrings("Test High", widget.torrents[1].title);
+    try std.testing.expectEqualStrings("Test Mid", widget.torrents[2].title);
+
+    // Move to Size (right once) and sort (TAB) -> sorts by size ascending
+    _ = widget.handleEvent(.{ .key = .arrow_right, .value = 0 }, 10); // cursor at size
+    _ = widget.handleEvent(.{ .key = .tab, .value = 0 }, 10);
+    try std.testing.expectEqual(SortColumn.size, widget.sort_column);
+    try std.testing.expectEqual(SortOrder.asc, widget.sort_order);
+
+    // Size ascending: Low (100), Mid (500), High (1000)
+    try std.testing.expectEqualStrings("Test Low", widget.torrents[0].title);
+    try std.testing.expectEqualStrings("Test Mid", widget.torrents[1].title);
+    try std.testing.expectEqualStrings("Test High", widget.torrents[2].title);
+}
+
+test "ResultsWidget TAB resets selection cursor" {
+    const allocator = std.testing.allocator;
+    var widget = ResultsWidget.init(allocator);
+    defer widget.deinit();
+
+    var torrents = [_]Torrent{
+        .{ .title = "Low", .seeders = 1, .leechers = 10, .size_bytes = 100, .link = "magnet:low" },
+        .{ .title = "Mid", .seeders = 5, .leechers = 2, .size_bytes = 500, .link = "magnet:mid" },
+        .{ .title = "High", .seeders = 10, .leechers = 5, .size_bytes = 1000, .link = "magnet:high" },
+    };
+    widget.setTorrents(&torrents, 3); // Defaults sorted: High (0), Mid (1), Low (2)
+
+    // Select "Mid" (at index 1)
+    widget.cursor = 1;
+    widget.scroll_offset = 1;
+
+    // Move cursor to Size and sort (TAB)
+    _ = widget.handleEvent(.{ .key = .arrow_right, .value = 0 }, 10); // cursor to leechers
+    _ = widget.handleEvent(.{ .key = .arrow_right, .value = 0 }, 10); // cursor to size
+    _ = widget.handleEvent(.{ .key = .tab, .value = 0 }, 10); // sorts ascending: Low (0), Mid (1), High (2)
+
+    // Cursor and scroll should reset to 0!
+    try std.testing.expectEqual(@as(usize, 0), widget.cursor);
+    try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
+
+    // Select index 2
+    widget.cursor = 2;
+
+    // Toggle sort order by tabbing again on Size -> sorts descending: High (0), Mid (1), Low (2)
+    _ = widget.handleEvent(.{ .key = .tab, .value = 0 }, 10);
+
+    // Cursor should reset to 0!
+    try std.testing.expectEqual(@as(usize, 0), widget.cursor);
 }

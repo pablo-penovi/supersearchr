@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.4.1
+
+### Added
+- Added dynamic search results sorting. Users can now navigate a sort-column cursor over **S** (Seeders), **L** (Leechers), and **Size** headers using `←`/`→` arrow keys, and press `TAB` to apply sorting and toggle sorting direction between ascending (`↑`) and descending (`↓`).
+- Statically-aligned headers to prevent visual character shifting when cursor or sorting arrow indicators are toggled.
+
 ### Fixed
 - Fixed release artifact size issue where the Linux executable was not being stripped (resulting in a 9.18 MB binary). The root cause was `exe_tests` sharing the main executable's `root_module`, which allowed the coverage setup loop to mutate the `strip` property of both to `false` on every build graph construction. Now, `exe_tests` uses an isolated root module to prevent cross-mutation.
 
