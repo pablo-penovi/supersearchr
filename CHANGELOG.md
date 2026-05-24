@@ -5,10 +5,12 @@ All notable changes to this project are documented in this file.
 ## Unreleased
 
 ### Changed
+- Migrated the project tooling and documentation to Zig 0.16.0.
 - Show the results screen immediately after submitting a search and stream Jackett indexer batches into the sorted result list as they finish.
 - Moved live indexer discovery/search progress into the results status row, with per-indexer failures reported inline.
 
 ### Fixed
+- Completed the Zig 0.16.0 migration, resolving all filesystem, network sockets, allocator, and timer test suite and build failures.
 - Updated the Coverage Pages workflow to use Node.js 24-compatible GitHub Pages actions.
 
 ## 0.3.14

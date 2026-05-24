@@ -1,6 +1,7 @@
 const std = @import("std");
 const Torrent = @import("torrent").Torrent;
 const debug_log = @import("debug_log");
+const compat = @import("compat");
 
 pub const JackettError = error{
     InvalidUrl,
@@ -129,7 +130,7 @@ fn extractEnclosureInfo(xml: []const u8, i: usize) ?struct { url: ?[]const u8, l
 
 fn normalizeLink(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     const trimmed = std.mem.trim(u8, raw, " \t\r\n");
-    var out: std.ArrayList(u8) = .{};
+    var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
 
     var i: usize = 0;
@@ -427,7 +428,7 @@ fn writeTempTorrentFile(allocator: std.mem.Allocator, bytes: []const u8) LinkRes
 
     var attempts: usize = 0;
     while (attempts < 8) : (attempts += 1) {
-        std.crypto.random.bytes(&random_bytes);
+        compat.io().random(&random_bytes);
         const hex = std.fmt.bytesToHex(random_bytes, .lower);
         @memcpy(hex_buf[0..], hex[0..]);
 
@@ -436,16 +437,17 @@ fn writeTempTorrentFile(allocator: std.mem.Allocator, bytes: []const u8) LinkRes
         const path = try std.fs.path.join(allocator, &.{ temp_dir, filename });
         errdefer allocator.free(path);
 
-        const file = std.fs.createFileAbsolute(path, .{ .exclusive = true }) catch |err| switch (err) {
+        const io = compat.io();
+        const file = std.Io.Dir.createFileAbsolute(io, path, .{ .exclusive = true }) catch |err| switch (err) {
             error.PathAlreadyExists => {
                 allocator.free(path);
                 continue;
             },
             else => return error.TempFileCreateFailed,
         };
-        defer file.close();
+        defer compat.closeFile(file);
 
-        file.writeAll(bytes) catch |err| switch (err) {
+        compat.writeFileAll(file, bytes) catch |err| switch (err) {
             else => return error.TempFileWriteFailed,
         };
 
@@ -456,7 +458,7 @@ fn writeTempTorrentFile(allocator: std.mem.Allocator, bytes: []const u8) LinkRes
 }
 
 fn getTempDir(allocator: std.mem.Allocator) ![]u8 {
-    if (std.process.getEnvVarOwned(allocator, "TMPDIR")) |value| {
+    if (compat.getEnvVarOwned(allocator, "TMPDIR")) |value| {
         if (value.len > 0) return value;
         allocator.free(value);
     } else |_| {}
@@ -465,7 +467,7 @@ fn getTempDir(allocator: std.mem.Allocator) ![]u8 {
 }
 
 pub fn defaultLinkFetchExecutor(allocator: std.mem.Allocator, url: []const u8) LinkResolveError!LinkFetchResponse {
-    var http_client = std.http.Client{ .allocator = allocator };
+    var http_client = std.http.Client{ .allocator = allocator, .io = compat.io() };
     defer http_client.deinit();
 
     const uri = std.Uri.parse(url) catch |err| {
@@ -545,7 +547,7 @@ pub fn defaultLinkFetchExecutor(allocator: std.mem.Allocator, url: []const u8) L
 }
 
 pub fn defaultBodyExecutor(allocator: std.mem.Allocator, url: []const u8) JackettError![]u8 {
-    var http_client = std.http.Client{ .allocator = allocator };
+    var http_client = std.http.Client{ .allocator = allocator, .io = compat.io() };
     defer http_client.deinit();
 
     const uri = std.Uri.parse(url) catch |err| {
@@ -661,7 +663,7 @@ const ParallelSearchContext = struct {
     next_index: std.atomic.Value(usize),
     progress: *SearchProgress,
     results: std.ArrayList(Torrent),
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
     first_error: ?JackettError,
     failures: usize,
 };
@@ -693,40 +695,45 @@ const StreamingSearchContext = struct {
 
 const SearchBatchQueue = struct {
     allocator: std.mem.Allocator,
-    mutex: std.Thread.Mutex = .{},
-    batches: std.ArrayList(SearchBatch) = .{},
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
+    batches: std.ArrayList(SearchBatch) = .empty,
     first_error: ?JackettError = null,
     failures: usize = 0,
 
     fn push(self: *SearchBatchQueue, batch: SearchBatch) JackettError!void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        const io = compat.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
         self.batches.append(self.allocator, batch) catch return error.OutOfMemory;
     }
 
     fn pop(self: *SearchBatchQueue) ?SearchBatch {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        const io = compat.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
         if (self.batches.items.len == 0) return null;
         return self.batches.orderedRemove(0);
     }
 
     fn recordFailure(self: *SearchBatchQueue, err: JackettError) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        const io = compat.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
         if (self.first_error == null) self.first_error = err;
         self.failures += 1;
     }
 
     fn setFatal(self: *SearchBatchQueue, err: JackettError) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        const io = compat.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
         self.first_error = err;
     }
 
     fn fatalError(self: *SearchBatchQueue) ?JackettError {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        const io = compat.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
         return self.first_error;
     }
 
@@ -739,7 +746,7 @@ const SearchBatchQueue = struct {
 };
 
 pub const SearchSession = struct {
-    thread_safe_allocator: std.heap.ThreadSafeAllocator,
+    allocator_value: std.mem.Allocator,
     executor: BodyExecutor,
     base_url: []u8,
     api_key: []u8,
@@ -752,7 +759,7 @@ pub const SearchSession = struct {
     fatal_discovery_error: std.atomic.Value(bool),
 
     fn allocator(self: *SearchSession) std.mem.Allocator {
-        return self.thread_safe_allocator.allocator();
+        return self.allocator_value;
     }
 
     pub fn snapshot(self: *SearchSession) SearchProgressSnapshot {
@@ -852,8 +859,7 @@ pub const Client = struct {
         const encoded_query = try percentEncode(self.allocator, query);
         defer self.allocator.free(encoded_query);
 
-        var thread_safe_allocator = std.heap.ThreadSafeAllocator{ .child_allocator = self.allocator };
-        const allocator = thread_safe_allocator.allocator();
+        const allocator = self.allocator;
 
         var ctx = ParallelSearchContext{
             .allocator = allocator,
@@ -864,8 +870,8 @@ pub const Client = struct {
             .indexers = indexers,
             .next_index = std.atomic.Value(usize).init(0),
             .progress = progress,
-            .results = .{},
-            .mutex = .{},
+            .results = .empty,
+            .mutex = std.Io.Mutex.init,
             .first_error = null,
             .failures = 0,
         };
@@ -914,7 +920,7 @@ pub const Client = struct {
     ) JackettError!*SearchSession {
         const session = std.heap.page_allocator.create(SearchSession) catch return error.OutOfMemory;
         session.* = .{
-            .thread_safe_allocator = .{ .child_allocator = std.heap.page_allocator },
+            .allocator_value = std.heap.page_allocator,
             .executor = executor,
             .base_url = &.{},
             .api_key = &.{},
@@ -948,7 +954,7 @@ pub const Client = struct {
 };
 
 fn percentEncode(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
-    var result: std.ArrayList(u8) = .{};
+    var result: std.ArrayList(u8) = .empty;
     errdefer result.deinit(allocator);
     for (raw) |c| {
         switch (c) {
@@ -971,10 +977,11 @@ fn parallelSearchWorker(ctx: *ParallelSearchContext) void {
         if (idx >= ctx.indexers.len) return;
 
         searchSingleIndexer(ctx, ctx.indexers[idx].id) catch |err| {
-            ctx.mutex.lock();
+            const io = compat.io();
+            ctx.mutex.lockUncancelable(io);
             if (ctx.first_error == null) ctx.first_error = err;
             ctx.failures += 1;
-            ctx.mutex.unlock();
+            ctx.mutex.unlock(io);
             ctx.progress.recordFailed();
         };
         ctx.progress.recordCompleted();
@@ -1086,8 +1093,9 @@ fn searchSingleIndexer(ctx: *ParallelSearchContext, indexer_id: []const u8) Jack
     const torrents = parseTorrents(ctx.allocator, body) catch |err| return mapAnyToJackettError(err, error.ParseFailed);
     defer ctx.allocator.free(torrents);
 
-    ctx.mutex.lock();
-    defer ctx.mutex.unlock();
+    const io = compat.io();
+    ctx.mutex.lockUncancelable(io);
+    defer ctx.mutex.unlock(io);
     ctx.results.appendSlice(ctx.allocator, torrents) catch {
         for (torrents) |t| {
             ctx.allocator.free(t.title);
@@ -1145,7 +1153,7 @@ fn fetchConfiguredIndexersOwned(
 fn parseIndexers(allocator: std.mem.Allocator, xml: []const u8) ![]Indexer {
     if (std.mem.indexOf(u8, xml, "<indexers") == null) return error.ParseFailed;
 
-    var indexers: std.ArrayList(Indexer) = .{};
+    var indexers: std.ArrayList(Indexer) = .empty;
     errdefer {
         for (indexers.items) |indexer| {
             allocator.free(indexer.id);
@@ -1215,7 +1223,7 @@ fn cloneTorrent(allocator: std.mem.Allocator, torrent: Torrent) !Torrent {
 }
 
 fn parseTorrents(allocator: std.mem.Allocator, xml: []const u8) ![]Torrent {
-    var torrents: std.ArrayList(Torrent) = .{};
+    var torrents: std.ArrayList(Torrent) = .empty;
     errdefer {
         for (torrents.items) |*t| {
             allocator.free(t.title);
@@ -1454,7 +1462,7 @@ test "parse configured indexers from Jackett indexer response" {
 fn gzipStoredBody(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
     if (body.len > std.math.maxInt(u16)) return error.OutOfMemory;
 
-    var result: std.ArrayList(u8) = .{};
+    var result: std.ArrayList(u8) = .empty;
     errdefer result.deinit(allocator);
 
     try result.appendSlice(allocator, std.compress.flate.Container.header(.gzip));
@@ -1483,12 +1491,14 @@ fn gzipStoredBody(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
 const GzipHttpServer = struct {
     body: []const u8,
 
-    fn serve(self: *const GzipHttpServer, server: *std.net.Server) !void {
-        const connection = try server.accept();
-        defer connection.stream.close();
+    fn serve(self: *const GzipHttpServer, server: *std.Io.net.Server) !void {
+        const io = compat.io();
+        var stream = try server.accept(io);
+        defer stream.close(io);
 
-        var request_buf: [1024]u8 = undefined;
-        _ = try connection.stream.read(&request_buf);
+        var read_buf: [1]u8 = undefined;
+        var reader = stream.reader(io, &read_buf);
+        _ = reader.interface.readSliceShort(&read_buf) catch 0;
 
         var response_head: [256]u8 = undefined;
         const head = try std.fmt.bufPrint(
@@ -1496,8 +1506,11 @@ const GzipHttpServer = struct {
             "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n",
             .{self.body.len},
         );
-        try connection.stream.writeAll(head);
-        try connection.stream.writeAll(self.body);
+        var write_buf: [4096]u8 = undefined;
+        var writer = stream.writer(io, &write_buf);
+        try writer.interface.writeAll(head);
+        try writer.interface.writeAll(self.body);
+        try writer.interface.flush();
     }
 };
 
@@ -1508,14 +1521,15 @@ test "default body executor decompresses gzip indexer discovery response" {
     const gzipped = try gzipStoredBody(allocator, xml);
     defer allocator.free(gzipped);
 
-    const address = try std.net.Address.parseIp("127.0.0.1", 0);
-    var server = try address.listen(.{ .reuse_address = true });
-    defer server.deinit();
+    const io = compat.io();
+    var address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try std.Io.net.IpAddress.listen(&address, io, .{ .reuse_address = true });
+    defer server.deinit(io);
 
     const handler = GzipHttpServer{ .body = gzipped };
     const thread = try std.Thread.spawn(.{}, GzipHttpServer.serve, .{ &handler, &server });
 
-    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/api/v2.0/indexers/all/results/torznab/api?apikey=test&t=indexers&configured=true", .{server.listen_address.getPort()});
+    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/api/v2.0/indexers/all/results/torznab/api?apikey=test&t=indexers&configured=true", .{server.socket.address.getPort()});
     defer allocator.free(url);
 
     const body = try defaultBodyExecutor(allocator, url);
@@ -1548,7 +1562,7 @@ test "parallel indexer search merges sorted results and updates progress" {
             }
             if (std.mem.indexOf(u8, url, "/indexers/alpha/") != null) {
                 _ = alpha_calls.fetchAdd(1, .monotonic);
-                std.Thread.sleep(10 * std.time.ns_per_ms);
+                compat.sleepNanos(10 * std.time.ns_per_ms);
                 return allocator.dupe(u8, "<rss><channel><item><title>Alpha Result</title><link>magnet:?xt=urn:btih:alpha</link><torznab:attr name=\"seeders\" value=\"10\"/></item></channel></rss>") catch error.OutOfMemory;
             }
             if (std.mem.indexOf(u8, url, "/indexers/beta/") != null) {
@@ -1618,7 +1632,7 @@ test "streaming search publishes batches as indexers complete" {
                 return allocator.dupe(u8, "<indexers><indexer id=\"slow\"><title>Slow</title></indexer><indexer id=\"fast\"><title>Fast</title></indexer></indexers>") catch error.OutOfMemory;
             }
             if (std.mem.indexOf(u8, url, "/indexers/slow/") != null) {
-                std.Thread.sleep(20 * std.time.ns_per_ms);
+                compat.sleepNanos(20 * std.time.ns_per_ms);
                 return allocator.dupe(u8, "<rss><channel><item><title>Slow Result</title><link>magnet:?xt=urn:btih:slow</link><torznab:attr name=\"seeders\" value=\"10\"/></item></channel></rss>") catch error.OutOfMemory;
             }
             if (std.mem.indexOf(u8, url, "/indexers/fast/") != null) {
@@ -1632,7 +1646,7 @@ test "streaming search publishes batches as indexers complete" {
     const session = try client.startStreamingSearch("ubuntu", state.exec, 2);
     defer session.deinit();
 
-    var results: std.ArrayList(Torrent) = .{};
+    var results: std.ArrayList(Torrent) = .empty;
     defer {
         for (results.items) |t| {
             std.testing.allocator.free(t.title);
@@ -1648,14 +1662,14 @@ test "streaming search publishes batches as indexers complete" {
             saw_first_batch = true;
             if (results.items.len == 1) break;
         }
-        std.Thread.sleep(std.time.ns_per_ms);
+        compat.sleepNanos(std.time.ns_per_ms);
     }
     try std.testing.expect(saw_first_batch);
     try std.testing.expect(results.items.len >= 1);
 
     while (!session.isDone()) {
         _ = try session.drainInto(std.testing.allocator, &results);
-        std.Thread.sleep(std.time.ns_per_ms);
+        compat.sleepNanos(std.time.ns_per_ms);
     }
     _ = try session.drainInto(std.testing.allocator, &results);
 
@@ -1687,7 +1701,7 @@ test "streaming search keeps successful results when one indexer fails" {
     const session = try client.startStreamingSearch("ubuntu", state.exec, 2);
     defer session.deinit();
 
-    var results: std.ArrayList(Torrent) = .{};
+    var results: std.ArrayList(Torrent) = .empty;
     defer {
         for (results.items) |t| {
             std.testing.allocator.free(t.title);
@@ -1698,7 +1712,7 @@ test "streaming search keeps successful results when one indexer fails" {
 
     while (!session.isDone()) {
         _ = try session.drainInto(std.testing.allocator, &results);
-        std.Thread.sleep(std.time.ns_per_ms);
+        compat.sleepNanos(std.time.ns_per_ms);
     }
     _ = try session.drainInto(std.testing.allocator, &results);
 
@@ -1723,7 +1737,7 @@ test "streaming search reports discovery failure as fatal" {
     defer session.deinit();
 
     while (!session.isDone()) {
-        std.Thread.sleep(std.time.ns_per_ms);
+        compat.sleepNanos(std.time.ns_per_ms);
     }
 
     try std.testing.expectEqual(@as(?JackettError, error.ConnectionRefused), session.fatalError());
@@ -1784,12 +1798,16 @@ test "resolve Jackett HTTP link to temp torrent file" {
 
     var resolved = try resolveDownloadLink(std.testing.allocator, "https://jackett.local/dl/file", mock.fetch);
     defer resolved.deinit(std.testing.allocator);
-    defer std.fs.deleteFileAbsolute(resolved.value) catch {};
+    defer std.Io.Dir.deleteFileAbsolute(compat.io(), resolved.value) catch {};
 
     try std.testing.expectEqual(.torrent_file, resolved.kind);
     try std.testing.expect(std.mem.endsWith(u8, resolved.value, ".torrent"));
 
-    const written = try std.fs.cwd().readFileAlloc(std.testing.allocator, resolved.value, 1024);
+    const io = compat.io();
+    const written_file = std.Io.Dir.openFileAbsolute(io, resolved.value, .{}) catch return error.TestExpectedEqual;
+    defer compat.closeFile(written_file);
+    var file_reader = written_file.reader(io, &.{});
+    const written = file_reader.interface.allocRemaining(std.testing.allocator, std.Io.Limit.limited(1024)) catch return error.TestExpectedEqual;
     defer std.testing.allocator.free(written);
     try std.testing.expectEqualStrings(torrent_bytes, written);
 }

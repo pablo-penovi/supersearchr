@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const compat = @import("compat");
 
 pub const Key = enum {
     escape,
@@ -61,7 +62,7 @@ pub fn deinit() void {
     dim_persistent = false;
 
     clearScreen();
-    std.fs.File.stdout().writeAll("\x1b[1;1H") catch {};
+    compat.stdoutWriteAll("\x1b[1;1H");
 
     if (builtin.os.tag == .windows) {
         deinitWindows();
@@ -71,9 +72,9 @@ pub fn deinit() void {
 }
 
 pub fn readKey() !Event {
-    const stdin = std.fs.File.stdin();
+    const stdin = std.Io.File.stdin();
     var buf: [1]u8 = undefined;
-    const byte = try stdin.read(&buf);
+    const byte = try compat.readFile(stdin, &buf);
     if (byte == 0) return error.EndOfStream;
     const b = buf[0];
 
@@ -103,7 +104,7 @@ pub fn readKey() !Event {
     return Event{ .key = .unknown, .value = b };
 }
 
-fn consumeEscapeSequence(stdin: std.fs.File) !bool {
+fn consumeEscapeSequence(stdin: std.Io.File) !bool {
     if (builtin.os.tag == .windows) {
         return consumeEscapeSequenceWindows(stdin);
     }
@@ -111,7 +112,7 @@ fn consumeEscapeSequence(stdin: std.fs.File) !bool {
     return try consumeEscapeSequencePosix(stdin);
 }
 
-fn consumeEscapeSequencePosix(stdin: std.fs.File) !bool {
+fn consumeEscapeSequencePosix(stdin: std.Io.File) !bool {
     var poll_fds = [_]std.posix.pollfd{
         .{
             .fd = stdin.handle,
@@ -128,7 +129,7 @@ fn consumeEscapeSequencePosix(stdin: std.fs.File) !bool {
     return true;
 }
 
-fn consumeEscapeSequenceWindows(stdin: std.fs.File) !bool {
+fn consumeEscapeSequenceWindows(stdin: std.Io.File) !bool {
     const stdin_handle = try windows.GetStdHandle(windows.STD_INPUT_HANDLE);
     const wait_ms: windows.DWORD = @intCast(escape_sequence_timeout_ms);
     windows.WaitForSingleObject(stdin_handle, wait_ms) catch |err| switch (err) {
@@ -141,11 +142,11 @@ fn consumeEscapeSequenceWindows(stdin: std.fs.File) !bool {
     return true;
 }
 
-fn consumePendingEscapeBytesWindows(stdin: std.fs.File, stdin_handle: windows.HANDLE) !void {
+fn consumePendingEscapeBytesWindows(stdin: std.Io.File, stdin_handle: windows.HANDLE) !void {
     var buf: [16]u8 = undefined;
 
     while (true) {
-        const read_n = try stdin.read(&buf);
+        const read_n = try compat.readFile(stdin, &buf);
         if (read_n == 0) return;
         if (endsEscapeSequence(buf[0..read_n])) return;
 
@@ -157,7 +158,7 @@ fn consumePendingEscapeBytesWindows(stdin: std.fs.File, stdin_handle: windows.HA
     }
 }
 
-fn consumePendingEscapeBytesPosix(stdin: std.fs.File) !void {
+fn consumePendingEscapeBytesPosix(stdin: std.Io.File) !void {
     var poll_fds = [_]std.posix.pollfd{
         .{
             .fd = stdin.handle,
@@ -168,7 +169,7 @@ fn consumePendingEscapeBytesPosix(stdin: std.fs.File) !void {
     var buf: [16]u8 = undefined;
 
     while (true) {
-        const read_n = try stdin.read(&buf);
+        const read_n = try compat.readFile(stdin, &buf);
         if (read_n == 0) return;
         if (endsEscapeSequence(buf[0..read_n])) return;
 
@@ -192,7 +193,7 @@ pub fn readKeyWithTimeout(timeout_ms: i32) !?Event {
         return try readKeyWithTimeoutWindows(timeout_ms);
     }
 
-    const stdin = std.fs.File.stdin();
+    const stdin = std.Io.File.stdin();
     var poll_fds = [_]std.posix.pollfd{
         .{
             .fd = stdin.handle,
@@ -212,7 +213,7 @@ pub fn discardPendingInput() void {
         return;
     }
 
-    const stdin = std.fs.File.stdin();
+    const stdin = std.Io.File.stdin();
     var poll_fds = [_]std.posix.pollfd{
         .{
             .fd = stdin.handle,
@@ -227,29 +228,29 @@ pub fn discardPendingInput() void {
         if (ready == 0) break;
         if ((poll_fds[0].revents & std.posix.POLL.IN) == 0) break;
 
-        const read_n = stdin.read(&buf) catch return;
+        const read_n = compat.readFile(stdin, &buf) catch return;
         if (read_n == 0) break;
         poll_fds[0].revents = 0;
     }
 }
 
 pub fn clearScreen() void {
-    std.fs.File.stdout().writeAll("\x1b[2J") catch {};
+    compat.stdoutWriteAll("\x1b[2J");
 }
 
 pub fn hideCursor() void {
-    std.fs.File.stdout().writeAll("\x1b[?25l") catch {};
+    compat.stdoutWriteAll("\x1b[?25l");
 }
 
 pub fn showCursor() void {
-    std.fs.File.stdout().writeAll("\x1b[?25h") catch {};
+    compat.stdoutWriteAll("\x1b[?25h");
 }
 
 pub fn moveCursor(row: u16, col: u16) void {
-    const stdout = std.fs.File.stdout();
+    const stdout = std.Io.File.stdout();
     var buf: [32]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "\x1b[{};{}H", .{ row, col }) catch return;
-    stdout.writeAll(msg) catch {};
+    compat.writeFileAll(stdout, msg) catch {};
 }
 
 pub fn setColor(fg: Color) void {
@@ -273,34 +274,34 @@ pub fn setColor(fg: Color) void {
     };
     var buf: [16]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "\x1b[{}m", .{code}) catch return;
-    std.fs.File.stdout().writeAll(msg) catch {};
+    compat.stdoutWriteAll(msg);
 }
 
 pub fn setFg256(code: u8) void {
     var buf: [24]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "\x1b[38;5;{}m", .{code}) catch return;
-    std.fs.File.stdout().writeAll(msg) catch {};
+    compat.stdoutWriteAll(msg);
 }
 
 pub fn setBg256(code: u8) void {
     var buf: [24]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "\x1b[48;5;{}m", .{code}) catch return;
-    std.fs.File.stdout().writeAll(msg) catch {};
+    compat.stdoutWriteAll(msg);
 }
 
 pub fn setBold(on: bool) void {
     if (on) {
-        std.fs.File.stdout().writeAll("\x1b[1m") catch {};
+        compat.stdoutWriteAll("\x1b[1m");
     } else {
-        std.fs.File.stdout().writeAll("\x1b[22m") catch {};
+        compat.stdoutWriteAll("\x1b[22m");
     }
 }
 
 pub fn setDim(on: bool) void {
     if (on) {
-        std.fs.File.stdout().writeAll("\x1b[2m") catch {};
+        compat.stdoutWriteAll("\x1b[2m");
     } else {
-        std.fs.File.stdout().writeAll("\x1b[22m") catch {};
+        compat.stdoutWriteAll("\x1b[22m");
     }
 }
 
@@ -310,7 +311,7 @@ pub fn setDimPersistent(on: bool) void {
 }
 
 pub fn resetColor() void {
-    std.fs.File.stdout().writeAll("\x1b[0m") catch {};
+    compat.stdoutWriteAll("\x1b[0m");
     if (dim_persistent) {
         setDim(true);
     }
@@ -337,7 +338,7 @@ pub fn getTerminalSize() !TerminalSize {
 }
 
 fn initPosix() !void {
-    const stdin = std.fs.File.stdin();
+    const stdin = std.Io.File.stdin();
     original_termios = try std.posix.tcgetattr(stdin.handle);
 
     var raw = original_termios;
@@ -363,7 +364,7 @@ fn initPosix() !void {
 }
 
 fn deinitPosix() void {
-    const stdin = std.fs.File.stdin();
+    const stdin = std.Io.File.stdin();
     std.posix.tcsetattr(stdin.handle, .NOW, original_termios) catch {};
 }
 
@@ -397,7 +398,7 @@ fn initWindows() !void {
         return error.Unexpected;
     }
 
-    _ = std.fs.File.stdout().getOrEnableAnsiEscapeSupport();
+    std.Io.File.stdout().enableAnsiEscapeCodes(compat.io()) catch {};
 }
 
 fn deinitWindows() void {
@@ -419,7 +420,7 @@ fn readKeyWithTimeoutWindows(timeout_ms: i32) !?Event {
 }
 
 fn getTerminalSizeLinux() !TerminalSize {
-    const stdin = std.fs.File.stdin();
+    const stdin = std.Io.File.stdin();
     var winsize: std.posix.winsize = undefined;
     const result = std.os.linux.ioctl(stdin.handle, std.os.linux.T.IOCGWINSZ, @intFromPtr(&winsize));
 
@@ -431,7 +432,7 @@ fn getTerminalSizeLinux() !TerminalSize {
 }
 
 fn getTerminalSizePosixIoctl() !TerminalSize {
-    const stdin = std.fs.File.stdin();
+    const stdin = std.Io.File.stdin();
     var winsize: std.posix.winsize = undefined;
     const result = std.c.ioctl(stdin.handle, std.c.T.IOCGWINSZ, @intFromPtr(&winsize));
     if (result == 0) {

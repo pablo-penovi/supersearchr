@@ -2,6 +2,7 @@ const std = @import("std");
 const term = @import("term");
 const theme = @import("theme");
 const Torrent = @import("torrent").Torrent;
+const compat = @import("compat");
 
 pub const ResultsWidget = struct {
     allocator: std.mem.Allocator,
@@ -62,7 +63,7 @@ pub const ResultsWidget = struct {
             .marquee_target_set = false,
             .marquee_cursor = 0,
             .marquee_title_col_width = 0,
-            .send_states = .{},
+            .send_states = .empty,
             .live_status = .{},
         };
     }
@@ -92,7 +93,7 @@ pub const ResultsWidget = struct {
         self.torrents = torrents;
         self.total_count = total;
 
-        var next_states: std.ArrayList(SendState) = .{};
+        var next_states: std.ArrayList(SendState) = .empty;
         next_states.resize(self.allocator, torrents.len) catch {
             self.force_full_redraw = true;
             return;
@@ -147,7 +148,7 @@ pub const ResultsWidget = struct {
     }
 
     pub fn render(self: *ResultsWidget, max_rows: u16, max_cols: u16) void {
-        const stdout = std.fs.File.stdout();
+        const stdout = compat.stdoutWriter();
         const colors = theme.superseedr_like;
         const border = theme.unicode_border;
         const compact = theme.isCompactViewport(max_rows, max_cols);
@@ -310,7 +311,7 @@ pub const ResultsWidget = struct {
     }
 
     fn drawBorder(char: u8, width: u16) void {
-        const stdout = std.fs.File.stdout();
+        const stdout = compat.stdoutWriter();
         const buf: [1]u8 = .{char};
         for (0..@as(usize, @intCast(width))) |_| {
             stdout.writeAll(&buf) catch {};
@@ -564,7 +565,7 @@ fn findTorrentByLink(torrents: []const Torrent, link: []const u8) ?usize {
 }
 
 fn drawCompact(
-    stdout: std.fs.File,
+    stdout: compat.FileWriter,
     colors: theme.Theme,
     border: theme.BorderChars,
     torrents: []const Torrent,
@@ -608,7 +609,7 @@ fn drawCompact(
     term.resetColor();
 }
 
-fn drawCompactDivider(stdout: std.fs.File, colors: theme.Theme, border: theme.BorderChars, max_cols: u16) void {
+fn drawCompactDivider(stdout: compat.FileWriter, colors: theme.Theme, border: theme.BorderChars, max_cols: u16) void {
     const cols: usize = @max(@as(usize, 1), @as(usize, @intCast(max_cols)));
     term.setFg256(colors.panel_border);
     for (0..cols) |_| {
@@ -625,7 +626,7 @@ fn compactTitleWidth(max_cols: u16) usize {
 }
 
 fn drawPanelFrame(
-    stdout: std.fs.File,
+    stdout: compat.FileWriter,
     panel_width: usize,
     inner_width: usize,
     border: theme.BorderChars,
@@ -647,7 +648,7 @@ fn drawPanelFrame(
 }
 
 fn drawPanelDivider(
-    stdout: std.fs.File,
+    stdout: compat.FileWriter,
     panel_width: usize,
     border: theme.BorderChars,
     colors: theme.Theme,
@@ -663,7 +664,7 @@ fn drawPanelDivider(
 }
 
 fn drawContentRow(
-    stdout: std.fs.File,
+    stdout: compat.FileWriter,
     panel_width: usize,
     inner_width: usize,
     layout: TableLayout,
@@ -783,31 +784,30 @@ fn stepMarqueeState(
     return false;
 }
 
-fn writeHeaderCells(stdout: std.fs.File, inner_width: usize, layout: TableLayout) !void {
+fn writeHeaderCells(stdout: compat.FileWriter, inner_width: usize, layout: TableLayout) !void {
     var buf: [256]u8 = undefined;
     const header = buildHeaderCells(&buf, inner_width, layout);
     try stdout.writeAll(header);
 }
 
 fn buildHeaderCells(buf: []u8, inner_width: usize, layout: TableLayout) []const u8 {
-    var stream = std.io.fixedBufferStream(buf);
-    const writer = stream.writer();
+    var writer: std.Io.Writer = .fixed(buf);
 
     writer.writeAll(" ") catch return "";
-    theme.writePadded(writer, "Title", layout.title_col_width) catch return "";
-    writeSpaces(writer, layout.title_to_seeders_gap) catch return "";
-    writeRightAligned(writer, "S", layout.seeders_width) catch return "";
-    writeSpaces(writer, layout.between_stats_gap) catch return "";
-    writeRightAligned(writer, "L", layout.leechers_width) catch return "";
-    writeSpaces(writer, layout.between_stats_gap) catch return "";
-    writeRightAligned(writer, "Size", layout.size_width) catch return "";
+    theme.writePadded(&writer, "Title", layout.title_col_width) catch return "";
+    writeSpaces(&writer, layout.title_to_seeders_gap) catch return "";
+    writeRightAligned(&writer, "S", layout.seeders_width) catch return "";
+    writeSpaces(&writer, layout.between_stats_gap) catch return "";
+    writeRightAligned(&writer, "L", layout.leechers_width) catch return "";
+    writeSpaces(&writer, layout.between_stats_gap) catch return "";
+    writeRightAligned(&writer, "Size", layout.size_width) catch return "";
     writer.writeAll(" ") catch return "";
 
-    const used = stream.getWritten().len;
+    const used = writer.buffered().len;
     if (used < inner_width) {
-        writeSpaces(writer, inner_width - used) catch {};
+        writeSpaces(&writer, inner_width - used) catch {};
     }
-    return stream.getWritten();
+    return writer.buffered();
 }
 
 fn buildDataCells(
@@ -819,33 +819,32 @@ fn buildDataCells(
     leechers: u32,
     size_bytes: ?u64,
 ) []const u8 {
-    var stream = std.io.fixedBufferStream(buf);
-    const writer = stream.writer();
+    var writer: std.Io.Writer = .fixed(buf);
 
     writer.writeAll(" ") catch return "";
-    theme.writePadded(writer, title, layout.title_col_width) catch return "";
-    writeSpaces(writer, layout.title_to_seeders_gap) catch return "";
+    theme.writePadded(&writer, title, layout.title_col_width) catch return "";
+    writeSpaces(&writer, layout.title_to_seeders_gap) catch return "";
 
     var sbuf: [16]u8 = undefined;
     const seeders_text = std.fmt.bufPrint(&sbuf, "{d}", .{seeders}) catch "";
-    writeRightAligned(writer, seeders_text, layout.seeders_width) catch return "";
-    writeSpaces(writer, layout.between_stats_gap) catch return "";
+    writeRightAligned(&writer, seeders_text, layout.seeders_width) catch return "";
+    writeSpaces(&writer, layout.between_stats_gap) catch return "";
 
     var lbuf: [16]u8 = undefined;
     const leechers_text = std.fmt.bufPrint(&lbuf, "{d}", .{leechers}) catch "";
-    writeRightAligned(writer, leechers_text, layout.leechers_width) catch return "";
-    writeSpaces(writer, layout.between_stats_gap) catch return "";
+    writeRightAligned(&writer, leechers_text, layout.leechers_width) catch return "";
+    writeSpaces(&writer, layout.between_stats_gap) catch return "";
 
     var size_buf: [16]u8 = undefined;
     const size_text = formatSizeBytes(&size_buf, size_bytes);
-    writeRightAligned(writer, size_text, layout.size_width) catch return "";
+    writeRightAligned(&writer, size_text, layout.size_width) catch return "";
     writer.writeAll(" ") catch return "";
 
-    const used = stream.getWritten().len;
+    const used = writer.buffered().len;
     if (used < inner_width) {
-        writeSpaces(writer, inner_width - used) catch {};
+        writeSpaces(&writer, inner_width - used) catch {};
     }
-    return stream.getWritten();
+    return writer.buffered();
 }
 
 fn formatSizeBytes(buf: []u8, size_bytes: ?u64) []const u8 {
@@ -873,7 +872,7 @@ fn writeRightAligned(writer: anytype, text: []const u8, width: usize) !void {
 }
 
 fn drawStatusRow(
-    stdout: std.fs.File,
+    stdout: compat.FileWriter,
     panel_width: usize,
     border: theme.BorderChars,
     colors: theme.Theme,
@@ -1625,10 +1624,13 @@ test "compactTitleWidth follows terminal width safely" {
 
 test "writeRightAligned clips overflowing values to preserve column width" {
     const allocator = std.testing.allocator;
-    var out = std.ArrayList(u8){};
+    var out: std.ArrayList(u8) = .empty;
     defer out.deinit(allocator);
 
-    try writeRightAligned(out.writer(allocator), "123456", 4);
+    var writer = std.Io.Writer.Allocating.fromArrayList(allocator, &out);
+    try writeRightAligned(&writer.writer, "123456", 4);
+    try writer.writer.flush();
+    out = writer.toArrayList();
     try std.testing.expectEqualStrings("3456", out.items);
 }
 

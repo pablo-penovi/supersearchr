@@ -1,12 +1,12 @@
 ## Tooling
 
-This project is compiled using Zig 0.15.2.
-**CRITICAL**: It is essential to only use syntax, objects and functions that are compatible with Zig 0.15.2. It's wise to search in the Zig docs: https://ziglang.org/documentation/0.15.2/
+This project is compiled using Zig 0.16.0.
+**CRITICAL**: It is essential to only use syntax, objects and functions that are compatible with Zig 0.16.0. It's wise to search in the Zig docs: https://ziglang.org/documentation/0.16.0/
 
 ## Coding rules
 
-- Do not use *std.Arraylist({type}).init(allocator)* to initialize ArrayList. This is INVALID in Zig 0.15.2. Instead, use *std.ArrayList({type}) = .{}*
-- When appending an item to an ArrayList, do not use *{array}.append(item)*. This is INVALID in Zig 0.15.2. Instead, use *{array}.append(allocator, item)*
+- Do not use *std.Arraylist({type}).init(allocator)* to initialize ArrayList. This is INVALID in Zig 0.16.0. Instead, use *std.ArrayList({type}) = .{}*
+- When appending an item to an ArrayList, do not use *{array}.append(item)*. This is INVALID in Zig 0.16.0. Instead, use *{array}.append(allocator, item)*
 - When using this structure:
 ```zig
 // the "list" variable in this example is a std.ArrayList that you receive from another function
@@ -19,7 +19,7 @@ defer {
 ```
 make sure the capture is a var (|*{name}|) and not a const (|{name}|)
 - When adding a new module with tests, add a corresponding test section in build.zig following the pattern of existing tests (config_tests, jackett_tests, superseedr_tests, search_widget_tests, results_widget_tests, app_tests) and dependOn it in the test_step
-- std.io.getStdIn() and std.io.getStdOut() are deprecated in Zig 0.15.2. Use std.fs.File.stdin() and std.fs.File.stdout() instead
+- std.io.getStdIn() and std.io.getStdOut() are deprecated in Zig 0.16.0. Use std.fs.File.stdin() and std.fs.File.stdout() instead
 
 ## Running Tests
 
@@ -28,7 +28,7 @@ make sure the capture is a var (|*{name}|) and not a const (|{name}|)
 
 ## Project Overview
 
-Supersearchr is a TUI BitTorrent search tool written in Zig 0.15.2. It searches via Jackett and sends selected magnet or torrent links to Superseedr.
+Supersearchr is a TUI BitTorrent search tool written in Zig 0.16.0. It searches via Jackett and sends selected magnet or torrent links to Superseedr.
 
 ## Commands
 

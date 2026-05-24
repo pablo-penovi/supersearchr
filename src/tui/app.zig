@@ -10,6 +10,7 @@ const update_checker = @import("update_checker");
 const build_options = @import("build_options");
 const Torrent = @import("torrent").Torrent;
 const debug_log = @import("debug_log");
+const compat = @import("compat");
 
 const State = union(enum) {
     search: SearchState,
@@ -172,7 +173,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
     const input_poll_ms: i32 = 80;
     const marquee_step_interval_ms: i64 = scaledMarqueeIntervalMs(input_poll_ms, 30);
     var marquee_budget_ms: i64 = 0;
-    var last_loop_ms: i64 = std.time.milliTimestamp();
+    var last_loop_ms: i64 = compat.milliTimestamp();
 
     while (true) {
         if (refreshTerminalSize(app)) {
@@ -192,7 +193,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
         }
         widget.setLiveStatus(results_state.live_status);
 
-        const now_ms = std.time.milliTimestamp();
+        const now_ms = compat.milliTimestamp();
         const elapsed_ms = nonNegativeElapsedMs(last_loop_ms, now_ms);
         last_loop_ms = now_ms;
         marquee_budget_ms += elapsed_ms;
@@ -316,7 +317,7 @@ fn transitionSearchToStreamingResults(app: *App, query: []u8) void {
     };
     app.state = .{ .results = .{
         .query = query,
-        .torrents = .{},
+        .torrents = .empty,
         .search_session = session,
         .live_status = liveStatusFromSnapshot(session.snapshot()),
     } };
@@ -450,7 +451,7 @@ fn drainUntilDone(app: *App, results_state: *ResultsState) !void {
     while (attempts < 200) : (attempts += 1) {
         _ = try updateStreamingResults(app, results_state);
         if (results_state.search_session == null) return;
-        std.Thread.sleep(std.time.ns_per_ms);
+        compat.sleepNanos(std.time.ns_per_ms);
     }
     return error.TestUnexpectedResult;
 }
@@ -459,7 +460,7 @@ fn waitForStreamingError(app: *App, results_state: *ResultsState) jackett.Jacket
     var attempts: usize = 0;
     while (attempts < 200) : (attempts += 1) {
         if (updateStreamingResults(app, results_state)) |_| {} else |err| return err;
-        std.Thread.sleep(std.time.ns_per_ms);
+        compat.sleepNanos(std.time.ns_per_ms);
     }
     return error.ParseFailed;
 }
@@ -710,7 +711,7 @@ test "startSearchWithAppDeps uses injected jackett body executor" {
     const session = try startSearchWithAppDeps(&app, "ubuntu");
     defer session.deinit();
     while (!session.isDone()) {
-        std.Thread.sleep(std.time.ns_per_ms);
+        compat.sleepNanos(std.time.ns_per_ms);
     }
     try std.testing.expect(state.indexers_called);
     try std.testing.expect(state.search_called);

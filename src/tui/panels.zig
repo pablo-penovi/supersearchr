@@ -2,6 +2,7 @@ const std = @import("std");
 const term = @import("term");
 const theme = @import("theme");
 const results_widget = @import("results");
+const compat = @import("compat");
 
 pub const RefreshTerminalSizeFn = *const fn (term_rows: *u16, term_cols: *u16) bool;
 
@@ -98,7 +99,7 @@ pub fn renderError(message: []const u8) void {
 }
 
 pub fn renderNoticePanel(title: []const u8, message: []const u8, title_color: u8, clear_backdrop: bool) void {
-    const stdout = std.fs.File.stdout();
+    const stdout = compat.stdoutWriter();
     const colors = theme.superseedr_like;
     const border = theme.unicode_border;
     const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
