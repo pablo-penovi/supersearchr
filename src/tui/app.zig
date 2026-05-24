@@ -182,7 +182,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
         }
 
         const previous_cursor_link = if (widget.cursor < widget.torrents.len) widget.torrents[widget.cursor].link else null;
-        const search_changed = updateStreamingResults(app, results_state) catch |err| {
+        const search_changed = updateStreamingResults(app, results_state, &widget) catch |err| {
             deinitResultsState(app.allocator, results_state);
             cleaned_up = true;
             app.state = .{ .err = .{ .message = getErrorMessage(err) } };
@@ -216,6 +216,17 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
 
             switch (action) {
                 .continue_browsing => {},
+                .review_failures => {
+                    if (widget.failed_indexers.items.len > 0) {
+                        panels.renderFailedIndexersOverlay(
+                            &app.term_rows,
+                            &app.term_cols,
+                            refreshTerminalSizeValues,
+                            &widget,
+                        );
+                        widget.force_full_redraw = true;
+                    }
+                },
                 .new_search => {
                     deinitResultsState(app.allocator, results_state);
                     cleaned_up = true;
@@ -328,7 +339,7 @@ fn transitionSearchToStreamingResults(app: *App, query: []u8) void {
     } };
 }
 
-fn updateStreamingResults(app: *App, results_state: *ResultsState) jackett.JackettError!bool {
+fn updateStreamingResults(app: *App, results_state: *ResultsState, widget: ?*results_widget.ResultsWidget) jackett.JackettError!bool {
     const session = results_state.search_session orelse return false;
     const previous_status = results_state.live_status;
 
@@ -339,6 +350,16 @@ fn updateStreamingResults(app: *App, results_state: *ResultsState) jackett.Jacke
     var changed = try session.drainInto(app.allocator, &results_state.torrents);
     results_state.live_status = liveStatusFromSnapshot(session.snapshot());
     if (!std.meta.eql(previous_status, results_state.live_status)) changed = true;
+
+    // Extract failed indexers from search session queue
+    if (widget) |w| {
+        const io = compat.io();
+        session.queue.mutex.lockUncancelable(io);
+        for (session.queue.failed_indexers.items) |name| {
+            w.addFailedIndexer(name) catch {};
+        }
+        session.queue.mutex.unlock(io);
+    }
 
     if (session.fatalError()) |err| {
         return err;
@@ -454,7 +475,7 @@ fn consumeMarqueeTick(budget_ms: *i64, interval_ms: i64) bool {
 fn drainUntilDone(app: *App, results_state: *ResultsState) !void {
     var attempts: usize = 0;
     while (attempts < 200) : (attempts += 1) {
-        _ = try updateStreamingResults(app, results_state);
+        _ = try updateStreamingResults(app, results_state, null);
         if (results_state.search_session == null) return;
         compat.sleepNanos(std.time.ns_per_ms);
     }
@@ -464,7 +485,7 @@ fn drainUntilDone(app: *App, results_state: *ResultsState) !void {
 fn waitForStreamingError(app: *App, results_state: *ResultsState) jackett.JackettError {
     var attempts: usize = 0;
     while (attempts < 200) : (attempts += 1) {
-        if (updateStreamingResults(app, results_state)) |_| {} else |err| return err;
+        if (updateStreamingResults(app, results_state, null)) |_| {} else |err| return err;
         compat.sleepNanos(std.time.ns_per_ms);
     }
     return error.ParseFailed;

@@ -697,6 +697,7 @@ const SearchBatchQueue = struct {
     allocator: std.mem.Allocator,
     mutex: std.Io.Mutex = std.Io.Mutex.init,
     batches: std.ArrayList(SearchBatch) = .empty,
+    failed_indexers: std.ArrayList([]const u8) = .empty,
     first_error: ?JackettError = null,
     failures: usize = 0,
 
@@ -715,12 +716,17 @@ const SearchBatchQueue = struct {
         return self.batches.orderedRemove(0);
     }
 
-    fn recordFailure(self: *SearchBatchQueue, err: JackettError) void {
+    fn recordFailure(self: *SearchBatchQueue, err: JackettError, indexer_id: []const u8) void {
         const io = compat.io();
         self.mutex.lockUncancelable(io);
         defer self.mutex.unlock(io);
         if (self.first_error == null) self.first_error = err;
         self.failures += 1;
+
+        const id_copy = self.allocator.dupe(u8, indexer_id) catch return;
+        self.failed_indexers.append(self.allocator, id_copy) catch {
+            self.allocator.free(id_copy);
+        };
     }
 
     fn setFatal(self: *SearchBatchQueue, err: JackettError) void {
@@ -742,6 +748,10 @@ const SearchBatchQueue = struct {
             batch.deinit(self.allocator);
         }
         self.batches.deinit(self.allocator);
+        for (self.failed_indexers.items) |name| {
+            self.allocator.free(name);
+        }
+        self.failed_indexers.deinit(self.allocator);
     }
 };
 
@@ -1068,8 +1078,9 @@ fn streamingSearchWorker(ctx: *StreamingSearchContext) void {
         const idx = ctx.next_index.fetchAdd(1, .monotonic);
         if (idx >= ctx.indexers.len) return;
 
-        searchSingleIndexerStreaming(ctx, ctx.indexers[idx].id) catch |err| {
-            ctx.queue.recordFailure(err);
+        const id = ctx.indexers[idx].id;
+        searchSingleIndexerStreaming(ctx, id) catch |err| {
+            ctx.queue.recordFailure(err, id);
             ctx.progress.recordFailed();
         };
         ctx.progress.recordCompleted();

@@ -35,6 +35,7 @@ pub const ResultsWidget = struct {
     marquee_cursor: usize,
     marquee_title_col_width: usize,
     sent_torrents: std.ArrayList(SentTorrent),
+    failed_indexers: std.ArrayList([]const u8),
     live_status: LiveStatus,
     spinner_frame: usize,
 
@@ -83,6 +84,7 @@ pub const ResultsWidget = struct {
             .marquee_cursor = 0,
             .marquee_title_col_width = 0,
             .sent_torrents = .empty,
+            .failed_indexers = .empty,
             .live_status = .{},
             .spinner_frame = 0,
         };
@@ -90,6 +92,19 @@ pub const ResultsWidget = struct {
 
     pub fn deinit(self: *ResultsWidget) void {
         self.sent_torrents.deinit(self.allocator);
+        for (self.failed_indexers.items) |name| {
+            self.allocator.free(name);
+        }
+        self.failed_indexers.deinit(self.allocator);
+    }
+
+    pub fn addFailedIndexer(self: *ResultsWidget, name: []const u8) !void {
+        for (self.failed_indexers.items) |existing| {
+            if (std.mem.eql(u8, existing, name)) return;
+        }
+        const cloned = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(cloned);
+        try self.failed_indexers.append(self.allocator, cloned);
     }
 
     pub fn advanceSpinner(self: *ResultsWidget) bool {
@@ -355,6 +370,9 @@ pub const ResultsWidget = struct {
         if (self.torrents.len == 0) {
             switch (event.key) {
                 .char => {
+                    if (event.value == 'e' or event.value == 'E') {
+                        if (self.live_status.phase == .done and self.live_status.failed > 0) return .review_failures;
+                    }
                     if (event.value == 'n' or event.value == 'N') return .new_search;
                     return .continue_browsing;
                 },
@@ -367,6 +385,9 @@ pub const ResultsWidget = struct {
 
         switch (event.key) {
             .char => {
+                if (event.value == 'e' or event.value == 'E') {
+                    if (self.live_status.phase == .done and self.live_status.failed > 0) return .review_failures;
+                }
                 if (event.value == 'j') {
                     if (self.cursor < self.torrents.len - 1) {
                         self.cursor += 1;
@@ -563,10 +584,8 @@ fn computeRedrawMode(
 }
 
 fn computeDisplayCount(max_rows: u16, torrents_len: usize) usize {
-    if (torrents_len == 0) return 1;
-
-    const content_rows: usize = if (max_rows > 7) @as(usize, @intCast(max_rows - 7)) else 1;
-    return @max(@as(usize, 1), @min(content_rows, torrents_len));
+    _ = torrents_len;
+    return if (max_rows > 7) @as(usize, @intCast(max_rows - 7)) else 1;
 }
 
 fn findTorrentByLink(torrents: []const Torrent, link: []const u8) ?usize {
@@ -941,16 +960,33 @@ fn formatStatusText(
             ) catch "Showing";
         },
         .done => done: {
-            if (torrents_len == 0) {
-                if (live_status.failed == 0) break :done std.fmt.bufPrint(buf, "No results found", .{}) catch "No results found";
-                break :done std.fmt.bufPrint(buf, "No results found | {d} failed", .{live_status.failed}) catch "No results found";
+            if (live_status.failed == 0) {
+                if (torrents_len == 0) {
+                    break :done std.fmt.bufPrint(
+                        buf,
+                        "No results found | All indexers successful",
+                        .{},
+                    ) catch "No results found";
+                }
+                break :done std.fmt.bufPrint(
+                    buf,
+                    "Showing {d}-{d} of {d} | All indexers successful",
+                    .{ scroll_offset + 1, end_idx, total_count },
+                ) catch "Showing";
+            } else {
+                if (torrents_len == 0) {
+                    break :done std.fmt.bufPrint(
+                        buf,
+                        "No results found | {d} indexers failed ('e' to review)",
+                        .{ live_status.failed },
+                    ) catch "No results found";
+                }
+                break :done std.fmt.bufPrint(
+                    buf,
+                    "Showing {d}-{d} of {d} | {d} indexers failed ('e' to review)",
+                    .{ scroll_offset + 1, end_idx, total_count, live_status.failed },
+                ) catch "Showing";
             }
-            if (live_status.failed == 0) break :done formatShowing(buf, scroll_offset, end_idx, total_count);
-            break :done std.fmt.bufPrint(
-                buf,
-                "Showing {d}-{d} of {d} | {d} failed",
-                .{ scroll_offset + 1, end_idx, total_count, live_status.failed },
-            ) catch "Showing";
         },
     };
     return base;
@@ -974,6 +1010,7 @@ pub const ResultsAction = union(enum) {
     select: usize,
     new_search,
     cancel,
+    review_failures,
 };
 
 test "computeRedrawMode uses full on first draw" {
@@ -1569,11 +1606,15 @@ test "formatStatusText renders live search phases" {
         formatStatusText(&buf, 0, 10, 42, 42, .{ .phase = .querying, .completed = 3, .total = 8, .failed = 1 }, 1),
     );
     try std.testing.expectEqualStrings(
-        "Showing 1-10 of 42",
+        "Showing 1-10 of 42 | All indexers successful",
         formatStatusText(&buf, 0, 10, 42, 42, .{ .phase = .done }, 0),
     );
     try std.testing.expectEqualStrings(
-        "No results found",
+        "Showing 1-10 of 42 | 1 indexers failed ('e' to review)",
+        formatStatusText(&buf, 0, 10, 42, 42, .{ .phase = .done, .completed = 4, .total = 4, .failed = 1 }, 0),
+    );
+    try std.testing.expectEqualStrings(
+        "No results found | All indexers successful",
         formatStatusText(&buf, 0, 0, 0, 0, .{ .phase = .done }, 0),
     );
 }
