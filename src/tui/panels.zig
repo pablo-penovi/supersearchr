@@ -440,13 +440,14 @@ pub fn renderListSearchOverlay(
                     needs_modal_render = true;
                 } else if (delta.status_changed and !needs_backdrop_render and !needs_modal_render) {
                     term.beginSyncRender();
-                    term.hideCursor();
                     term.setDimPersistent(true);
                     const rendered_status_only = widget.renderStatusOnly(term_rows.*, term_cols.*);
                     term.setDimPersistent(false);
                     if (!rendered_status_only) {
                         needs_backdrop_render = true;
                         needs_modal_render = true;
+                    } else {
+                        drawListSearchModal(query_buf.items);
                     }
                     term.endSyncRender();
                 }

@@ -87,6 +87,8 @@ var original_windows_output_mode: win32.DWORD = 0;
 var term_initialized: bool = false;
 var dim_persistent: bool = false;
 const escape_sequence_timeout_ms: i32 = 10;
+const cursor_steady_block_sequence = "\x1b[2 q";
+const cursor_blinking_default_sequence = "\x1b[0 q";
 
 pub fn init() !void {
     term_initialized = true;
@@ -342,6 +344,14 @@ pub fn showCursor() void {
     compat.stdoutWriteAll("\x1b[?25h");
 }
 
+pub fn setCursorSteadyBlock() void {
+    compat.stdoutWriteAll(cursor_steady_block_sequence);
+}
+
+pub fn setCursorBlinkingDefault() void {
+    compat.stdoutWriteAll(cursor_blinking_default_sequence);
+}
+
 pub fn moveCursor(row: u16, col: u16) void {
     const stdout = std.Io.File.stdout();
     var buf: [32]u8 = undefined;
@@ -591,4 +601,12 @@ test "256 color bg escape code" {
     var buf: [24]u8 = undefined;
     const result = std.fmt.bufPrint(&buf, "\x1b[48;5;{}m", .{236}) catch unreachable;
     try Testing.expectEqualStrings("\x1b[48;5;236m", result);
+}
+
+test "steady cursor block escape code" {
+    try std.testing.expectEqualStrings("\x1b[2 q", cursor_steady_block_sequence);
+}
+
+test "cursor blinking default escape code" {
+    try std.testing.expectEqualStrings("\x1b[0 q", cursor_blinking_default_sequence);
 }

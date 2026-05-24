@@ -65,6 +65,8 @@ pub fn runWithDeps(allocator: std.mem.Allocator, cfg: config.Config, deps: AppDe
         return err;
     };
     defer term.deinit();
+    term.setCursorSteadyBlock();
+    defer term.setCursorBlinkingDefault();
 
     const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
 

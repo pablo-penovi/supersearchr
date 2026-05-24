@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.4.2
+
+### Fixed
+- Set app-managed cursor style to steady block for all cursor-visible contexts during the TUI session, restoring terminal default blinking style on exit.
+- Fixed in-results `/` search overlay cursor instability during live background status updates by redrawing the modal cursor position and visibility after status-only renders.
+
 ## 0.4.1
 
 ### Added
