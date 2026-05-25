@@ -4,6 +4,9 @@ const app = @import("tui/app");
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
+    if (std.Options.debug_threaded_io) |threaded| {
+        threaded.allocator = gpa.allocator();
+    }
     defer {
         if (gpa.deinit() == .leak) {
             std.debug.print("Memory leak detected\n", .{});

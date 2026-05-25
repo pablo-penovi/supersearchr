@@ -19,6 +19,8 @@ pub const ProcessChecker = *const fn (allocator: std.mem.Allocator) anyerror!boo
 /// Spawns superseedr in the background (does not wait for it to exit).
 pub const Spawner = *const fn (allocator: std.mem.Allocator, terminal: []const u8) anyerror!void;
 
+const SpawnRunner = *const fn (allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void;
+
 pub fn defaultExecutor(allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void {
     const result = std.process.run(allocator, compat.io(), .{
         .argv = argv,
@@ -68,14 +70,63 @@ pub fn defaultProcessChecker(allocator: std.mem.Allocator) anyerror!bool {
 }
 
 pub fn defaultSpawner(allocator: std.mem.Allocator, terminal: []const u8) anyerror!void {
+    return spawnWithFallback(allocator, terminal, spawnDetached);
+}
+
+fn spawnWithFallback(allocator: std.mem.Allocator, terminal: []const u8, runner: SpawnRunner) anyerror!void {
     var argv = try buildSpawnArgv(allocator, terminal);
     defer argv.deinit(allocator);
 
+    logArgv(allocator, "Launching superseedr command={s}", argv.items);
+    runner(allocator, argv.items) catch |terminal_err| {
+        debug_log.writef(
+            allocator,
+            "superseedr",
+            "Terminal launcher failed err={s} terminal=\"{s}\"; trying direct superseedr launch",
+            .{ @errorName(terminal_err), terminal },
+        );
+
+        const direct_argv = &.{"superseedr"};
+        logArgv(allocator, "Launching fallback superseedr command={s}", direct_argv);
+        try runner(allocator, direct_argv);
+    };
+}
+
+fn spawnDetached(_: std.mem.Allocator, argv: []const []const u8) !void {
     const io = compat.io();
-    const child = try std.process.spawn(io, spawnerOptions(argv.items));
+    const child = try std.process.spawn(io, spawnerOptions(argv));
     const reaper = try std.Thread.spawn(.{}, reapChildWhenDone, .{ child, io });
     reaper.detach();
     compat.sleepMillis(500);
+}
+
+fn logArgv(allocator: std.mem.Allocator, comptime fmt: []const u8, argv: []const []const u8) void {
+    var cmd_buf: [1024]u8 = undefined;
+    const command = formatArgv(&cmd_buf, argv);
+    debug_log.writef(allocator, "superseedr", fmt, .{command});
+}
+
+fn formatArgv(buf: []u8, argv: []const []const u8) []const u8 {
+    var written: usize = 0;
+
+    for (argv, 0..) |arg, i| {
+        if (i != 0) {
+            if (written >= buf.len) return buf[0..written];
+            buf[written] = ' ';
+            written += 1;
+        }
+
+        const part = std.fmt.bufPrint(buf[written..], "\"{s}\"", .{arg}) catch {
+            const suffix = "...";
+            const suffix_len = @min(buf.len - written, suffix.len);
+            @memcpy(buf[written .. written + suffix_len], suffix[0..suffix_len]);
+            written += suffix_len;
+            return buf[0..written];
+        };
+        written += part.len;
+    }
+
+    return buf[0..written];
 }
 
 fn spawnerOptions(argv: []const []const u8) std.process.SpawnOptions {
@@ -169,6 +220,12 @@ pub fn addLinkWithAllDeps(
         );
         break :blk false;
     };
+    debug_log.writef(
+        allocator,
+        "superseedr",
+        "Process check running={any}",
+        .{running},
+    );
     if (!running) {
         spawner(allocator, terminal) catch |err| {
             debug_log.writef(
@@ -210,6 +267,13 @@ pub fn addLinkWithAllDeps(
             return error.SuperseedrFailed;
         },
     };
+
+    debug_log.writef(
+        allocator,
+        "superseedr",
+        "superseedr add succeeded link=\"{s}\"",
+        .{link},
+    );
 }
 
 pub fn addLink(allocator: std.mem.Allocator, link: []const u8, terminal: []const u8) AddLinkError!void {
@@ -386,6 +450,63 @@ test "spawner failure returns SuperseedrLaunchFailed" {
     };
 
     try std.testing.expectError(error.SuperseedrLaunchFailed, addLinkWithAllDeps(std.testing.allocator, "magnet:?xt=urn:btih:abc", "ghostty", mock.exec, mock.checker, mock.spawner));
+}
+
+test "formatArgv quotes command arguments" {
+    var buf: [128]u8 = undefined;
+    const formatted = formatArgv(&buf, &.{ "ghostty", "-e", "superseedr" });
+
+    try std.testing.expectEqualStrings("\"ghostty\" \"-e\" \"superseedr\"", formatted);
+}
+
+test "spawnWithFallback tries direct superseedr launch after terminal spawn failure" {
+    const state = struct {
+        var calls: usize = 0;
+        var saw_terminal: bool = false;
+        var saw_direct: bool = false;
+    };
+    state.calls = 0;
+    state.saw_terminal = false;
+    state.saw_direct = false;
+
+    const mock = struct {
+        fn run(_: std.mem.Allocator, argv: []const []const u8) anyerror!void {
+            state.calls += 1;
+            if (state.calls == 1) {
+                try std.testing.expect(argv.len > 0);
+                try std.testing.expectEqualStrings("missing-terminal", argv[0]);
+                state.saw_terminal = true;
+                return error.OutOfMemory;
+            }
+
+            try std.testing.expectEqual(@as(usize, 1), argv.len);
+            try std.testing.expectEqualStrings("superseedr", argv[0]);
+            state.saw_direct = true;
+        }
+    };
+
+    try spawnWithFallback(std.testing.allocator, "missing-terminal", mock.run);
+    try std.testing.expectEqual(@as(usize, 2), state.calls);
+    try std.testing.expect(state.saw_terminal);
+    try std.testing.expect(state.saw_direct);
+}
+
+test "spawnWithFallback returns error when terminal and direct launches fail" {
+    const state = struct {
+        var calls: usize = 0;
+    };
+    state.calls = 0;
+
+    const mock = struct {
+        fn run(_: std.mem.Allocator, argv: []const []const u8) anyerror!void {
+            _ = argv;
+            state.calls += 1;
+            return error.FileNotFound;
+        }
+    };
+
+    try std.testing.expectError(error.FileNotFound, spawnWithFallback(std.testing.allocator, "missing-terminal", mock.run));
+    try std.testing.expectEqual(@as(usize, 2), state.calls);
 }
 
 test "buildSpawnArgv uses standard -e mode on unix terminals" {
