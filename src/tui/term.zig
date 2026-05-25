@@ -197,16 +197,6 @@ fn classifyEscapeSequence(seq: []const u8) Event {
     return Event{ .key = .unknown, .value = 0 };
 }
 
-fn consumeEscapeSequence(stdin: std.Io.File) !bool {
-    if (builtin.os.tag == .windows) {
-        return consumeEscapeSequenceWindows(stdin);
-    }
-
-    var dummy: [32]u8 = undefined;
-    const len = try readEscapeSequencePosix(stdin, &dummy);
-    return len > 0;
-}
-
 fn readEscapeSequencePosix(stdin: std.Io.File, buf: []u8) !usize {
     var poll_fds = [_]std.posix.pollfd{
         .{
@@ -258,12 +248,6 @@ fn readEscapeSequenceWindows(stdin: std.Io.File, buf: []u8) !usize {
         }
     }
     return idx;
-}
-
-fn consumeEscapeSequenceWindows(stdin: std.Io.File) !bool {
-    var dummy: [32]u8 = undefined;
-    const len = try readEscapeSequenceWindows(stdin, &dummy);
-    return len > 0;
 }
 
 fn endsEscapeSequence(bytes: []const u8) bool {
@@ -359,30 +343,6 @@ pub fn moveCursor(row: u16, col: u16) void {
     compat.writeFileAll(stdout, msg) catch {};
 }
 
-pub fn setColor(fg: Color) void {
-    const code: u8 = switch (fg) {
-        .black => 30,
-        .red => 31,
-        .green => 32,
-        .yellow => 33,
-        .blue => 34,
-        .magenta => 35,
-        .cyan => 36,
-        .white => 37,
-        .bright_black => 90,
-        .bright_red => 91,
-        .bright_green => 92,
-        .bright_yellow => 93,
-        .bright_blue => 94,
-        .bright_magenta => 95,
-        .bright_cyan => 96,
-        .bright_white => 97,
-    };
-    var buf: [16]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "\x1b[{}m", .{code}) catch return;
-    compat.stdoutWriteAll(msg);
-}
-
 pub fn setFg256(code: u8) void {
     var buf: [24]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "\x1b[38;5;{}m", .{code}) catch return;
@@ -421,14 +381,6 @@ pub fn resetColor() void {
     if (dim_persistent) {
         setDim(true);
     }
-}
-
-pub fn reverseVideo(writer: anytype) !void {
-    try writer.writeAll("\x1b[7m");
-}
-
-pub fn reverseVideoOff(writer: anytype) !void {
-    try writer.writeAll("\x1b[27m");
 }
 
 pub const TerminalSize = struct { rows: u16, cols: u16 };

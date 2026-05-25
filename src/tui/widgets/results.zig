@@ -382,28 +382,6 @@ pub const ResultsWidget = struct {
         return true;
     }
 
-    fn drawBorder(char: u8, width: u16) void {
-        const stdout = compat.stdoutWriter();
-        const buf: [1]u8 = .{char};
-        for (0..@as(usize, @intCast(width))) |_| {
-            stdout.writeAll(&buf) catch {};
-        }
-        stdout.writeAll("\r\n") catch {};
-    }
-
-    fn centerText(writer: anytype, text: []const u8, width: usize) !void {
-        if (text.len >= width) {
-            try writer.writeAll(text[0..width]);
-            return;
-        }
-        const padding = width - text.len;
-        const left_pad = padding / 2;
-        const right_pad = padding - left_pad;
-        for (0..left_pad) |_| try writer.writeAll(" ");
-        try writer.writeAll(text);
-        for (0..right_pad) |_| try writer.writeAll(" ");
-    }
-
     fn adjustScroll(self: *ResultsWidget) void {
         if (self.display_count == 0) return;
         if (self.cursor < self.scroll_offset) {
@@ -1268,17 +1246,6 @@ fn formatColumnHeader(
     }
 
     return writer.buffered();
-}
-
-fn writeHeaderRightAligned(writer: anytype, text: []const u8, width: usize) !void {
-    if (width == 0) return;
-    const disp_width = theme.displayWidthOfText(text);
-    if (disp_width >= width) {
-        try writer.writeAll(text);
-        return;
-    }
-    try writeSpaces(writer, width - disp_width);
-    try writer.writeAll(text);
 }
 
 fn writeHeaderCells(
