@@ -27,6 +27,9 @@ const ResultsState = struct {
     torrents: std.ArrayList(Torrent),
     search_session: ?*jackett.SearchSession,
     live_status: results_widget.ResultsWidget.LiveStatus,
+    sort_column: ?results_widget.SortColumn = null,
+    sort_order: ?results_widget.SortOrder = null,
+    header_cursor: ?results_widget.SortColumn = null,
 };
 
 const ErrorState = struct {
@@ -142,7 +145,7 @@ fn runSearchState(app: *App) !void {
             .continue_search => {},
             .submit => {
                 const query = try app.allocator.dupe(u8, widget.getQuery());
-                transitionSearchToStreamingResults(app, query, false);
+                transitionSearchToStreamingResults(app, query, false, null, null, null);
                 return;
             },
             .cancel => {
@@ -216,6 +219,16 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
 
     var widget = results_widget.ResultsWidget.init(app.allocator);
     defer widget.deinit();
+
+    if (results_state.sort_column) |col| {
+        widget.sort_column = col;
+    }
+    if (results_state.sort_order) |ord| {
+        widget.sort_order = ord;
+    }
+    if (results_state.header_cursor) |cursor| {
+        widget.header_cursor = cursor;
+    }
 
     widget.setTorrents(results_state.torrents.items, results_state.torrents.items.len);
     widget.setLiveStatus(results_state.live_status);
@@ -326,9 +339,12 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                 },
                 .refresh => {
                     const last_query = try app.allocator.dupe(u8, results_state.query);
+                    const saved_sort_column = widget.sort_column;
+                    const saved_sort_order = widget.sort_order;
+                    const saved_header_cursor = widget.header_cursor;
                     deinitResultsState(app.allocator, results_state);
                     cleaned_up = true;
-                    transitionSearchToStreamingResults(app, last_query, true);
+                    transitionSearchToStreamingResults(app, last_query, true, saved_sort_column, saved_sort_order, saved_header_cursor);
                     return;
                 },
                 .cancel => {
@@ -428,7 +444,14 @@ fn selectedLinkKind(link: []const u8) []const u8 {
     return "other";
 }
 
-fn transitionSearchToStreamingResults(app: *App, query: []u8, skip_cache: bool) void {
+fn transitionSearchToStreamingResults(
+    app: *App,
+    query: []u8,
+    skip_cache: bool,
+    sort_column: ?results_widget.SortColumn,
+    sort_order: ?results_widget.SortOrder,
+    header_cursor: ?results_widget.SortColumn,
+) void {
     const session = startSearchWithAppDeps(app, query, skip_cache) catch |err| {
         app.allocator.free(query);
         app.state = .{ .err = .{ .message = getErrorMessage(err) } };
@@ -439,6 +462,9 @@ fn transitionSearchToStreamingResults(app: *App, query: []u8, skip_cache: bool) 
         .torrents = .empty,
         .search_session = session,
         .live_status = liveStatusFromSnapshot(session.snapshot()),
+        .sort_column = sort_column,
+        .sort_order = sort_order,
+        .header_cursor = header_cursor,
     } };
 }
 
@@ -633,7 +659,7 @@ test "state transitions smoke path search -> streaming results with injected dep
 
     const query = try std.testing.allocator.dupe(u8, "ubuntu");
 
-    transitionSearchToStreamingResults(&app, query, false);
+    transitionSearchToStreamingResults(&app, query, false, null, null, null);
 
     switch (app.state) {
         .results => |*results_state| {
@@ -670,7 +696,7 @@ test "state transitions smoke path discovery failure goes to error" {
 
     const query = try std.testing.allocator.dupe(u8, "ubuntu");
 
-    transitionSearchToStreamingResults(&app, query, false);
+    transitionSearchToStreamingResults(&app, query, false, null, null, null);
 
     switch (app.state) {
         .results => |*results_state| {
@@ -994,4 +1020,38 @@ test "configureSearchWidgetForApp forwards latest version to search widget" {
 
     try std.testing.expect(widget.latest_version != null);
     try std.testing.expectEqualStrings("0.3.7", widget.latest_version.?);
+}
+
+test "transitionSearchToStreamingResults preserves sort fields" {
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
+        .deps = .{},
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "xterm",
+    };
+
+    const query = try std.testing.allocator.dupe(u8, "ubuntu");
+
+    transitionSearchToStreamingResults(
+        &app,
+        query,
+        false,
+        .size,
+        .asc,
+        .leechers,
+    );
+
+    switch (app.state) {
+        .results => |*results_state| {
+            defer deinitResultsState(std.testing.allocator, results_state);
+            try std.testing.expectEqual(results_widget.SortColumn.size, results_state.sort_column.?);
+            try std.testing.expectEqual(results_widget.SortOrder.asc, results_state.sort_order.?);
+            try std.testing.expectEqual(results_widget.SortColumn.leechers, results_state.header_cursor.?);
+        },
+        else => return error.UnexpectedState,
+    }
 }
