@@ -26,12 +26,12 @@ Current project version: `v0.4.3`.
 - `src/config.zig`: Config file path handling, creation, defaults patching, and validation.
 - `src/debug/log.zig`: Optional debug logging controlled by environment variables.
 - `src/update_checker.zig`: Latest-release checker (GitHub API fetch + semantic version comparison).
-- `src/structs/torrent.zig`: `Torrent` struct definition (title, stats, optional byte size, link) and metadata storage test.
-- `src/jackett/client.zig`: Jackett Torznab API client, gzip-aware body reads, configured-indexer discovery, blocking and streaming parallel per-indexer searches, XML parsing including size metadata, sorting, and selected download-link resolution.
+- `src/structs/torrent.zig`: `Torrent` struct definition (title, stats, optional byte size, optional pub date, link) and metadata storage test.
+- `src/jackett/client.zig`: Jackett Torznab API client, gzip-aware body reads, configured-indexer discovery, blocking and streaming parallel per-indexer searches, XML parsing including size and pubDate metadata, sorting, and selected download-link resolution.
 - `src/superseedr/client.zig`: Superseedr integration, final magnet/path validation, process checks, spawn/add flow.
 - `src/tui/term.zig`: Terminal raw mode, key reading, ANSI helpers, terminal size.
 - `src/tui/theme.zig`: Color palette, border styles, and rendering helpers.
 - `src/tui/panels.zig`: Shared panel/overlay rendering helpers for notices and errors.
 - `src/tui/app.zig`: App state machine (search/results/error), streaming Jackett session orchestration, and Superseedr handoff.
 - `src/tui/widgets/search.zig`: Search input widget and tests.
-- `src/tui/widgets/results.zig`: Results list widget with navigation, live search status, streaming update preservation, stats/size table rendering, and tests.
+- `src/tui/widgets/results.zig`: Results list widget with navigation, live search status, streaming update preservation, stats/size/age table rendering, and tests.

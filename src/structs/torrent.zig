@@ -5,6 +5,7 @@ pub const Torrent = struct {
     seeders: u32,
     leechers: u32,
     size_bytes: ?u64 = null,
+    pub_date: ?i64 = null,
     link: []const u8,
 };
 

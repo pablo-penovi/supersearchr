@@ -110,7 +110,7 @@ Results screen:
 - `n` or `N`: new search
 - `Esc`: exit app
 
-Results show seeders, leechers, and torrent size when Jackett provides size metadata. New results appear incrementally while configured indexers are still searching, and the bottom status row shows discovery/search progress plus per-indexer failures.
+Results show publication age, seeders, leechers, and torrent size when Jackett provides size metadata. New results appear incrementally while configured indexers are still searching, and the bottom status row shows discovery/search progress plus per-indexer failures.
 
 State flow: `SEARCH -> RESULTS -> ERROR`
 

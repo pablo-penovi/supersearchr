@@ -717,29 +717,35 @@ const RenderSnapshot = struct {
 
 const TableLayout = struct {
     title_col_width: usize,
+    age_width: usize,
     seeders_width: usize,
     leechers_width: usize,
     size_width: usize,
-    title_to_seeders_gap: usize,
+    title_to_age_gap: usize,
+    age_to_seeders_gap: usize,
     between_stats_gap: usize,
 
+    const fixed_age_width: usize = 5;
     const fixed_seeders_width: usize = 4;
     const fixed_leechers_width: usize = 4;
     const fixed_size_width: usize = 9;
-    const fixed_title_to_seeders_gap: usize = 2;
+    const fixed_title_to_age_gap: usize = 2;
+    const fixed_age_to_seeders_gap: usize = 2;
     const fixed_between_stats_gap: usize = 2;
     const fixed_left_padding: usize = 1;
     const fixed_right_padding: usize = 1;
 
     fn forInnerWidth(inner_width: usize) TableLayout {
-        const fixed_suffix = fixed_left_padding + fixed_title_to_seeders_gap + fixed_seeders_width + fixed_between_stats_gap + fixed_leechers_width + fixed_between_stats_gap + fixed_size_width + fixed_right_padding;
+        const fixed_suffix = fixed_left_padding + fixed_title_to_age_gap + fixed_age_width + fixed_age_to_seeders_gap + fixed_seeders_width + fixed_between_stats_gap + fixed_leechers_width + fixed_between_stats_gap + fixed_size_width + fixed_right_padding;
         const title_width = if (inner_width > fixed_suffix) inner_width - fixed_suffix else 1;
         return .{
             .title_col_width = title_width,
+            .age_width = fixed_age_width,
             .seeders_width = fixed_seeders_width,
             .leechers_width = fixed_leechers_width,
             .size_width = fixed_size_width,
-            .title_to_seeders_gap = fixed_title_to_seeders_gap,
+            .title_to_age_gap = fixed_title_to_age_gap,
+            .age_to_seeders_gap = fixed_age_to_seeders_gap,
             .between_stats_gap = fixed_between_stats_gap,
         };
     }
@@ -747,10 +753,12 @@ const TableLayout = struct {
     fn compactFallback() TableLayout {
         return .{
             .title_col_width = 0,
+            .age_width = fixed_age_width,
             .seeders_width = fixed_seeders_width,
             .leechers_width = fixed_leechers_width,
             .size_width = fixed_size_width,
-            .title_to_seeders_gap = fixed_title_to_seeders_gap,
+            .title_to_age_gap = fixed_title_to_age_gap,
+            .age_to_seeders_gap = fixed_age_to_seeders_gap,
             .between_stats_gap = fixed_between_stats_gap,
         };
     }
@@ -1053,7 +1061,8 @@ fn drawContentRow(
         );
     } else row_title;
 
-    const row = buildDataCells(&cell_buf, inner_width, layout, final_title, torrent.seeders, torrent.leechers, torrent.size_bytes);
+    const current_time = compat.timestamp();
+    const row = buildDataCells(&cell_buf, inner_width, layout, final_title, torrent.seeders, torrent.leechers, torrent.size_bytes, torrent.pub_date, current_time);
 
     if (abs_idx == selected_idx) {
         term.setBg256(colors.selected_bg);
@@ -1234,7 +1243,12 @@ fn writeHeaderCells(
     try stdout.writeAll(" ");
     term.setFg256(colors.muted);
     try theme.writePadded(stdout, "Title", layout.title_col_width);
-    try writeSpaces(stdout, layout.title_to_seeders_gap);
+    try writeSpaces(stdout, layout.title_to_age_gap);
+
+    // Age column
+    term.setFg256(colors.muted);
+    try writeHeaderRightAligned(stdout, "Age", layout.age_width);
+    try writeSpaces(stdout, layout.age_to_seeders_gap);
 
     // S column
     var s_buf: [32]u8 = undefined;
@@ -1290,7 +1304,7 @@ fn writeHeaderCells(
     term.setFg256(colors.muted);
     try stdout.writeAll(" ");
 
-    const used = 1 + layout.title_col_width + layout.title_to_seeders_gap + layout.seeders_width + layout.between_stats_gap + layout.leechers_width + layout.between_stats_gap + layout.size_width + 1;
+    const used = 1 + layout.title_col_width + layout.title_to_age_gap + layout.age_width + layout.age_to_seeders_gap + layout.seeders_width + layout.between_stats_gap + layout.leechers_width + layout.between_stats_gap + layout.size_width + 1;
     if (used < inner_width) {
         try writeSpaces(stdout, inner_width - used);
     }
@@ -1301,7 +1315,9 @@ fn buildHeaderCells(buf: []u8, inner_width: usize, layout: TableLayout) []const 
 
     writer.writeAll(" ") catch return "";
     theme.writePadded(&writer, "Title", layout.title_col_width) catch return "";
-    writeSpaces(&writer, layout.title_to_seeders_gap) catch return "";
+    writeSpaces(&writer, layout.title_to_age_gap) catch return "";
+    writeRightAligned(&writer, "Age", layout.age_width) catch return "";
+    writeSpaces(&writer, layout.age_to_seeders_gap) catch return "";
     writeRightAligned(&writer, "S", layout.seeders_width) catch return "";
     writeSpaces(&writer, layout.between_stats_gap) catch return "";
     writeRightAligned(&writer, "L", layout.leechers_width) catch return "";
@@ -1316,6 +1332,26 @@ fn buildHeaderCells(buf: []u8, inner_width: usize, layout: TableLayout) []const 
     return writer.buffered();
 }
 
+fn formatAgeText(buf: []u8, pub_date: ?i64, current_time: i64) []const u8 {
+    const timestamp = pub_date orelse return "N/A";
+    const diff = current_time - timestamp;
+    const age = @max(diff, 0);
+
+    if (age < 60) {
+        return std.fmt.bufPrint(buf, "{d}s", .{age}) catch "N/A";
+    } else if (age < 3600) {
+        return std.fmt.bufPrint(buf, "{d}mi", .{age / 60}) catch "N/A";
+    } else if (age < 86400) {
+        return std.fmt.bufPrint(buf, "{d}h", .{age / 3600}) catch "N/A";
+    } else if (age < 30 * 86400) {
+        return std.fmt.bufPrint(buf, "{d}d", .{age / 86400}) catch "N/A";
+    } else if (age < 365 * 86400) {
+        return std.fmt.bufPrint(buf, "{d}mo", .{age / (30 * 86400)}) catch "N/A";
+    } else {
+        return std.fmt.bufPrint(buf, "{d}y", .{age / (365 * 86400)}) catch "N/A";
+    }
+}
+
 fn buildDataCells(
     buf: []u8,
     inner_width: usize,
@@ -1324,12 +1360,19 @@ fn buildDataCells(
     seeders: u32,
     leechers: u32,
     size_bytes: ?u64,
+    pub_date: ?i64,
+    current_time: i64,
 ) []const u8 {
     var writer: std.Io.Writer = .fixed(buf);
 
     writer.writeAll(" ") catch return "";
     theme.writePadded(&writer, title, layout.title_col_width) catch return "";
-    writeSpaces(&writer, layout.title_to_seeders_gap) catch return "";
+    writeSpaces(&writer, layout.title_to_age_gap) catch return "";
+
+    var abuf: [16]u8 = undefined;
+    const age_text = formatAgeText(&abuf, pub_date, current_time);
+    writeRightAligned(&writer, age_text, layout.age_width) catch return "";
+    writeSpaces(&writer, layout.age_to_seeders_gap) catch return "";
 
     var sbuf: [16]u8 = undefined;
     const seeders_text = std.fmt.bufPrint(&sbuf, "{d}", .{seeders}) catch "";
@@ -1669,7 +1712,7 @@ test "header and data cells align stats columns for short title" {
     const header = buildHeaderCells(&hbuf, inner_width, layout);
 
     var rbuf: [256]u8 = undefined;
-    const row = buildDataCells(&rbuf, inner_width, layout, "Voyager", 7, 42, 512 * 1024 * 1024);
+    const row = buildDataCells(&rbuf, inner_width, layout, "Voyager", 7, 42, 512 * 1024 * 1024, null, 0);
 
     const s_header = std.mem.indexOfScalar(u8, header, 'S') orelse return error.TestUnexpectedResult;
     const l_header = std.mem.indexOfScalar(u8, header, 'L') orelse return error.TestUnexpectedResult;
@@ -1695,7 +1738,7 @@ test "stats columns stay aligned when title is truncated" {
     const shown_title = theme.truncateWithEllipsis(long_title, layout.title_col_width, trunc_buf[0..]);
 
     var rbuf: [256]u8 = undefined;
-    const row = buildDataCells(&rbuf, inner_width, layout, shown_title, 999, 1000, 12 * 1024 * 1024 * 1024 + 410 * 1024 * 1024);
+    const row = buildDataCells(&rbuf, inner_width, layout, shown_title, 999, 1000, 12 * 1024 * 1024 * 1024 + 410 * 1024 * 1024, null, 0);
 
     const s_header = std.mem.indexOfScalar(u8, header, 'S') orelse return error.TestUnexpectedResult;
     const l_header = std.mem.indexOfScalar(u8, header, 'L') orelse return error.TestUnexpectedResult;
