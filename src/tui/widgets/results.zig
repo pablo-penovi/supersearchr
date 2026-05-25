@@ -18,6 +18,7 @@ const spinner_frames = [_][]const u8{
 };
 
 pub const SortColumn = enum {
+    age,
     seeders,
     leechers,
     size,
@@ -416,7 +417,11 @@ pub const ResultsWidget = struct {
         switch (event.key) {
             .arrow_left => {
                 switch (self.header_cursor) {
-                    .seeders => {},
+                    .age => {},
+                    .seeders => {
+                        self.header_cursor = .age;
+                        self.force_full_redraw = true;
+                    },
                     .leechers => {
                         self.header_cursor = .seeders;
                         self.force_full_redraw = true;
@@ -430,6 +435,10 @@ pub const ResultsWidget = struct {
             },
             .arrow_right => {
                 switch (self.header_cursor) {
+                    .age => {
+                        self.header_cursor = .seeders;
+                        self.force_full_redraw = true;
+                    },
                     .seeders => {
                         self.header_cursor = .leechers;
                         self.force_full_redraw = true;
@@ -735,7 +744,7 @@ const TableLayout = struct {
     age_to_seeders_gap: usize,
     between_stats_gap: usize,
 
-    const fixed_age_width: usize = 5;
+    const fixed_age_width: usize = 6;
     const fixed_seeders_width: usize = 4;
     const fixed_leechers_width: usize = 4;
     const fixed_size_width: usize = 9;
@@ -890,6 +899,14 @@ fn sortTorrentsBy(torrents: []Torrent, col: SortColumn, order: SortOrder) void {
 
         fn lessThan(ctx: @This(), a: Torrent, b: Torrent) bool {
             switch (ctx.col) {
+                .age => {
+                    const a_age = a.pub_date orelse 0;
+                    const b_age = b.pub_date orelse 0;
+                    return switch (ctx.order) {
+                        .asc => a_age < b_age,
+                        .desc => a_age > b_age,
+                    };
+                },
                 .seeders => {
                     return switch (ctx.order) {
                         .asc => a.seeders < b.seeders,
@@ -1180,6 +1197,23 @@ fn formatColumnHeader(
     const is_active = (col == active_col);
 
     switch (col) {
+        .age => {
+            if (has_cursor and is_active) {
+                const arrow = if (order == .asc) "↑" else "↓";
+                writer.writeAll("<Age") catch {};
+                writer.writeAll(arrow) catch {};
+                writer.writeAll(">") catch {};
+            } else if (has_cursor and !is_active) {
+                writer.writeAll("<Age> ") catch {};
+            } else if (!has_cursor and is_active) {
+                const arrow = if (order == .asc) "↑" else "↓";
+                writer.writeAll(" Age") catch {};
+                writer.writeAll(arrow) catch {};
+                writer.writeAll(" ") catch {};
+            } else {
+                writer.writeAll(" Age  ") catch {};
+            }
+        },
         .seeders => {
             if (has_cursor and is_active) {
                 const arrow = if (order == .asc) "↑" else "↓";
@@ -1260,8 +1294,21 @@ fn writeHeaderCells(
     try writeSpaces(stdout, layout.title_to_age_gap);
 
     // Age column
+    var age_buf: [32]u8 = undefined;
+    const age_text = formatColumnHeader(&age_buf, .age, widget.sort_column, widget.sort_order, widget.header_cursor);
+    if (widget.sort_column == .age) {
+        term.setFg256(colors.accent);
+        term.setBold(true);
+    } else if (widget.header_cursor == .age) {
+        term.setFg256(colors.text);
+        term.setBold(true);
+    } else {
+        term.setFg256(colors.muted);
+    }
+    try stdout.writeAll(age_text);
+    term.setBold(false);
+
     term.setFg256(colors.muted);
-    try writeHeaderRightAligned(stdout, "Age", layout.age_width);
     try writeSpaces(stdout, layout.age_to_seeders_gap);
 
     // S column
@@ -2402,6 +2449,18 @@ test "ResultsWidget sorting header cursor movement" {
 
     try std.testing.expectEqual(SortColumn.seeders, widget.header_cursor);
 
+    // Press left -> goes to age
+    _ = widget.handleEvent(.{ .key = .arrow_left, .value = 0 }, 10);
+    try std.testing.expectEqual(SortColumn.age, widget.header_cursor);
+
+    // Press left at boundary -> stays age
+    _ = widget.handleEvent(.{ .key = .arrow_left, .value = 0 }, 10);
+    try std.testing.expectEqual(SortColumn.age, widget.header_cursor);
+
+    // Press right -> goes to seeders
+    _ = widget.handleEvent(.{ .key = .arrow_right, .value = 0 }, 10);
+    try std.testing.expectEqual(SortColumn.seeders, widget.header_cursor);
+
     // Press right -> goes to leechers
     _ = widget.handleEvent(.{ .key = .arrow_right, .value = 0 }, 10);
     try std.testing.expectEqual(SortColumn.leechers, widget.header_cursor);
@@ -2421,10 +2480,6 @@ test "ResultsWidget sorting header cursor movement" {
     // Press left -> goes to seeders
     _ = widget.handleEvent(.{ .key = .arrow_left, .value = 0 }, 10);
     try std.testing.expectEqual(SortColumn.seeders, widget.header_cursor);
-
-    // Press left at boundary -> stays seeders (no wrap)
-    _ = widget.handleEvent(.{ .key = .arrow_left, .value = 0 }, 10);
-    try std.testing.expectEqual(SortColumn.seeders, widget.header_cursor);
 }
 
 test "ResultsWidget TAB key triggers sorting and toggles order" {
@@ -2433,9 +2488,9 @@ test "ResultsWidget TAB key triggers sorting and toggles order" {
     defer widget.deinit();
 
     var torrents = [_]Torrent{
-        .{ .title = "Test Low", .seeders = 1, .leechers = 10, .size_bytes = 100, .link = "magnet:low" },
-        .{ .title = "Test Mid", .seeders = 5, .leechers = 2, .size_bytes = 500, .link = "magnet:mid" },
-        .{ .title = "Test High", .seeders = 10, .leechers = 5, .size_bytes = 1000, .link = "magnet:high" },
+        .{ .title = "Test Low", .seeders = 1, .leechers = 10, .size_bytes = 100, .pub_date = 1000, .link = "magnet:low" },
+        .{ .title = "Test Mid", .seeders = 5, .leechers = 2, .size_bytes = 500, .pub_date = 5000, .link = "magnet:mid" },
+        .{ .title = "Test High", .seeders = 10, .leechers = 5, .size_bytes = 1000, .pub_date = 10000, .link = "magnet:high" },
     };
     widget.setTorrents(&torrents, 3);
 
@@ -2444,7 +2499,28 @@ test "ResultsWidget TAB key triggers sorting and toggles order" {
     try std.testing.expectEqualStrings("Test Mid", widget.torrents[1].title);
     try std.testing.expectEqualStrings("Test Low", widget.torrents[2].title);
 
-    // Move cursor to Leechers (right once) and sort (TAB)
+    // Move cursor to Age (left once) and sort (TAB) -> sorts by age ascending (older first)
+    _ = widget.handleEvent(.{ .key = .arrow_left, .value = 0 }, 10); // cursor at age
+    _ = widget.handleEvent(.{ .key = .tab, .value = 0 }, 10);
+    try std.testing.expectEqual(SortColumn.age, widget.sort_column);
+    try std.testing.expectEqual(SortOrder.asc, widget.sort_order);
+
+    // Age ascending (older first): Low (1000), Mid (5000), High (10000)
+    try std.testing.expectEqualStrings("Test Low", widget.torrents[0].title);
+    try std.testing.expectEqualStrings("Test Mid", widget.torrents[1].title);
+    try std.testing.expectEqualStrings("Test High", widget.torrents[2].title);
+
+    // TAB again on same column -> toggles to descending (newer first)
+    _ = widget.handleEvent(.{ .key = .tab, .value = 0 }, 10);
+    try std.testing.expectEqual(SortOrder.desc, widget.sort_order);
+
+    // Age descending (newer first): High (10000), Mid (5000), Low (1000)
+    try std.testing.expectEqualStrings("Test High", widget.torrents[0].title);
+    try std.testing.expectEqualStrings("Test Mid", widget.torrents[1].title);
+    try std.testing.expectEqualStrings("Test Low", widget.torrents[2].title);
+
+    // Move cursor to Leechers (right twice: age -> seeders -> leechers) and sort (TAB)
+    _ = widget.handleEvent(.{ .key = .arrow_right, .value = 0 }, 10); // cursor at seeders
     _ = widget.handleEvent(.{ .key = .arrow_right, .value = 0 }, 10); // cursor at leechers
     _ = widget.handleEvent(.{ .key = .tab, .value = 0 }, 10); // TAB -> sorts by leechers ascending
     try std.testing.expectEqual(SortColumn.leechers, widget.sort_column);
