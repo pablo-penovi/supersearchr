@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Added
+- Added an "Age" column to the torrent results screen between "Title" and "S" that displays how long ago the torrent was published (formatted dynamically in truncated integer units: seconds, minutes, hours, days, months, or years).
+- Implemented robust RSS RFC 822 and ISO 8601 `<pubDate>` tag extraction in `src/jackett/client.zig`.
+
 ## 0.4.3
 
 ### Fixed

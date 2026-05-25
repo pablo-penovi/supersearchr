@@ -32,6 +32,7 @@ const xml_tags = .{
     .enclosure_length = "length=\"",
     .seeders_attr = "<torznab:attr name=\"seeders\" value=\"",
     .peers_attr = "<torznab:attr name=\"peers\" value=\"",
+    .pub_date = "<pubDate>",
 };
 
 fn extractStringField(xml: []const u8, i: usize, tag: []const u8) ?struct { value: []const u8, end: usize } {
@@ -41,6 +42,164 @@ fn extractStringField(xml: []const u8, i: usize, tag: []const u8) ?struct { valu
         return .{ .value = xml[start..end], .end = end };
     }
     return null;
+}
+
+fn isLeapYear(year: i64) bool {
+    return (@mod(year, 4) == 0 and @mod(year, 100) != 0) or (@mod(year, 400) == 0);
+}
+
+const days_in_months = [12]i64{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+
+fn dateToEpoch(year: i64, month: i64, day: i64, hour: i64, minute: i64, second: i64) i64 {
+    var days: i64 = 0;
+    var y: i64 = 1970;
+    while (y < year) : (y += 1) {
+        days += if (isLeapYear(y)) @as(i64, 366) else @as(i64, 365);
+    }
+    var m: i64 = 1;
+    while (m < month) : (m += 1) {
+        if (m == 2 and isLeapYear(year)) {
+            days += 29;
+        } else {
+            days += days_in_months[@intCast(m - 1)];
+        }
+    }
+    days += (day - 1);
+    return days * 86400 + hour * 3600 + minute * 60 + second;
+}
+
+fn parseMonthName(name: []const u8) ?i64 {
+    const months = [_][]const u8{ "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec" };
+    var lower: [3]u8 = undefined;
+    if (name.len < 3) return null;
+    for (0..3) |k| {
+        lower[k] = std.ascii.toLower(name[k]);
+    }
+    for (months, 0..) |m, idx| {
+        if (std.mem.eql(u8, lower[0..], m)) {
+            return @intCast(idx + 1);
+        }
+    }
+    return null;
+}
+
+fn parseTimezoneOffset(tz: []const u8) i64 {
+    const trimmed = std.mem.trim(u8, tz, " \t\r\n");
+    if (trimmed.len == 0) return 0;
+    if (std.mem.eql(u8, trimmed, "Z") or std.mem.eql(u8, trimmed, "GMT") or std.mem.eql(u8, trimmed, "UTC") or std.mem.eql(u8, trimmed, "UT")) {
+        return 0;
+    }
+    if (std.mem.eql(u8, trimmed, "EST")) return -5 * 3600;
+    if (std.mem.eql(u8, trimmed, "EDT")) return -4 * 3600;
+    if (std.mem.eql(u8, trimmed, "CST")) return -6 * 3600;
+    if (std.mem.eql(u8, trimmed, "CDT")) return -5 * 3600;
+    if (std.mem.eql(u8, trimmed, "MST")) return -7 * 3600;
+    if (std.mem.eql(u8, trimmed, "MDT")) return -6 * 3600;
+    if (std.mem.eql(u8, trimmed, "PST")) return -8 * 3600;
+    if (std.mem.eql(u8, trimmed, "PDT")) return -7 * 3600;
+
+    if (trimmed[0] == '+' or trimmed[0] == '-') {
+        const sign: i64 = if (trimmed[0] == '+') 1 else -1;
+        const digits = trimmed[1..];
+        var hh: i64 = 0;
+        var mm: i64 = 0;
+        if (std.mem.indexOfScalar(u8, digits, ':')) |colon| {
+            hh = std.fmt.parseInt(i64, digits[0..colon], 10) catch 0;
+            mm = std.fmt.parseInt(i64, digits[colon + 1 ..], 10) catch 0;
+        } else {
+            if (digits.len >= 4) {
+                hh = std.fmt.parseInt(i64, digits[0..2], 10) catch 0;
+                mm = std.fmt.parseInt(i64, digits[2..4], 10) catch 0;
+            } else if (digits.len >= 2) {
+                hh = std.fmt.parseInt(i64, digits[0..2], 10) catch 0;
+            }
+        }
+        return sign * (hh * 3600 + mm * 60);
+    }
+    return 0;
+}
+
+pub fn parseRssDate(raw_date: []const u8) ?i64 {
+    var date_str = std.mem.trim(u8, raw_date, " \t\r\n");
+    if (date_str.len == 0) return null;
+
+    if (std.mem.indexOfScalar(u8, date_str, ',')) |comma_idx| {
+        if (comma_idx + 1 < date_str.len) {
+            date_str = std.mem.trim(u8, date_str[comma_idx + 1 ..], " \t\r\n");
+        }
+    }
+
+    if (std.mem.indexOfScalar(u8, date_str, 'T') != null and std.mem.indexOfScalar(u8, date_str, '-') != null) {
+        var it = std.mem.tokenizeScalar(u8, date_str, 'T');
+        const date_part = it.next() orelse return null;
+        const time_tz_part = it.next() orelse return null;
+
+        var date_it = std.mem.tokenizeScalar(u8, date_part, '-');
+        const y_str = date_it.next() orelse return null;
+        const m_str = date_it.next() orelse return null;
+        const d_str = date_it.next() orelse return null;
+
+        const year = std.fmt.parseInt(i64, y_str, 10) catch return null;
+        const month = std.fmt.parseInt(i64, m_str, 10) catch return null;
+        const day = std.fmt.parseInt(i64, d_str, 10) catch return null;
+
+        var tz_offset: i64 = 0;
+        var hh: i64 = 0;
+        var mm: i64 = 0;
+        var ss: i64 = 0;
+
+        if (std.mem.indexOfAny(u8, time_tz_part, "+-Z")) |tz_pos| {
+            const time_part = time_tz_part[0..tz_pos];
+            const tz_part = time_tz_part[tz_pos..];
+
+            var time_it = std.mem.tokenizeScalar(u8, time_part, ':');
+            const h_str = time_it.next() orelse return null;
+            const mi_str = time_it.next() orelse return null;
+            const s_str = time_it.next() orelse "00";
+
+            hh = std.fmt.parseInt(i64, h_str, 10) catch return null;
+            mm = std.fmt.parseInt(i64, mi_str, 10) catch return null;
+            ss = std.fmt.parseInt(i64, s_str, 10) catch return null;
+
+            tz_offset = parseTimezoneOffset(tz_part);
+        } else {
+            var time_it = std.mem.tokenizeScalar(u8, time_tz_part, ':');
+            const h_str = time_it.next() orelse return null;
+            const mi_str = time_it.next() orelse return null;
+            const s_str = time_it.next() orelse "00";
+
+            hh = std.fmt.parseInt(i64, h_str, 10) catch return null;
+            mm = std.fmt.parseInt(i64, mi_str, 10) catch return null;
+            ss = std.fmt.parseInt(i64, s_str, 10) catch return null;
+        }
+
+        const epoch_utc = dateToEpoch(year, month, day, hh, mm, ss);
+        return epoch_utc - tz_offset;
+    } else {
+        var it = std.mem.tokenizeScalar(u8, date_str, ' ');
+        const d_str = it.next() orelse return null;
+        const m_str = it.next() orelse return null;
+        const y_str = it.next() orelse return null;
+        const time_part = it.next() orelse return null;
+        const tz_part = it.next() orelse "";
+
+        const day = std.fmt.parseInt(i64, d_str, 10) catch return null;
+        const month = parseMonthName(m_str) orelse return null;
+        const year = std.fmt.parseInt(i64, y_str, 10) catch return null;
+
+        var time_it = std.mem.tokenizeScalar(u8, time_part, ':');
+        const h_str = time_it.next() orelse return null;
+        const mi_str = time_it.next() orelse return null;
+        const s_str = time_it.next() orelse "00";
+
+        const hh = std.fmt.parseInt(i64, h_str, 10) catch return null;
+        const mm = std.fmt.parseInt(i64, mi_str, 10) catch return null;
+        const ss = std.fmt.parseInt(i64, s_str, 10) catch return null;
+
+        const tz_offset = parseTimezoneOffset(tz_part);
+        const epoch_utc = dateToEpoch(year, month, day, hh, mm, ss);
+        return epoch_utc - tz_offset;
+    }
 }
 
 fn extractIntField(xml: []const u8, i: usize, tag: []const u8, default: u32) ?struct { value: u32, end: usize } {
@@ -1229,6 +1388,7 @@ fn cloneTorrent(allocator: std.mem.Allocator, torrent: Torrent) !Torrent {
         .seeders = torrent.seeders,
         .leechers = torrent.leechers,
         .size_bytes = torrent.size_bytes,
+        .pub_date = torrent.pub_date,
         .link = link,
     };
 }
@@ -1256,6 +1416,7 @@ fn parseTorrents(allocator: std.mem.Allocator, xml: []const u8) ![]Torrent {
             var size_bytes: ?u64 = null;
             var explicit_size_seen = false;
             var enclosure_size_bytes: ?u64 = null;
+            var pub_date: ?i64 = null;
 
             while (i < xml.len) {
                 if (extractStringField(xml, i, xml_tags.item_end)) |_| {
@@ -1309,6 +1470,9 @@ fn parseTorrents(allocator: std.mem.Allocator, xml: []const u8) ![]Torrent {
                 } else if (extractIntField(xml, i, xml_tags.peers_attr, 0)) |result| {
                     peers = result.value;
                     i = result.end;
+                } else if (extractStringField(xml, i, xml_tags.pub_date)) |result| {
+                    pub_date = parseRssDate(result.value);
+                    i = result.end;
                 } else {
                     i += 1;
                 }
@@ -1333,6 +1497,7 @@ fn parseTorrents(allocator: std.mem.Allocator, xml: []const u8) ![]Torrent {
                     .seeders = seeders,
                     .leechers = peers,
                     .size_bytes = if (explicit_size_seen) size_bytes else enclosure_size_bytes,
+                    .pub_date = pub_date,
                     .link = link_copy,
                 });
                 debug_log.writef(
@@ -1379,6 +1544,49 @@ test "parse XML with valid response" {
     try std.testing.expectEqual(@as(u32, 75), torrents[0].leechers);
     try std.testing.expectEqualStrings("Movie.2024.1080p.WEB.h264", torrents[1].title);
     try std.testing.expectEqual(@as(u32, 100), torrents[1].seeders);
+}
+
+test "parse RSS date RFC 822 and ISO 8601" {
+    // RFC 822 / 1123 formats
+    const t1 = parseRssDate("Sun, 24 May 2026 21:00:00 -0300");
+    const t1_expected = dateToEpoch(2026, 5, 24, 21, 0, 0) - (-3 * 3600);
+    try std.testing.expectEqual(t1_expected, t1.?);
+
+    const t2 = parseRssDate("24 May 2026 21:00:00 GMT");
+    const t2_expected = dateToEpoch(2026, 5, 24, 21, 0, 0);
+    try std.testing.expectEqual(t2_expected, t2.?);
+
+    const t3 = parseRssDate("Sun, 24 May 2026 21:00:00 EST");
+    const t3_expected = dateToEpoch(2026, 5, 24, 21, 0, 0) - (-5 * 3600);
+    try std.testing.expectEqual(t3_expected, t3.?);
+
+    // ISO 8601 formats
+    const t4 = parseRssDate("2026-05-24T21:00:00Z");
+    const t4_expected = dateToEpoch(2026, 5, 24, 21, 0, 0);
+    try std.testing.expectEqual(t4_expected, t4.?);
+
+    const t5 = parseRssDate("2026-05-24T21:00:00-03:00");
+    const t5_expected = dateToEpoch(2026, 5, 24, 21, 0, 0) - (-3 * 3600);
+    try std.testing.expectEqual(t5_expected, t5.?);
+}
+
+test "parse XML with pubDate" {
+    const allocator = std.testing.allocator;
+
+    const xml = "<rss><channel><item><title>With PubDate</title><link>magnet:?xt=urn:btih:pubdate</link><pubDate>Sun, 24 May 2026 21:00:00 -0300</pubDate></item></channel></rss>";
+
+    const torrents = try parseTorrents(allocator, xml);
+    defer {
+        for (torrents) |t| {
+            allocator.free(t.title);
+            allocator.free(t.link);
+        }
+        allocator.free(torrents);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), torrents.len);
+    const expected_time = dateToEpoch(2026, 5, 24, 21, 0, 0) - (-3 * 3600);
+    try std.testing.expectEqual(@as(?i64, expected_time), torrents[0].pub_date);
 }
 
 test "parse torrent size from size element" {
