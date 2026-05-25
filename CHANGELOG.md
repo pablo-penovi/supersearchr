@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.4.3
+
 ### Fixed
 - Fixed sending torrents to Superseedr when Zig's process-spawn IO allocator was not initialized, and added fallback/debug logging around Superseedr launch attempts.
 
