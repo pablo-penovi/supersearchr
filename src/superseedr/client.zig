@@ -276,14 +276,6 @@ pub fn addLinkWithAllDeps(
     );
 }
 
-pub fn addLink(allocator: std.mem.Allocator, link: []const u8, terminal: []const u8) AddLinkError!void {
-    return addLinkWithAllDeps(allocator, link, terminal, defaultExecutor, defaultProcessChecker, defaultSpawner);
-}
-
-pub fn addLinkWithExecutor(allocator: std.mem.Allocator, link: []const u8, terminal: []const u8, executor: Executor) AddLinkError!void {
-    return addLinkWithAllDeps(allocator, link, terminal, executor, defaultProcessChecker, defaultSpawner);
-}
-
 test "valid magnet URL is accepted" {
     var argv_captured: [3][]const u8 = undefined;
     var argv_captured_len: usize = 0;

@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Removed
+- Removed unused dead code from the project:
+  - Eliminated unused `drawBorder`, `centerText`, and `writeHeaderRightAligned` functions in `src/tui/widgets/results.zig`.
+  - Eliminated unused `addLink` and `addLinkWithExecutor` functions in `src/superseedr/client.zig`.
+  - Eliminated unused `consumeEscapeSequence`, `consumeEscapeSequenceWindows`, `setColor`, `reverseVideo`, and `reverseVideoOff` functions in `src/tui/term.zig`.
+
 ## 0.4.4
 
 ### Added
