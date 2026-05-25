@@ -4,9 +4,16 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.4.4
+
 ### Added
+- Made the results **Age** column sortable, supporting sorting direction toggles (ascending / descending) navigatable via Left/Right Arrow keys and triggered by pressing `TAB`.
+- Added a new shortcut, `r` or `R`, on the torrent results screen to refresh results by triggering a new search with the same query. This action and its shortcut hint are only enabled when a search is not already in progress, and the refresh request bypasses the Jackett internal cache (`&cache=false`) to ensure fresh tracker results.
 - Added an "Age" column to the torrent results screen between "Title" and "S" that displays how long ago the torrent was published (formatted dynamically in truncated integer units: seconds, minutes, hours, days, months, or years).
 - Implemented robust RSS RFC 822 and ISO 8601 `<pubDate>` tag extraction in `src/jackett/client.zig`.
+
+### Changed
+- Preserved and maintained the active sorting configuration (criteria and order) when refreshing torrent search results.
 
 ## 0.4.3
 
