@@ -142,7 +142,7 @@ fn runSearchState(app: *App) !void {
             .continue_search => {},
             .submit => {
                 const query = try app.allocator.dupe(u8, widget.getQuery());
-                transitionSearchToStreamingResults(app, query);
+                transitionSearchToStreamingResults(app, query, false);
                 return;
             },
             .cancel => {
@@ -324,6 +324,13 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                     app.state = .{ .search = .{ .query = last_query } };
                     return;
                 },
+                .refresh => {
+                    const last_query = try app.allocator.dupe(u8, results_state.query);
+                    deinitResultsState(app.allocator, results_state);
+                    cleaned_up = true;
+                    transitionSearchToStreamingResults(app, last_query, true);
+                    return;
+                },
                 .cancel => {
                     if (panels.renderExitConfirmationOverlay(&app.term_rows, &app.term_cols, refreshTerminalSizeValues, &widget)) {
                         deinitResultsState(app.allocator, results_state);
@@ -376,11 +383,12 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
     }
 }
 
-fn startSearchWithAppDeps(app: *App, query: []const u8) jackett.JackettError!*jackett.SearchSession {
+fn startSearchWithAppDeps(app: *App, query: []const u8, skip_cache: bool) jackett.JackettError!*jackett.SearchSession {
     return app.client.startStreamingSearch(
         query,
         app.deps.jackett_body_executor,
         app.deps.jackett_parallel_requests,
+        skip_cache,
     );
 }
 
@@ -420,8 +428,8 @@ fn selectedLinkKind(link: []const u8) []const u8 {
     return "other";
 }
 
-fn transitionSearchToStreamingResults(app: *App, query: []u8) void {
-    const session = startSearchWithAppDeps(app, query) catch |err| {
+fn transitionSearchToStreamingResults(app: *App, query: []u8, skip_cache: bool) void {
+    const session = startSearchWithAppDeps(app, query, skip_cache) catch |err| {
         app.allocator.free(query);
         app.state = .{ .err = .{ .message = getErrorMessage(err) } };
         return;
@@ -625,7 +633,7 @@ test "state transitions smoke path search -> streaming results with injected dep
 
     const query = try std.testing.allocator.dupe(u8, "ubuntu");
 
-    transitionSearchToStreamingResults(&app, query);
+    transitionSearchToStreamingResults(&app, query, false);
 
     switch (app.state) {
         .results => |*results_state| {
@@ -662,7 +670,7 @@ test "state transitions smoke path discovery failure goes to error" {
 
     const query = try std.testing.allocator.dupe(u8, "ubuntu");
 
-    transitionSearchToStreamingResults(&app, query);
+    transitionSearchToStreamingResults(&app, query, false);
 
     switch (app.state) {
         .results => |*results_state| {
@@ -829,7 +837,7 @@ test "startSearchWithAppDeps uses injected jackett body executor" {
         .terminal = "xterm",
     };
 
-    const session = try startSearchWithAppDeps(&app, "ubuntu");
+    const session = try startSearchWithAppDeps(&app, "ubuntu", false);
     defer session.deinit();
     while (!session.isDone()) {
         compat.sleepNanos(std.time.ns_per_ms);

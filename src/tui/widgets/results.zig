@@ -273,7 +273,11 @@ pub const ResultsWidget = struct {
                     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 
                     term.setFg256(colors.muted);
-                    stdout.writeAll("  ENTER select | s search | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line | J/K/shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort") catch {};
+                    if (self.live_status.phase == .done) {
+                        stdout.writeAll("  ENTER select | s search | r refresh | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line | J/K/shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort") catch {};
+                    } else {
+                        stdout.writeAll("  ENTER select | s search | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line | J/K/shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort") catch {};
+                    }
                     term.resetColor();
                     term.clearBelow();
                 }
@@ -470,6 +474,9 @@ pub const ResultsWidget = struct {
                         if (self.live_status.phase == .done and self.live_status.failed > 0) return .review_failures;
                     }
                     if (event.value == 's' or event.value == 'S') return .new_search;
+                    if (event.value == 'r' or event.value == 'R') {
+                        if (self.live_status.phase == .done) return .refresh;
+                    }
                     return .continue_browsing;
                 },
                 .escape => return .cancel,
@@ -498,6 +505,9 @@ pub const ResultsWidget = struct {
                 }
                 if (event.value == 's' or event.value == 'S') {
                     return .new_search;
+                }
+                if (event.value == 'r' or event.value == 'R') {
+                    if (self.live_status.phase == .done) return .refresh;
                 }
                 if (event.value == '/') {
                     return .open_list_search;
@@ -955,7 +965,11 @@ fn drawCompact(
     }
     drawCompactDivider(stdout, colors, border, max_cols);
     term.setFg256(colors.muted);
-    stdout.writeAll("ENTER select | s search | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line") catch {};
+    if (self.live_status.phase == .done) {
+        stdout.writeAll("ENTER select | s search | r refresh | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line") catch {};
+    } else {
+        stdout.writeAll("ENTER select | s search | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line") catch {};
+    }
     term.resetColor();
     term.clearBelow();
 }
@@ -1536,6 +1550,7 @@ pub const ResultsAction = union(enum) {
     continue_browsing,
     select: usize,
     new_search,
+    refresh,
     cancel,
     review_failures,
     open_list_search,
@@ -1797,6 +1812,62 @@ test "ResultsWidget handleEvent char s returns new_search" {
     const action = widget.handleEvent(event, 20);
 
     try std.testing.expectEqual(ResultsAction.new_search, action);
+}
+
+test "ResultsWidget handleEvent char r returns refresh only when search is done" {
+    const allocator = std.testing.allocator;
+    
+    // Case 1: Empty torrents list
+    {
+        var widget = ResultsWidget.init(allocator);
+        defer widget.deinit();
+
+        // When search is done
+        widget.live_status.phase = .done;
+        const event_r = term.Event{ .key = .char, .value = 'r' };
+        const action_r = widget.handleEvent(event_r, 20);
+        try std.testing.expectEqual(ResultsAction.refresh, action_r);
+
+        const event_R = term.Event{ .key = .char, .value = 'R' };
+        const action_R = widget.handleEvent(event_R, 20);
+        try std.testing.expectEqual(ResultsAction.refresh, action_R);
+
+        // When search is in progress
+        widget.live_status.phase = .querying;
+        const action_r_prog = widget.handleEvent(event_r, 20);
+        try std.testing.expectEqual(ResultsAction.continue_browsing, action_r_prog);
+    }
+
+    // Case 2: Non-empty torrents list
+    {
+        var widget = ResultsWidget.init(allocator);
+        defer widget.deinit();
+
+        var torrents = std.ArrayList(Torrent).empty;
+        defer torrents.deinit(allocator);
+        try torrents.append(allocator, .{
+            .title = "Ubuntu ISO",
+            .seeders = 10,
+            .leechers = 2,
+            .link = "magnet:?xt=urn:btih:123",
+        });
+        widget.setTorrents(torrents.items, torrents.items.len);
+
+        // When search is done
+        widget.live_status.phase = .done;
+        const event_r = term.Event{ .key = .char, .value = 'r' };
+        const action_r = widget.handleEvent(event_r, 20);
+        try std.testing.expectEqual(ResultsAction.refresh, action_r);
+
+        const event_R = term.Event{ .key = .char, .value = 'R' };
+        const action_R = widget.handleEvent(event_R, 20);
+        try std.testing.expectEqual(ResultsAction.refresh, action_R);
+
+        // When search is in progress
+        widget.live_status.phase = .querying;
+        const action_r_prog = widget.handleEvent(event_r, 20);
+        try std.testing.expectEqual(ResultsAction.continue_browsing, action_r_prog);
+    }
 }
 
 test "ResultsWidget handleEvent char / returns open_list_search" {

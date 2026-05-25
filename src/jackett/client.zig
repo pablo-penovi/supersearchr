@@ -850,6 +850,7 @@ const StreamingSearchContext = struct {
     next_index: std.atomic.Value(usize),
     progress: *SearchProgress,
     queue: *SearchBatchQueue,
+    skip_cache: bool,
 };
 
 const SearchBatchQueue = struct {
@@ -926,6 +927,7 @@ pub const SearchSession = struct {
     coordinator_thread: ?std.Thread = null,
     done: std.atomic.Value(bool),
     fatal_discovery_error: std.atomic.Value(bool),
+    skip_cache: bool,
 
     fn allocator(self: *SearchSession) std.mem.Allocator {
         return self.allocator_value;
@@ -1086,6 +1088,7 @@ pub const Client = struct {
         query: []const u8,
         executor: BodyExecutor,
         max_parallel: usize,
+        skip_cache: bool,
     ) JackettError!*SearchSession {
         const session = std.heap.page_allocator.create(SearchSession) catch return error.OutOfMemory;
         session.* = .{
@@ -1099,6 +1102,7 @@ pub const Client = struct {
             .queue = undefined,
             .done = std.atomic.Value(bool).init(false),
             .fatal_discovery_error = std.atomic.Value(bool).init(false),
+            .skip_cache = skip_cache,
         };
         const allocator = session.allocator();
         session.queue = .{ .allocator = allocator };
@@ -1203,6 +1207,7 @@ fn streamingCoordinator(session: *SearchSession) void {
         .next_index = std.atomic.Value(usize).init(0),
         .progress = &session.progress,
         .queue = &session.queue,
+        .skip_cache = session.skip_cache,
     };
 
     const worker_count = @min(@max(session.max_parallel, @as(usize, 1)), indexers.len);
@@ -1279,11 +1284,18 @@ fn searchSingleIndexerStreaming(ctx: *StreamingSearchContext, indexer_id: []cons
     const encoded_indexer = try percentEncode(ctx.allocator, indexer_id);
     defer ctx.allocator.free(encoded_indexer);
 
-    const url = try std.fmt.allocPrint(
-        ctx.allocator,
-        "{s}/api/v2.0/indexers/{s}/results/torznab/api?apikey={s}&t=search&q={s}",
-        .{ ctx.base_url, encoded_indexer, ctx.api_key, ctx.encoded_query },
-    );
+    const url = if (ctx.skip_cache)
+        try std.fmt.allocPrint(
+            ctx.allocator,
+            "{s}/api/v2.0/indexers/{s}/results/torznab/api?apikey={s}&t=search&q={s}&cache=false",
+            .{ ctx.base_url, encoded_indexer, ctx.api_key, ctx.encoded_query },
+        )
+    else
+        try std.fmt.allocPrint(
+            ctx.allocator,
+            "{s}/api/v2.0/indexers/{s}/results/torznab/api?apikey={s}&t=search&q={s}",
+            .{ ctx.base_url, encoded_indexer, ctx.api_key, ctx.encoded_query },
+        );
     defer ctx.allocator.free(url);
 
     const body = try ctx.executor(ctx.allocator, url);
@@ -1862,7 +1874,7 @@ test "streaming search publishes batches as indexers complete" {
     };
 
     var client = Client.init(std.testing.allocator, "http://localhost:9117", "test-key");
-    const session = try client.startStreamingSearch("ubuntu", state.exec, 2);
+    const session = try client.startStreamingSearch("ubuntu", state.exec, 2, false);
     defer session.deinit();
 
     var results: std.ArrayList(Torrent) = .empty;
@@ -1917,7 +1929,7 @@ test "streaming search keeps successful results when one indexer fails" {
     };
 
     var client = Client.init(std.testing.allocator, "http://localhost:9117", "test-key");
-    const session = try client.startStreamingSearch("ubuntu", state.exec, 2);
+    const session = try client.startStreamingSearch("ubuntu", state.exec, 2, false);
     defer session.deinit();
 
     var results: std.ArrayList(Torrent) = .empty;
@@ -1952,7 +1964,7 @@ test "streaming search reports discovery failure as fatal" {
     };
 
     var client = Client.init(std.testing.allocator, "http://localhost:9117", "test-key");
-    const session = try client.startStreamingSearch("ubuntu", state.exec, 2);
+    const session = try client.startStreamingSearch("ubuntu", state.exec, 2, false);
     defer session.deinit();
 
     while (!session.isDone()) {
