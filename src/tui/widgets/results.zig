@@ -1863,7 +1863,7 @@ test "ResultsWidget handleEvent char s returns new_search" {
 
 test "ResultsWidget handleEvent char r returns refresh only when search is done" {
     const allocator = std.testing.allocator;
-    
+
     // Case 1: Empty torrents list
     {
         var widget = ResultsWidget.init(allocator);
