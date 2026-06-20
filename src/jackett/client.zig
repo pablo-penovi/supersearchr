@@ -254,17 +254,6 @@ fn extractMagnetUrlAttr(xml: []const u8, i: usize) ?struct { value: []const u8, 
     return .{ .value = xml[value_start..value_end], .end = tag_end + 1 };
 }
 
-fn extractEnclosureUrl(xml: []const u8, i: usize) ?struct { value: []const u8, end: usize } {
-    if (!std.mem.startsWith(u8, xml[i..], xml_tags.enclosure)) return null;
-
-    const tag_end = std.mem.indexOfScalarPos(u8, xml, i, '>') orelse return null;
-    const tag = xml[i .. tag_end + 1];
-    const url_pos = std.mem.indexOf(u8, tag, xml_tags.enclosure_url) orelse return null;
-    const url_start = i + url_pos + xml_tags.enclosure_url.len;
-    const url_end = std.mem.indexOfScalarPos(u8, xml, url_start, '"') orelse return null;
-    return .{ .value = xml[url_start..url_end], .end = tag_end + 1 };
-}
-
 fn extractEnclosureInfo(xml: []const u8, i: usize) ?struct { url: ?[]const u8, length: ?u64, end: usize } {
     if (!std.mem.startsWith(u8, xml[i..], xml_tags.enclosure)) return null;
 
@@ -812,21 +801,6 @@ pub const Indexer = struct {
     id: []u8,
 };
 
-const ParallelSearchContext = struct {
-    allocator: std.mem.Allocator,
-    executor: BodyExecutor,
-    base_url: []const u8,
-    api_key: []const u8,
-    encoded_query: []const u8,
-    indexers: []const Indexer,
-    next_index: std.atomic.Value(usize),
-    progress: *SearchProgress,
-    results: std.ArrayList(Torrent),
-    mutex: std.Io.Mutex,
-    first_error: ?JackettError,
-    failures: usize,
-};
-
 pub const SearchBatch = struct {
     torrents: []Torrent,
 
@@ -1007,82 +981,6 @@ pub const Client = struct {
         _ = self;
     }
 
-    pub fn searchIndexersInParallel(
-        self: *Client,
-        query: []const u8,
-        executor: BodyExecutor,
-        progress: *SearchProgress,
-        max_parallel: usize,
-    ) JackettError![]Torrent {
-        progress.setPhase(.discovering);
-
-        const indexers = try self.fetchConfiguredIndexers(executor);
-        defer freeIndexers(self.allocator, indexers);
-
-        progress.setTotal(indexers.len);
-        progress.setPhase(.querying);
-
-        if (indexers.len == 0) {
-            progress.setPhase(.done);
-            return try self.allocator.alloc(Torrent, 0);
-        }
-
-        const encoded_query = try percentEncode(self.allocator, query);
-        defer self.allocator.free(encoded_query);
-
-        const allocator = self.allocator;
-
-        var ctx = ParallelSearchContext{
-            .allocator = allocator,
-            .executor = executor,
-            .base_url = self.base_url,
-            .api_key = self.api_key,
-            .encoded_query = encoded_query,
-            .indexers = indexers,
-            .next_index = std.atomic.Value(usize).init(0),
-            .progress = progress,
-            .results = .empty,
-            .mutex = std.Io.Mutex.init,
-            .first_error = null,
-            .failures = 0,
-        };
-        errdefer {
-            for (ctx.results.items) |t| {
-                allocator.free(t.title);
-                allocator.free(t.link);
-            }
-            ctx.results.deinit(allocator);
-        }
-
-        const worker_count = @min(@max(max_parallel, @as(usize, 1)), indexers.len);
-        var threads = try self.allocator.alloc(std.Thread, worker_count);
-        defer self.allocator.free(threads);
-
-        var spawned: usize = 0;
-        errdefer {
-            for (threads[0..spawned]) |thread| {
-                thread.join();
-            }
-        }
-
-        while (spawned < worker_count) : (spawned += 1) {
-            threads[spawned] = std.Thread.spawn(.{}, parallelSearchWorker, .{&ctx}) catch return error.RequestSendFailed;
-        }
-
-        for (threads) |thread| {
-            thread.join();
-        }
-
-        progress.setPhase(.done);
-
-        if (ctx.results.items.len == 0 and ctx.failures == indexers.len) {
-            return ctx.first_error orelse error.ParseFailed;
-        }
-
-        sortTorrents(ctx.results.items);
-        return ctx.results.toOwnedSlice(allocator);
-    }
-
     pub fn startStreamingSearch(
         self: *Client,
         query: []const u8,
@@ -1142,23 +1040,6 @@ fn percentEncode(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
         }
     }
     return result.toOwnedSlice(allocator);
-}
-
-fn parallelSearchWorker(ctx: *ParallelSearchContext) void {
-    while (true) {
-        const idx = ctx.next_index.fetchAdd(1, .monotonic);
-        if (idx >= ctx.indexers.len) return;
-
-        searchSingleIndexer(ctx, ctx.indexers[idx].id) catch |err| {
-            const io = compat.io();
-            ctx.mutex.lockUncancelable(io);
-            if (ctx.first_error == null) ctx.first_error = err;
-            ctx.failures += 1;
-            ctx.mutex.unlock(io);
-            ctx.progress.recordFailed();
-        };
-        ctx.progress.recordCompleted();
-    }
 }
 
 fn streamingCoordinator(session: *SearchSession) void {
@@ -1249,35 +1130,6 @@ fn streamingSearchWorker(ctx: *StreamingSearchContext) void {
         };
         ctx.progress.recordCompleted();
     }
-}
-
-fn searchSingleIndexer(ctx: *ParallelSearchContext, indexer_id: []const u8) JackettError!void {
-    const encoded_indexer = try percentEncode(ctx.allocator, indexer_id);
-    defer ctx.allocator.free(encoded_indexer);
-
-    const url = try std.fmt.allocPrint(
-        ctx.allocator,
-        "{s}/api/v2.0/indexers/{s}/results/torznab/api?apikey={s}&t=search&q={s}",
-        .{ ctx.base_url, encoded_indexer, ctx.api_key, ctx.encoded_query },
-    );
-    defer ctx.allocator.free(url);
-
-    const body = try ctx.executor(ctx.allocator, url);
-    defer ctx.allocator.free(body);
-
-    const torrents = parseTorrents(ctx.allocator, body) catch |err| return mapAnyToJackettError(err, error.ParseFailed);
-    defer ctx.allocator.free(torrents);
-
-    const io = compat.io();
-    ctx.mutex.lockUncancelable(io);
-    defer ctx.mutex.unlock(io);
-    ctx.results.appendSlice(ctx.allocator, torrents) catch {
-        for (torrents) |t| {
-            ctx.allocator.free(t.title);
-            ctx.allocator.free(t.link);
-        }
-        return error.OutOfMemory;
-    };
 }
 
 fn searchSingleIndexerStreaming(ctx: *StreamingSearchContext, indexer_id: []const u8) JackettError!void {
@@ -1468,13 +1320,6 @@ fn parseTorrents(allocator: std.mem.Allocator, xml: []const u8) ![]Torrent {
                         }
                     }
                     enclosure_size_bytes = result.length;
-                    i = result.end;
-                } else if (extractEnclosureUrl(xml, i)) |result| {
-                    if (link_priority < 3) {
-                        link = result.value;
-                        link_priority = 3;
-                        link_source = "enclosure url";
-                    }
                     i = result.end;
                 } else if (extractIntField(xml, i, xml_tags.seeders_attr, 0)) |result| {
                     seeders = result.value;
@@ -1778,82 +1623,6 @@ test "default body executor decompresses gzip indexer discovery response" {
 
 test "parse configured indexers rejects non-indexer response" {
     try std.testing.expectError(error.ParseFailed, parseIndexers(std.testing.allocator, "\x1f\x8b compressed or html"));
-}
-
-test "parallel indexer search merges sorted results and updates progress" {
-    const state = struct {
-        var indexer_calls = std.atomic.Value(usize).init(0);
-        var alpha_calls = std.atomic.Value(usize).init(0);
-        var beta_calls = std.atomic.Value(usize).init(0);
-
-        fn exec(allocator: std.mem.Allocator, url: []const u8) JackettError![]u8 {
-            if (std.mem.indexOf(u8, url, "t=indexers&configured=true") != null) {
-                _ = indexer_calls.fetchAdd(1, .monotonic);
-                return allocator.dupe(u8, "<indexers><indexer id=\"alpha\"><title>Alpha</title></indexer><indexer id=\"beta\"><title>Beta</title></indexer></indexers>") catch error.OutOfMemory;
-            }
-            if (std.mem.indexOf(u8, url, "/indexers/alpha/") != null) {
-                _ = alpha_calls.fetchAdd(1, .monotonic);
-                compat.sleepNanos(10 * std.time.ns_per_ms);
-                return allocator.dupe(u8, "<rss><channel><item><title>Alpha Result</title><link>magnet:?xt=urn:btih:alpha</link><torznab:attr name=\"seeders\" value=\"10\"/></item></channel></rss>") catch error.OutOfMemory;
-            }
-            if (std.mem.indexOf(u8, url, "/indexers/beta/") != null) {
-                _ = beta_calls.fetchAdd(1, .monotonic);
-                return allocator.dupe(u8, "<rss><channel><item><title>Beta Result</title><link>magnet:?xt=urn:btih:beta</link><torznab:attr name=\"seeders\" value=\"50\"/></item></channel></rss>") catch error.OutOfMemory;
-            }
-            return error.InvalidUrl;
-        }
-    };
-    state.indexer_calls.store(0, .monotonic);
-    state.alpha_calls.store(0, .monotonic);
-    state.beta_calls.store(0, .monotonic);
-
-    var client = Client.init(std.testing.allocator, "http://localhost:9117", "test-key");
-    var progress = SearchProgress.init();
-    const torrents = try client.searchIndexersInParallel("ubuntu", state.exec, &progress, 2);
-    defer {
-        for (torrents) |t| {
-            std.testing.allocator.free(t.title);
-            std.testing.allocator.free(t.link);
-        }
-        std.testing.allocator.free(torrents);
-    }
-
-    try std.testing.expectEqual(@as(usize, 1), state.indexer_calls.load(.monotonic));
-    try std.testing.expectEqual(@as(usize, 1), state.alpha_calls.load(.monotonic));
-    try std.testing.expectEqual(@as(usize, 1), state.beta_calls.load(.monotonic));
-    try std.testing.expectEqual(@as(usize, 2), torrents.len);
-    try std.testing.expectEqualStrings("Beta Result", torrents[0].title);
-    try std.testing.expectEqualStrings("Alpha Result", torrents[1].title);
-
-    const snapshot = progress.snapshot();
-    try std.testing.expectEqual(ProgressPhase.done, snapshot.phase);
-    try std.testing.expectEqual(@as(usize, 2), snapshot.total);
-    try std.testing.expectEqual(@as(usize, 2), snapshot.completed);
-    try std.testing.expectEqual(@as(usize, 0), snapshot.failed);
-}
-
-test "parallel indexer search returns empty when at least one empty indexer succeeds" {
-    const state = struct {
-        fn exec(allocator: std.mem.Allocator, url: []const u8) JackettError![]u8 {
-            if (std.mem.indexOf(u8, url, "t=indexers&configured=true") != null) {
-                return allocator.dupe(u8, "<indexers><indexer id=\"empty\"><title>Empty</title></indexer><indexer id=\"failing\"><title>Failing</title></indexer></indexers>") catch error.OutOfMemory;
-            }
-            if (std.mem.indexOf(u8, url, "/indexers/empty/") != null) {
-                return allocator.dupe(u8, "<rss><channel></channel></rss>") catch error.OutOfMemory;
-            }
-            return error.HttpError;
-        }
-    };
-
-    var client = Client.init(std.testing.allocator, "http://localhost:9117", "test-key");
-    var progress = SearchProgress.init();
-    const torrents = try client.searchIndexersInParallel("ubuntu", state.exec, &progress, 2);
-    defer std.testing.allocator.free(torrents);
-
-    try std.testing.expectEqual(@as(usize, 0), torrents.len);
-    const snapshot = progress.snapshot();
-    try std.testing.expectEqual(@as(usize, 2), snapshot.completed);
-    try std.testing.expectEqual(@as(usize, 1), snapshot.failed);
 }
 
 test "streaming search publishes batches as indexers complete" {

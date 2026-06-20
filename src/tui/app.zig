@@ -314,17 +314,7 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
                         deinitResultsState(app.allocator, results_state);
                         cleaned_up = true;
 
-                        const msg = switch (err) {
-                            error.ConnectionRefused => "Cannot connect to Jackett. Is it running?",
-                            error.InvalidUrl => "Invalid Jackett URL in config",
-                            error.RequestCreateFailed => "Failed to create Jackett request",
-                            error.RequestSendFailed => "Failed to send Jackett request",
-                            error.ResponseEmpty => "Empty response from Jackett",
-                            error.XmlParsingFailed => "Failed to parse Torznab XML response from Jackett",
-                            error.OutOfMemory => "Out of memory",
-                            else => "Unexpected error in search overlay",
-                        };
-                        app.state = .{ .err = .{ .message = msg } };
+                        app.state = .{ .err = .{ .message = getErrorMessage(@errorCast(err)) } };
                         return;
                     };
                     widget.force_full_redraw = true;
