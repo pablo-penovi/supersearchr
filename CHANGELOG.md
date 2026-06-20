@@ -4,11 +4,19 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Fixed
+- Fixed the list-search overlay's error handler in `src/tui/app.zig` matching nonexistent error names (`ResponseEmpty`, `XmlParsingFailed`) instead of the real `jackett.JackettError` variants, which caused real failures (e.g. parse errors, HTTP errors) to surface as a generic "Unexpected error in search overlay" message. It now reuses the existing exhaustive `getErrorMessage` mapping.
+- Fixed an unbounded buffer write in `padTitle` in `src/tui/widgets/results.zig` that could overflow its destination buffer when padding a selected, search-highlighted row with a wide marquee-truncated title.
+
 ### Removed
 - Removed unused dead code from the project:
   - Eliminated unused `drawBorder`, `centerText`, and `writeHeaderRightAligned` functions in `src/tui/widgets/results.zig`.
   - Eliminated unused `addLink` and `addLinkWithExecutor` functions in `src/superseedr/client.zig`.
   - Eliminated unused `consumeEscapeSequence`, `consumeEscapeSequenceWindows`, `setColor`, `reverseVideo`, and `reverseVideoOff` functions in `src/tui/term.zig`.
+  - Eliminated the unreachable `extractEnclosureUrl` function and its dead branch in `src/jackett/client.zig` (always shadowed by `extractEnclosureInfo`, which is checked first and matches the same tags).
+  - Eliminated `Client.searchIndexersInParallel`, `ParallelSearchContext`, `parallelSearchWorker`, and `searchSingleIndexer` in `src/jackett/client.zig` — this whole non-streaming search path was superseded by `startStreamingSearch`/`SearchSession` and had no callers left in the app.
+  - Eliminated the dead `buildHeaderCells` function in `src/tui/widgets/results.zig`, which was only exercised by its own tests and no longer matched the real header-rendering path (`writeHeaderCells`). Replaced its tests with direct coverage of `formatColumnHeader` (the function actually used in production) and of `buildDataCells`'s column offsets.
+  - Removed the unused `torrents_len` parameter from `computeDisplayCount` in `src/tui/widgets/results.zig`.
 
 ## 0.4.4
 

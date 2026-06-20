@@ -210,7 +210,7 @@ pub const ResultsWidget = struct {
         const panel_width = if (compact) @as(usize, 0) else @as(usize, @intCast(max_cols - 2));
         const inner_width = if (compact) @as(usize, 0) else panel_width - 2;
         const layout = if (compact) TableLayout.compactFallback() else TableLayout.forInnerWidth(inner_width);
-        self.display_count = computeDisplayCount(max_rows, self.torrents.len);
+        self.display_count = computeDisplayCount(max_rows);
         const end_idx = @min(self.scroll_offset + self.display_count, self.torrents.len);
         const snapshot = RenderSnapshot{
             .rows = max_rows,
@@ -374,7 +374,7 @@ pub const ResultsWidget = struct {
         const colors = theme.superseedr_like;
         const border = theme.unicode_border;
         const panel_width = @as(usize, @intCast(max_cols - 2));
-        self.display_count = computeDisplayCount(max_rows, self.torrents.len);
+        self.display_count = computeDisplayCount(max_rows);
         const end_idx = @min(self.scroll_offset + self.display_count, self.torrents.len);
 
         term.moveCursor(statusRowFromDisplayCount(self.display_count), 1);
@@ -471,7 +471,7 @@ pub const ResultsWidget = struct {
             }
         }
 
-        self.display_count = computeDisplayCount(max_rows, self.torrents.len);
+        self.display_count = computeDisplayCount(max_rows);
 
         switch (event.key) {
             .char => {
@@ -537,7 +537,7 @@ pub const ResultsWidget = struct {
         if (self.torrents.len == 0) return false;
         if (self.cursor >= self.torrents.len) return false;
 
-        self.display_count = computeDisplayCount(max_rows, self.torrents.len);
+        self.display_count = computeDisplayCount(max_rows);
         const compact = theme.isCompactViewport(max_rows, max_cols);
         if (compact) return false;
 
@@ -803,10 +803,12 @@ fn padTitle(buf: []u8, text: []const u8, width: usize) []const u8 {
     if (width == 0) return "";
     const disp_width = theme.displayWidthOfText(text);
     if (disp_width >= width) return text;
+    if (text.len >= buf.len) return text;
 
     @memcpy(buf[0..text.len], text);
     var idx = text.len;
     for (0..(width - disp_width)) |_| {
+        if (idx >= buf.len) break;
         buf[idx] = ' ';
         idx += 1;
     }
@@ -858,8 +860,7 @@ fn highlightSearchTerm(
     return writer.buffered();
 }
 
-fn computeDisplayCount(max_rows: u16, torrents_len: usize) usize {
-    _ = torrents_len;
+fn computeDisplayCount(max_rows: u16) usize {
     return if (max_rows > 7) @as(usize, @intCast(max_rows - 7)) else 1;
 }
 
@@ -1338,28 +1339,6 @@ fn writeHeaderCells(
     }
 }
 
-fn buildHeaderCells(buf: []u8, inner_width: usize, layout: TableLayout) []const u8 {
-    var writer: std.Io.Writer = .fixed(buf);
-
-    writer.writeAll(" ") catch return "";
-    theme.writePadded(&writer, "Title", layout.title_col_width) catch return "";
-    writeSpaces(&writer, layout.title_to_age_gap) catch return "";
-    writeRightAligned(&writer, "Age", layout.age_width) catch return "";
-    writeSpaces(&writer, layout.age_to_seeders_gap) catch return "";
-    writeRightAligned(&writer, "S", layout.seeders_width) catch return "";
-    writeSpaces(&writer, layout.between_stats_gap) catch return "";
-    writeRightAligned(&writer, "L", layout.leechers_width) catch return "";
-    writeSpaces(&writer, layout.between_stats_gap) catch return "";
-    writeRightAligned(&writer, "Size", layout.size_width) catch return "";
-    writer.writeAll(" ") catch return "";
-
-    const used = writer.buffered().len;
-    if (used < inner_width) {
-        writeSpaces(&writer, inner_width - used) catch {};
-    }
-    return writer.buffered();
-}
-
 fn formatAgeText(buf: []u8, pub_date: ?i64, current_time: i64) []const u8 {
     const timestamp = pub_date orelse return "N/A";
     const diff = current_time - timestamp;
@@ -1733,34 +1712,31 @@ test "computeRedrawMode returns partial_cursor when selected row redraw is force
     );
 }
 
-test "header and data cells align stats columns for short title" {
+test "buildDataCells places stats columns at fixed layout offsets" {
     const inner_width: usize = 56;
     const layout = TableLayout.forInnerWidth(inner_width);
 
-    var hbuf: [256]u8 = undefined;
-    const header = buildHeaderCells(&hbuf, inner_width, layout);
+    const age_start = 1 + layout.title_col_width + layout.title_to_age_gap;
+    const seeders_start = age_start + layout.age_width + layout.age_to_seeders_gap;
+    const leechers_start = seeders_start + layout.seeders_width + layout.between_stats_gap;
+    const size_start = leechers_start + layout.leechers_width + layout.between_stats_gap;
 
     var rbuf: [256]u8 = undefined;
     const row = buildDataCells(&rbuf, inner_width, layout, "Voyager", 7, 42, 512 * 1024 * 1024, null, 0);
 
-    const s_header = std.mem.indexOfScalar(u8, header, 'S') orelse return error.TestUnexpectedResult;
-    const l_header = std.mem.indexOfScalar(u8, header, 'L') orelse return error.TestUnexpectedResult;
-    const size_header = std.mem.indexOf(u8, header, "Size") orelse return error.TestUnexpectedResult;
-    const s_row = (std.mem.indexOf(u8, row, "   7") orelse return error.TestUnexpectedResult) + 3;
-    const l_row = (std.mem.indexOf(u8, row, "  42") orelse return error.TestUnexpectedResult) + 3;
-    const size_row = std.mem.indexOf(u8, row, "512 MB") orelse return error.TestUnexpectedResult;
-
-    try std.testing.expectEqual(s_header, s_row);
-    try std.testing.expectEqual(l_header, l_row);
-    try std.testing.expectEqual(size_header + 3, size_row + 5);
+    try std.testing.expectEqualStrings("   7", row[seeders_start .. seeders_start + layout.seeders_width]);
+    try std.testing.expectEqualStrings("  42", row[leechers_start .. leechers_start + layout.leechers_width]);
+    try std.testing.expectEqualStrings("512 MB", std.mem.trim(u8, row[size_start .. size_start + layout.size_width], " "));
 }
 
-test "stats columns stay aligned when title is truncated" {
+test "buildDataCells stats columns stay at fixed offsets when title is truncated" {
     const inner_width: usize = 56;
     const layout = TableLayout.forInnerWidth(inner_width);
 
-    var hbuf: [256]u8 = undefined;
-    const header = buildHeaderCells(&hbuf, inner_width, layout);
+    const age_start = 1 + layout.title_col_width + layout.title_to_age_gap;
+    const seeders_start = age_start + layout.age_width + layout.age_to_seeders_gap;
+    const leechers_start = seeders_start + layout.seeders_width + layout.between_stats_gap;
+    const size_start = leechers_start + layout.leechers_width + layout.between_stats_gap;
 
     var trunc_buf: [128]u8 = undefined;
     const long_title = "A very very very long title that must truncate";
@@ -1769,16 +1745,33 @@ test "stats columns stay aligned when title is truncated" {
     var rbuf: [256]u8 = undefined;
     const row = buildDataCells(&rbuf, inner_width, layout, shown_title, 999, 1000, 12 * 1024 * 1024 * 1024 + 410 * 1024 * 1024, null, 0);
 
-    const s_header = std.mem.indexOfScalar(u8, header, 'S') orelse return error.TestUnexpectedResult;
-    const l_header = std.mem.indexOfScalar(u8, header, 'L') orelse return error.TestUnexpectedResult;
-    const size_header = std.mem.indexOf(u8, header, "Size") orelse return error.TestUnexpectedResult;
-    const s_row = (std.mem.indexOf(u8, row, " 999") orelse return error.TestUnexpectedResult) + 3;
-    const l_row = (std.mem.indexOf(u8, row, "1000") orelse return error.TestUnexpectedResult) + 3;
-    const size_row = std.mem.indexOf(u8, row, "12.4 GB") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(" 999", row[seeders_start .. seeders_start + layout.seeders_width]);
+    try std.testing.expectEqualStrings("1000", row[leechers_start .. leechers_start + layout.leechers_width]);
+    try std.testing.expectEqualStrings("12.4 GB", std.mem.trim(u8, row[size_start .. size_start + layout.size_width], " "));
+}
 
-    try std.testing.expectEqual(s_header, s_row);
-    try std.testing.expectEqual(l_header, l_row);
-    try std.testing.expectEqual(size_header, size_row + 3);
+test "formatColumnHeader always returns the column's fixed display width" {
+    const Case = struct { col: SortColumn, width: usize };
+    const cases = [_]Case{
+        .{ .col = .age, .width = TableLayout.fixed_age_width },
+        .{ .col = .seeders, .width = TableLayout.fixed_seeders_width },
+        .{ .col = .leechers, .width = TableLayout.fixed_leechers_width },
+        .{ .col = .size, .width = TableLayout.fixed_size_width },
+    };
+    const columns = [_]SortColumn{ .age, .seeders, .leechers, .size };
+    const orders = [_]SortOrder{ .asc, .desc };
+
+    for (cases) |case| {
+        for (columns) |active| {
+            for (columns) |cursor| {
+                for (orders) |order| {
+                    var buf: [32]u8 = undefined;
+                    const text = formatColumnHeader(&buf, case.col, active, order, cursor);
+                    try std.testing.expectEqual(case.width, theme.displayWidthOfText(text));
+                }
+            }
+        }
+    }
 }
 
 test "formatSizeBytes renders missing megabytes and gigabytes" {
