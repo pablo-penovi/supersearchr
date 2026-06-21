@@ -18,6 +18,12 @@ pub const RequestSpec = struct {
     method: std.http.Method = .GET,
     extra_headers: []const HeaderPair = &.{},
     body: ?[]const u8 = null,
+    content_type: []const u8 = "application/json",
+    /// std.http.Client follows redirects by default but has no cookie jar,
+    /// so a redirect chain silently drops any Set-Cookie from earlier hops.
+    /// Callers that need to inspect a 3xx response themselves (e.g. cookie
+    /// based login handshakes) should set this to false.
+    follow_redirects: bool = true,
 };
 
 pub const RawResponse = struct {
@@ -67,7 +73,8 @@ pub fn execute(
 
     var request = http_client.request(spec.method, uri, .{
         .extra_headers = spec.extra_headers,
-        .headers = if (spec.body != null) .{ .content_type = .{ .override = "application/json" } } else .{},
+        .headers = if (spec.body != null) .{ .content_type = .{ .override = spec.content_type } } else .{},
+        .redirect_behavior = if (spec.follow_redirects) @enumFromInt(3) else .unhandled,
     }) catch |err| {
         debug_log.writef(
             allocator,

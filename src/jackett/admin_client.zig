@@ -3,6 +3,7 @@ const compat = @import("compat");
 const config = @import("config");
 const http_exec = @import("http_exec");
 const url_encode = @import("url_encode");
+const debug_log = @import("debug_log");
 
 pub const AdminError = error{
     InvalidUrl,
@@ -27,6 +28,7 @@ pub const AdminRequest = struct {
     url: []const u8,
     headers: []const Header = &.{},
     body: ?[]const u8 = null,
+    content_type: []const u8 = "application/json",
 };
 
 pub const AdminResponse = struct {
@@ -57,6 +59,12 @@ pub fn defaultAdminExecutor(allocator: std.mem.Allocator, request: AdminRequest)
         .method = method,
         .extra_headers = request.headers,
         .body = request.body,
+        .content_type = request.content_type,
+        // Jackett's login endpoints always respond with a 3xx (success or
+        // failure) and the HTTP client has no cookie jar, so blindly
+        // following redirects strands us on an unrelated endpoint several
+        // hops away. The admin layer needs to inspect each response itself.
+        .follow_redirects = false,
     }, "jackett-admin");
 
     var set_cookie: ?[]u8 = null;
@@ -95,18 +103,22 @@ pub fn login(
     executor: AdminExecutor,
 ) AdminError!AdminSession {
     if (admin_password.len == 0) {
-        const url = try std.fmt.allocPrint(allocator, "{s}/UI/Login", .{base_url});
-        defer allocator.free(url);
-
-        const response = try executor(allocator, .{ .method = .get, .url = url });
-        defer allocator.free(response.body);
-
-        const raw_cookie = response.set_cookie orelse return error.NoSessionCookie;
-        defer allocator.free(raw_cookie);
-
-        return .{ .cookie = try allocator.dupe(u8, firstCookiePair(raw_cookie)) };
+        return loginPasswordless(allocator, base_url, executor);
     }
+    return loginWithPassword(allocator, base_url, admin_password, executor);
+}
 
+/// Jackett's `POST /UI/Dashboard` (see `WebUIController.Dashboard`) always
+/// responds with a 302 to `/UI/Dashboard` regardless of outcome: on a
+/// correct password it signs in first (Set-Cookie: Jackett=...) and then
+/// redirects; on a wrong password it just redirects. So success/failure is
+/// determined purely by whether a Set-Cookie came back, not by status code.
+fn loginWithPassword(
+    allocator: std.mem.Allocator,
+    base_url: []const u8,
+    admin_password: []const u8,
+    executor: AdminExecutor,
+) AdminError!AdminSession {
     const encoded_password = try url_encode.percentEncode(allocator, admin_password);
     defer allocator.free(encoded_password);
     const body = try std.fmt.allocPrint(allocator, "password={s}", .{encoded_password});
@@ -114,16 +126,84 @@ pub fn login(
     const url = try std.fmt.allocPrint(allocator, "{s}/UI/Dashboard", .{base_url});
     defer allocator.free(url);
 
-    const response = try executor(allocator, .{ .method = .post, .url = url, .body = body });
+    const response = try executor(allocator, .{
+        .method = .post,
+        .url = url,
+        .body = body,
+        .content_type = "application/x-www-form-urlencoded",
+    });
     defer allocator.free(response.body);
 
     const raw_cookie = response.set_cookie orelse {
-        if (response.status == .ok) return error.LoginFailed;
-        return error.HttpError;
+        if (response.status.class() == .server_error) {
+            debug_log.writef(allocator, "jackett-admin", "login: server error status={d} body=\"{s}\"", .{ @intFromEnum(response.status), bodySnippet(response.body) });
+            return error.HttpError;
+        }
+        debug_log.writef(allocator, "jackett-admin", "login: rejected (no Set-Cookie) status={d} body=\"{s}\"", .{ @intFromEnum(response.status), bodySnippet(response.body) });
+        return error.LoginFailed;
     };
     defer allocator.free(raw_cookie);
 
     return .{ .cookie = try allocator.dupe(u8, firstCookiePair(raw_cookie)) };
+}
+
+/// Jackett's passwordless auto-sign-in requires a 3-step "TestCookie"
+/// handshake (see `WebUIController.Login`/`TestCookie`): a plain
+/// `GET /UI/Login` only sets a TestCookie and redirects; the client must
+/// resend that cookie to `GET /UI/TestCookie` to prove cookies work, which
+/// redirects back to `/UI/Login?cookiesChecked=1` where the server finally
+/// signs in and sets the real session cookie.
+fn loginPasswordless(
+    allocator: std.mem.Allocator,
+    base_url: []const u8,
+    executor: AdminExecutor,
+) AdminError!AdminSession {
+    const login_url = try std.fmt.allocPrint(allocator, "{s}/UI/Login", .{base_url});
+    defer allocator.free(login_url);
+
+    const login_response = try executor(allocator, .{ .method = .get, .url = login_url });
+    defer allocator.free(login_response.body);
+
+    const raw_test_cookie = login_response.set_cookie orelse {
+        debug_log.writef(allocator, "jackett-admin", "login: GET /UI/Login returned no Set-Cookie status={d} body=\"{s}\"", .{ @intFromEnum(login_response.status), bodySnippet(login_response.body) });
+        return error.NoSessionCookie;
+    };
+    defer allocator.free(raw_test_cookie);
+    const test_cookie = firstCookiePair(raw_test_cookie);
+
+    const test_cookie_url = try std.fmt.allocPrint(allocator, "{s}/UI/TestCookie", .{base_url});
+    defer allocator.free(test_cookie_url);
+
+    const test_response = try executor(allocator, .{
+        .method = .get,
+        .url = test_cookie_url,
+        .headers = &.{.{ .name = "Cookie", .value = test_cookie }},
+    });
+    defer allocator.free(test_response.body);
+    defer if (test_response.set_cookie) |c| allocator.free(c);
+
+    if (test_response.status.class() != .redirect) {
+        debug_log.writef(allocator, "jackett-admin", "login: GET /UI/TestCookie rejected status={d} body=\"{s}\"", .{ @intFromEnum(test_response.status), bodySnippet(test_response.body) });
+        return error.NoSessionCookie;
+    }
+
+    const confirm_url = try std.fmt.allocPrint(allocator, "{s}/UI/Login?cookiesChecked=1", .{base_url});
+    defer allocator.free(confirm_url);
+
+    const confirm_response = try executor(allocator, .{ .method = .get, .url = confirm_url });
+    defer allocator.free(confirm_response.body);
+
+    const raw_auth_cookie = confirm_response.set_cookie orelse {
+        debug_log.writef(allocator, "jackett-admin", "login: GET /UI/Login?cookiesChecked=1 returned no Set-Cookie status={d} body=\"{s}\"", .{ @intFromEnum(confirm_response.status), bodySnippet(confirm_response.body) });
+        return error.NoSessionCookie;
+    };
+    defer allocator.free(raw_auth_cookie);
+
+    return .{ .cookie = try allocator.dupe(u8, firstCookiePair(raw_auth_cookie)) };
+}
+
+fn bodySnippet(body: []const u8) []const u8 {
+    return body[0..@min(body.len, 300)];
 }
 
 pub const IndexerInfo = struct {
@@ -150,8 +230,10 @@ const IndexerInfoJson = struct {
 };
 
 fn parseIndexerInfos(allocator: std.mem.Allocator, json_body: []const u8) AdminError![]IndexerInfo {
-    var parsed = std.json.parseFromSlice([]const IndexerInfoJson, allocator, json_body, .{ .ignore_unknown_fields = true }) catch
+    var parsed = std.json.parseFromSlice([]const IndexerInfoJson, allocator, json_body, .{ .ignore_unknown_fields = true }) catch |err| {
+        debug_log.writef(allocator, "jackett-admin", "parseIndexerInfos: failed err={s} body=\"{s}\"", .{ @errorName(err), bodySnippet(json_body) });
         return error.ParseFailed;
+    };
     defer parsed.deinit();
 
     var result: std.ArrayList(IndexerInfo) = .empty;
@@ -188,7 +270,10 @@ pub fn listAllIndexers(
     defer allocator.free(response.body);
     defer if (response.set_cookie) |c| allocator.free(c);
 
-    if (response.status != .ok) return error.HttpError;
+    if (response.status != .ok) {
+        debug_log.writef(allocator, "jackett-admin", "listAllIndexers: unexpected status={d} body=\"{s}\"", .{ @intFromEnum(response.status), bodySnippet(response.body) });
+        return error.HttpError;
+    }
 
     return parseIndexerInfos(allocator, response.body);
 }
@@ -213,6 +298,7 @@ pub fn getIndexerConfig(
     defer if (response.set_cookie) |c| allocator.free(c);
 
     if (response.status != .ok) {
+        debug_log.writef(allocator, "jackett-admin", "getIndexerConfig: unexpected status={d} body=\"{s}\"", .{ @intFromEnum(response.status), bodySnippet(response.body) });
         allocator.free(response.body);
         return error.HttpError;
     }
@@ -242,7 +328,10 @@ pub fn setIndexerConfig(
     defer allocator.free(response.body);
     defer if (response.set_cookie) |c| allocator.free(c);
 
-    if (response.status != .ok) return error.HttpError;
+    if (response.status != .ok) {
+        debug_log.writef(allocator, "jackett-admin", "setIndexerConfig: unexpected status={d} body=\"{s}\"", .{ @intFromEnum(response.status), bodySnippet(response.body) });
+        return error.HttpError;
+    }
 }
 
 pub fn deleteIndexer(
@@ -265,7 +354,10 @@ pub fn deleteIndexer(
     defer allocator.free(response.body);
     defer if (response.set_cookie) |c| allocator.free(c);
 
-    if (response.status != .ok) return error.HttpError;
+    if (response.status != .ok) {
+        debug_log.writef(allocator, "jackett-admin", "deleteIndexer: unexpected status={d} body=\"{s}\"", .{ @intFromEnum(response.status), bodySnippet(response.body) });
+        return error.HttpError;
+    }
 }
 
 /// Resolves the production indexer config cache directory
@@ -330,12 +422,23 @@ pub fn clearCachedIndexerConfig(
     std.Io.Dir.deleteFileAbsolute(compat.io(), path) catch {};
 }
 
-test "login with empty password reads Set-Cookie from passwordless GET /UI/Login" {
+test "login with empty password completes the TestCookie handshake and reads the final Set-Cookie" {
     const allocator = std.testing.allocator;
     const mock = struct {
         fn exec(alloc: std.mem.Allocator, request: AdminRequest) AdminError!AdminResponse {
             if (request.method == .get and std.mem.endsWith(u8, request.url, "/UI/Login")) {
-                return .{ .status = .ok, .set_cookie = try alloc.dupe(u8, "Jackett=abc123; Path=/; HttpOnly") };
+                return .{ .status = .found, .set_cookie = try alloc.dupe(u8, "TestCookie=1; Path=/") };
+            }
+            if (request.method == .get and std.mem.endsWith(u8, request.url, "/UI/TestCookie")) {
+                var found = false;
+                for (request.headers) |h| {
+                    if (std.mem.eql(u8, h.name, "Cookie") and std.mem.eql(u8, h.value, "TestCookie=1")) found = true;
+                }
+                if (!found) return error.HttpError;
+                return .{ .status = .found };
+            }
+            if (request.method == .get and std.mem.endsWith(u8, request.url, "/UI/Login?cookiesChecked=1")) {
+                return .{ .status = .found, .set_cookie = try alloc.dupe(u8, "Jackett=abc123; Path=/; HttpOnly") };
             }
             return error.HttpError;
         }
@@ -347,16 +450,61 @@ test "login with empty password reads Set-Cookie from passwordless GET /UI/Login
     try std.testing.expectEqualStrings("Jackett=abc123", session.cookie);
 }
 
-var test_observed_login_body_ok: bool = false;
+test "login surfaces NoSessionCookie when GET /UI/Login returns no Set-Cookie" {
+    const allocator = std.testing.allocator;
+    const mock = struct {
+        fn exec(_: std.mem.Allocator, _: AdminRequest) AdminError!AdminResponse {
+            return .{ .status = .found };
+        }
+    };
+
+    try std.testing.expectError(error.NoSessionCookie, login(allocator, "http://localhost:9117", "", mock.exec));
+}
+
+test "login surfaces NoSessionCookie when GET /UI/TestCookie rejects the resent cookie" {
+    const allocator = std.testing.allocator;
+    const mock = struct {
+        fn exec(alloc: std.mem.Allocator, request: AdminRequest) AdminError!AdminResponse {
+            if (request.method == .get and std.mem.endsWith(u8, request.url, "/UI/Login")) {
+                return .{ .status = .found, .set_cookie = try alloc.dupe(u8, "TestCookie=1; Path=/") };
+            }
+            // Simulates Jackett's WebUIController.TestCookie returning 400 "Cookies required".
+            return .{ .status = .bad_request };
+        }
+    };
+
+    try std.testing.expectError(error.NoSessionCookie, login(allocator, "http://localhost:9117", "", mock.exec));
+}
+
+test "login surfaces NoSessionCookie when the final passwordless step returns no Set-Cookie" {
+    const allocator = std.testing.allocator;
+    const mock = struct {
+        fn exec(alloc: std.mem.Allocator, request: AdminRequest) AdminError!AdminResponse {
+            if (request.method == .get and std.mem.endsWith(u8, request.url, "/UI/Login")) {
+                return .{ .status = .found, .set_cookie = try alloc.dupe(u8, "TestCookie=1; Path=/") };
+            }
+            if (request.method == .get and std.mem.endsWith(u8, request.url, "/UI/TestCookie")) {
+                return .{ .status = .found };
+            }
+            return .{ .status = .found };
+        }
+    };
+
+    try std.testing.expectError(error.NoSessionCookie, login(allocator, "http://localhost:9117", "", mock.exec));
+}
+
+var test_observed_login_request_ok: bool = false;
 
 test "login with password POSTs form-encoded body to /UI/Dashboard and reads cookie" {
-    test_observed_login_body_ok = false;
+    test_observed_login_request_ok = false;
     const allocator = std.testing.allocator;
     const mock = struct {
         fn exec(alloc: std.mem.Allocator, request: AdminRequest) AdminError!AdminResponse {
             if (request.method == .post and std.mem.endsWith(u8, request.url, "/UI/Dashboard")) {
-                test_observed_login_body_ok = std.mem.eql(u8, request.body orelse "", "password=my%20secret");
-                return .{ .status = .ok, .set_cookie = try alloc.dupe(u8, "Jackett=xyz789; Path=/") };
+                test_observed_login_request_ok = std.mem.eql(u8, request.body orelse "", "password=my%20secret") and
+                    std.mem.eql(u8, request.content_type, "application/x-www-form-urlencoded");
+                // Real Jackett always redirects from this endpoint, win or lose.
+                return .{ .status = .found, .set_cookie = try alloc.dupe(u8, "Jackett=xyz789; Path=/") };
             }
             return error.HttpError;
         }
@@ -366,29 +514,29 @@ test "login with password POSTs form-encoded body to /UI/Dashboard and reads coo
     defer session.deinit(allocator);
 
     try std.testing.expectEqualStrings("Jackett=xyz789", session.cookie);
-    try std.testing.expect(test_observed_login_body_ok);
+    try std.testing.expect(test_observed_login_request_ok);
 }
 
-test "login surfaces LoginFailed when status ok but no cookie returned" {
+test "login surfaces LoginFailed when redirected back with no cookie (wrong password)" {
     const allocator = std.testing.allocator;
     const mock = struct {
         fn exec(_: std.mem.Allocator, _: AdminRequest) AdminError!AdminResponse {
-            return .{ .status = .ok };
+            return .{ .status = .found };
         }
     };
 
     try std.testing.expectError(error.LoginFailed, login(allocator, "http://localhost:9117", "wrongpass", mock.exec));
 }
 
-test "login surfaces NoSessionCookie for passwordless flow with no cookie" {
+test "login surfaces HttpError on a genuine server error" {
     const allocator = std.testing.allocator;
     const mock = struct {
         fn exec(_: std.mem.Allocator, _: AdminRequest) AdminError!AdminResponse {
-            return .{ .status = .ok };
+            return .{ .status = .internal_server_error };
         }
     };
 
-    try std.testing.expectError(error.NoSessionCookie, login(allocator, "http://localhost:9117", "", mock.exec));
+    try std.testing.expectError(error.HttpError, login(allocator, "http://localhost:9117", "wrongpass", mock.exec));
 }
 
 var test_observed_cookie_header: bool = false;

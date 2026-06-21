@@ -117,6 +117,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "config", .module = config_mod },
         .{ .name = "http_exec", .module = http_exec_mod },
         .{ .name = "url_encode", .module = url_encode_mod },
+        .{ .name = "debug_log", .module = debug_log_mod },
     });
     addImports(superseedr_mod, &.{
         .{ .name = "debug_log", .module = debug_log_mod },
@@ -210,6 +211,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "config", .module = config_mod },
         .{ .name = "http_exec", .module = http_exec_mod },
         .{ .name = "url_encode", .module = url_encode_mod },
+        .{ .name = "debug_log", .module = debug_log_mod },
     });
 
     const jackett_tests = addModuleTest(b, "test-jackett", "src/jackett/client.zig", target, optimize, strip);
@@ -294,6 +296,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "config", .module = config_mod },
         .{ .name = "http_exec", .module = http_exec_mod },
         .{ .name = "url_encode", .module = url_encode_mod },
+        .{ .name = "debug_log", .module = debug_log_mod },
     });
     addImports(app_tests.artifact.root_module, &.{
         .{ .name = "config", .module = config_mod },
