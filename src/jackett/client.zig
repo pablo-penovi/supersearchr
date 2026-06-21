@@ -750,6 +750,7 @@ const SearchBatchQueue = struct {
     mutex: std.Io.Mutex = std.Io.Mutex.init,
     batches: std.ArrayList(SearchBatch) = .empty,
     failed_indexers: std.ArrayList([]const u8) = .empty,
+    succeeded_indexers: std.ArrayList([]const u8) = .empty,
     first_error: ?JackettError = null,
     failures: usize = 0,
 
@@ -781,6 +782,16 @@ const SearchBatchQueue = struct {
         };
     }
 
+    fn recordSuccess(self: *SearchBatchQueue, indexer_id: []const u8) void {
+        const io = compat.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        const id_copy = self.allocator.dupe(u8, indexer_id) catch return;
+        self.succeeded_indexers.append(self.allocator, id_copy) catch {
+            self.allocator.free(id_copy);
+        };
+    }
+
     fn setFatal(self: *SearchBatchQueue, err: JackettError) void {
         const io = compat.io();
         self.mutex.lockUncancelable(io);
@@ -804,6 +815,10 @@ const SearchBatchQueue = struct {
             self.allocator.free(name);
         }
         self.failed_indexers.deinit(self.allocator);
+        for (self.succeeded_indexers.items) |name| {
+            self.allocator.free(name);
+        }
+        self.succeeded_indexers.deinit(self.allocator);
     }
 };
 
@@ -1027,7 +1042,10 @@ fn streamingSearchWorker(ctx: *StreamingSearchContext) void {
         searchSingleIndexerStreaming(ctx, id) catch |err| {
             ctx.queue.recordFailure(err, id);
             ctx.progress.recordFailed();
+            ctx.progress.recordCompleted();
+            continue;
         };
+        ctx.queue.recordSuccess(id);
         ctx.progress.recordCompleted();
     }
 }
@@ -1654,6 +1672,11 @@ test "streaming search keeps successful results when one indexer fails" {
     const snapshot = session.snapshot();
     try std.testing.expectEqual(@as(usize, 2), snapshot.completed);
     try std.testing.expectEqual(@as(usize, 1), snapshot.failed);
+
+    try std.testing.expectEqual(@as(usize, 1), session.queue.succeeded_indexers.items.len);
+    try std.testing.expectEqualStrings("ok", session.queue.succeeded_indexers.items[0]);
+    try std.testing.expectEqual(@as(usize, 1), session.queue.failed_indexers.items.len);
+    try std.testing.expectEqualStrings("bad", session.queue.failed_indexers.items[0]);
 }
 
 test "streaming search reports discovery failure as fatal" {
