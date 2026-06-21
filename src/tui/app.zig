@@ -433,6 +433,9 @@ fn deinitIndexersState(app: *App, indexers_state: *IndexersState) void {
 }
 
 fn runIndexersState(app: *App, indexers_state: *IndexersState) !void {
+    if (!builtin.is_test) term.hideCursor();
+    defer if (!builtin.is_test) term.showCursor();
+
     var widget = indexers_widget.IndexersWidget.init(app.allocator);
     defer widget.deinit();
 
@@ -1509,6 +1512,7 @@ test "saveIndexerChanges marks rows saved on success and failed on failure" {
         .{ .id = "good", .name = "Good Indexer", .configured = true },
         .{ .id = "bad", .name = "Bad Indexer", .configured = true },
     });
+    // Both are enabled, so setIndexers sorts them alphabetically: Bad Indexer, then Good Indexer.
     widget.rows[0].pending_active = false;
     widget.rows[1].pending_active = false;
 
@@ -1518,12 +1522,12 @@ test "saveIndexerChanges marks rows saved on success and failed on failure" {
     var failed_names = try saveIndexerChanges(&app, &widget, &session);
     defer failed_names.deinit(std.testing.allocator);
 
-    try std.testing.expect(widget.rows[0].pending_active == null);
-    try std.testing.expect(!widget.rows[0].saved_active);
-    try std.testing.expect(widget.rows[0].save_state == .none);
+    try std.testing.expect(widget.rows[0].pending_active != null);
+    try std.testing.expect(widget.rows[0].save_state == .failed);
 
-    try std.testing.expect(widget.rows[1].pending_active != null);
-    try std.testing.expect(widget.rows[1].save_state == .failed);
+    try std.testing.expect(widget.rows[1].pending_active == null);
+    try std.testing.expect(!widget.rows[1].saved_active);
+    try std.testing.expect(widget.rows[1].save_state == .none);
 
     try std.testing.expectEqual(@as(usize, 1), failed_names.items.len);
     try std.testing.expectEqualStrings("Bad Indexer", failed_names.items[0]);

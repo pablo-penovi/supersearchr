@@ -82,6 +82,8 @@ pub const IndexersWidget = struct {
             });
         }
 
+        std.mem.sort(Row, new_rows.items, {}, lessThanRow);
+
         self.freeRows();
         self.rows = try new_rows.toOwnedSlice(self.allocator);
         self.cursor = 0;
@@ -101,6 +103,7 @@ pub const IndexersWidget = struct {
             row.pending_active = null;
             row.save_state = .none;
         }
+        self.sortRows();
         self.force_full_redraw = true;
     }
 
@@ -127,7 +130,12 @@ pub const IndexersWidget = struct {
             row.pending_active = next;
         }
         row.save_state = .none;
-        self.force_selected_redraw = true;
+        self.sortRows();
+        self.force_full_redraw = true;
+    }
+
+    fn sortRows(self: *IndexersWidget) void {
+        std.mem.sort(Row, self.rows, {}, lessThanRow);
     }
 
     pub fn handleEvent(self: *IndexersWidget, event: term.Event) IndexersAction {
@@ -261,6 +269,13 @@ pub const IndexersWidget = struct {
         self.last_snapshot = snapshot;
     }
 };
+
+fn lessThanRow(_: void, a: IndexersWidget.Row, b: IndexersWidget.Row) bool {
+    const a_active = a.pending_active orelse a.saved_active;
+    const b_active = b.pending_active orelse b.saved_active;
+    if (a_active != b_active) return a_active;
+    return std.ascii.lessThanIgnoreCase(a.name, b.name);
+}
 
 const RenderSnapshot = list_nav.BaseSnapshot;
 
@@ -550,19 +565,35 @@ fn testSources() []const IndexersWidget.SourceRow {
     };
 }
 
-test "setIndexers populates rows from configured state" {
+fn reorderTestSources() []const IndexersWidget.SourceRow {
+    return &.{
+        .{ .id = "alpha", .name = "Alpha", .configured = true },
+        .{ .id = "zeta", .name = "Zeta", .configured = true },
+        .{ .id = "mike", .name = "Mike", .configured = false },
+    };
+}
+
+fn findRowIndex(widget: *const IndexersWidget, id: []const u8) usize {
+    for (widget.rows, 0..) |row, idx| {
+        if (std.mem.eql(u8, row.id, id)) return idx;
+    }
+    unreachable;
+}
+
+test "setIndexers sorts rows: enabled group alphabetically, then disabled group alphabetically" {
     var widget = IndexersWidget.init(std.testing.allocator);
     defer widget.deinit();
 
     try widget.setIndexers(testSources());
 
     try std.testing.expectEqual(@as(usize, 3), widget.rows.len);
-    try std.testing.expectEqualStrings("1337x", widget.rows[0].id);
     try std.testing.expectEqualStrings("1337x", widget.rows[0].name);
     try std.testing.expect(widget.rows[0].saved_active);
     try std.testing.expect(widget.rows[0].pending_active == null);
-    try std.testing.expectEqualStrings("The Pirate Bay", widget.rows[1].name);
-    try std.testing.expect(!widget.rows[1].saved_active);
+    try std.testing.expectEqualStrings("LinuxTracker", widget.rows[1].name);
+    try std.testing.expect(widget.rows[1].saved_active);
+    try std.testing.expectEqualStrings("The Pirate Bay", widget.rows[2].name);
+    try std.testing.expect(!widget.rows[2].saved_active);
     try std.testing.expectEqual(@as(usize, 0), widget.cursor);
     try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
 }
@@ -572,25 +603,64 @@ test "toggleCursorRow sets pending to opposite of saved, toggling back clears pe
     defer widget.deinit();
     try widget.setIndexers(testSources());
 
+    widget.cursor = findRowIndex(&widget, "1337x");
     widget.toggleCursorRow();
-    try std.testing.expect(widget.rows[0].pending_active != null);
-    try std.testing.expect(!widget.rows[0].pending_active.?);
 
+    const after_first = findRowIndex(&widget, "1337x");
+    try std.testing.expect(widget.rows[after_first].pending_active != null);
+    try std.testing.expect(!widget.rows[after_first].pending_active.?);
+
+    widget.cursor = after_first;
     widget.toggleCursorRow();
-    try std.testing.expect(widget.rows[0].pending_active == null);
+
+    try std.testing.expect(widget.rows[findRowIndex(&widget, "1337x")].pending_active == null);
 }
 
-test "handleEvent Space toggles only the cursor row" {
+test "handleEvent Space toggles only the targeted row" {
     var widget = IndexersWidget.init(std.testing.allocator);
     defer widget.deinit();
     try widget.setIndexers(testSources());
-    widget.cursor = 1;
+    widget.cursor = findRowIndex(&widget, "tpb");
 
     const action = widget.handleEvent(.{ .key = .char, .value = ' ' });
     try std.testing.expectEqual(IndexersWidget.IndexersAction.continue_browsing, action);
+    try std.testing.expect(widget.rows[findRowIndex(&widget, "tpb")].pending_active != null);
+    try std.testing.expect(widget.rows[findRowIndex(&widget, "1337x")].pending_active == null);
+    try std.testing.expect(widget.rows[findRowIndex(&widget, "linuxtracker")].pending_active == null);
+}
+
+test "toggleCursorRow inserts a newly enabled row into alphabetical order within the enabled group" {
+    var widget = IndexersWidget.init(std.testing.allocator);
+    defer widget.deinit();
+    try widget.setIndexers(reorderTestSources());
+
+    try std.testing.expectEqualStrings("Alpha", widget.rows[0].name);
+    try std.testing.expectEqualStrings("Zeta", widget.rows[1].name);
+    try std.testing.expectEqualStrings("Mike", widget.rows[2].name);
+
+    widget.cursor = findRowIndex(&widget, "mike");
+    widget.toggleCursorRow();
+
+    try std.testing.expectEqualStrings("Alpha", widget.rows[0].name);
+    try std.testing.expectEqualStrings("Mike", widget.rows[1].name);
+    try std.testing.expectEqualStrings("Zeta", widget.rows[2].name);
     try std.testing.expect(widget.rows[1].pending_active != null);
-    try std.testing.expect(widget.rows[0].pending_active == null);
-    try std.testing.expect(widget.rows[2].pending_active == null);
+    try std.testing.expect(widget.rows[1].pending_active.?);
+}
+
+test "toggleCursorRow moves a disabled row back into alphabetical order within the disabled group" {
+    var widget = IndexersWidget.init(std.testing.allocator);
+    defer widget.deinit();
+    try widget.setIndexers(reorderTestSources());
+
+    widget.cursor = findRowIndex(&widget, "alpha");
+    widget.toggleCursorRow();
+
+    try std.testing.expectEqualStrings("Zeta", widget.rows[0].name);
+    try std.testing.expectEqualStrings("Alpha", widget.rows[1].name);
+    try std.testing.expectEqualStrings("Mike", widget.rows[2].name);
+    try std.testing.expect(widget.rows[1].pending_active != null);
+    try std.testing.expect(!widget.rows[1].pending_active.?);
 }
 
 test "handleEvent moves cursor with arrows and shift+arrows" {
@@ -651,12 +721,14 @@ test "markSaved clears pending and updates saved_active" {
     defer widget.deinit();
     try widget.setIndexers(testSources());
 
+    widget.cursor = findRowIndex(&widget, "1337x");
     widget.toggleCursorRow();
-    widget.markSaved(0);
+    const idx = findRowIndex(&widget, "1337x");
+    widget.markSaved(idx);
 
-    try std.testing.expect(!widget.rows[0].saved_active);
-    try std.testing.expect(widget.rows[0].pending_active == null);
-    try std.testing.expect(widget.rows[0].save_state == .none);
+    try std.testing.expect(!widget.rows[idx].saved_active);
+    try std.testing.expect(widget.rows[idx].pending_active == null);
+    try std.testing.expect(widget.rows[idx].save_state == .none);
 }
 
 test "markFailed sets save_state and leaves pending_active untouched for retry" {
@@ -664,23 +736,25 @@ test "markFailed sets save_state and leaves pending_active untouched for retry" 
     defer widget.deinit();
     try widget.setIndexers(testSources());
 
+    widget.cursor = findRowIndex(&widget, "1337x");
     widget.toggleCursorRow();
-    widget.markFailed(0);
+    const idx = findRowIndex(&widget, "1337x");
+    widget.markFailed(idx);
 
-    try std.testing.expect(widget.rows[0].save_state == .failed);
-    try std.testing.expect(widget.rows[0].pending_active != null);
+    try std.testing.expect(widget.rows[idx].save_state == .failed);
+    try std.testing.expect(widget.rows[idx].pending_active != null);
 }
 
-test "revertPending clears all pending changes and failure markers" {
+test "revertPending clears all pending changes and failure markers, restoring saved-state order" {
     var widget = IndexersWidget.init(std.testing.allocator);
     defer widget.deinit();
-    try widget.setIndexers(testSources());
+    try widget.setIndexers(reorderTestSources());
 
-    widget.cursor = 0;
+    widget.cursor = findRowIndex(&widget, "mike");
     widget.toggleCursorRow();
-    widget.cursor = 1;
+    widget.cursor = findRowIndex(&widget, "alpha");
     widget.toggleCursorRow();
-    widget.rows[1].save_state = .failed;
+    widget.rows[findRowIndex(&widget, "mike")].save_state = .failed;
 
     widget.revertPending();
 
@@ -688,6 +762,9 @@ test "revertPending clears all pending changes and failure markers" {
         try std.testing.expect(row.pending_active == null);
         try std.testing.expect(row.save_state == .none);
     }
+    try std.testing.expectEqualStrings("Alpha", widget.rows[0].name);
+    try std.testing.expectEqualStrings("Zeta", widget.rows[1].name);
+    try std.testing.expectEqualStrings("Mike", widget.rows[2].name);
 }
 
 test "hasPendingChanges reflects toggled rows" {

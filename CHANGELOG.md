@@ -10,9 +10,13 @@ All notable changes to this project are documented in this file.
 - Added an F1 indexers management screen for viewing Jackett indexers, toggling them active/inactive, and saving changes through Jackett's admin API while caching disabled indexer configs for later re-enable.
 - Added `jackettAdminPassword` as an optional config field for Jackett instances that protect the admin API with a password.
 
+### Changed
+- The indexers screen now groups enabled indexers together at the top, sorted alphabetically, with disabled indexers sorted alphabetically below. Toggling an indexer's active state live-moves it into its new alphabetical position within the corresponding group (shown in the existing pending-change color until saved); reverting restores the original saved-state ordering.
+
 ### Fixed
 - Fixed the list-search overlay's error handler in `src/tui/app.zig` matching nonexistent error names (`ResponseEmpty`, `XmlParsingFailed`) instead of the real `jackett.JackettError` variants, which caused real failures (e.g. parse errors, HTTP errors) to surface as a generic "Unexpected error in search overlay" message. It now reuses the existing exhaustive `getErrorMessage` mapping.
 - Fixed an unbounded buffer write in `padTitle` in `src/tui/widgets/results.zig` that could overflow its destination buffer when padding a selected, search-highlighted row with a wide marquee-truncated title.
+- Fixed the indexers management screen leaving the terminal's text cursor visible instead of hidden, unlike the search and results screens.
 
 ### Removed
 - Removed unused dead code from the project:
