@@ -7,6 +7,7 @@ pub const Config = struct {
     api_url: []const u8,
     api_port: u16,
     terminal: []const u8,
+    jackett_admin_password: []const u8,
 };
 
 pub fn loadConfig(allocator: std.mem.Allocator) !Config {
@@ -45,14 +46,15 @@ fn createConfigFile(config_path: []const u8) !void {
     const io = compat.io();
     try std.Io.Dir.cwd().createDirPath(io, config_dir);
 
-    var placeholder_buf: [256]u8 = undefined;
+    var placeholder_buf: [320]u8 = undefined;
     const placeholder = try std.fmt.bufPrint(
         &placeholder_buf,
         \\{{
         \\  "apiKey": "YOUR_JACKETT_API_KEY",
         \\  "apiUrl": "YOUR_JACKET_URL",
         \\  "apiPort": 9117,
-        \\  "terminal": "{s}"
+        \\  "terminal": "{s}",
+        \\  "jackettAdminPassword": ""
         \\}}
     ,
         .{defaultTerminal()},
@@ -63,10 +65,10 @@ fn createConfigFile(config_path: []const u8) !void {
 
     try compat.writeFileAll(file, placeholder);
 
-    std.debug.print("Config created at {s}. Please add your Jackett API key, URL and port.\n", .{config_path});
+    std.debug.print("Config created at {s}. Please add your Jackett API key, URL and port. If your Jackett instance has an admin password set, also fill in jackettAdminPassword to enable the indexers management screen.\n", .{config_path});
 }
 
-fn getConfigDir(allocator: std.mem.Allocator) ![]const u8 {
+pub fn getConfigDir(allocator: std.mem.Allocator) ![]const u8 {
     switch (builtin.os.tag) {
         .windows => {
             if (compat.getEnvVarOwned(allocator, "LOCALAPPDATA")) |value| {
@@ -128,6 +130,11 @@ fn patchMissingDefaults(
         did_patch = true;
     }
 
+    if (config_obj.get("jackettAdminPassword") == null) {
+        try config_obj.put(parsed.arena.allocator(), "jackettAdminPassword", .{ .string = "" });
+        did_patch = true;
+    }
+
     if (!did_patch) return null;
 
     const patched = try std.json.Stringify.valueAlloc(allocator, parsed.value, .{ .whitespace = .indent_2 });
@@ -181,6 +188,12 @@ fn parseConfig(allocator: std.mem.Allocator, contents: []const u8) !Config {
         else => return error.InvalidTerminal,
     };
 
+    const jackett_admin_password_value = obj.get("jackettAdminPassword");
+    const jackett_admin_password_str = if (jackett_admin_password_value) |v| switch (v) {
+        .string => |s| s,
+        else => return error.InvalidJackettAdminPassword,
+    } else "";
+
     if (api_key_str.len == 0 or std.mem.eql(u8, api_key_str, "YOUR_JACKETT_API_KEY")) {
         return error.EmptyApiKey;
     }
@@ -205,6 +218,7 @@ fn parseConfig(allocator: std.mem.Allocator, contents: []const u8) !Config {
         .api_url = try allocator.dupe(u8, api_url_str),
         .api_port = @intCast(api_port_num),
         .terminal = try allocator.dupe(u8, terminal_str),
+        .jackett_admin_password = try allocator.dupe(u8, jackett_admin_password_str),
     };
 }
 
@@ -216,7 +230,8 @@ test "parse valid config JSON" {
         \\  "apiKey": "test_api_key",
         \\  "apiUrl": "http://localhost",
         \\  "apiPort": 9117,
-        \\  "terminal": "ghostty"
+        \\  "terminal": "ghostty",
+        \\  "jackettAdminPassword": "secret123"
         \\}
     ;
 
@@ -225,12 +240,37 @@ test "parse valid config JSON" {
         allocator.free(config.api_key);
         allocator.free(config.api_url);
         allocator.free(config.terminal);
+        allocator.free(config.jackett_admin_password);
     }
 
     try std.testing.expectEqualStrings("test_api_key", config.api_key);
     try std.testing.expectEqualStrings("http://localhost", config.api_url);
     try std.testing.expectEqual(@as(u16, 9117), config.api_port);
     try std.testing.expectEqualStrings("ghostty", config.terminal);
+    try std.testing.expectEqualStrings("secret123", config.jackett_admin_password);
+}
+
+test "missing jackettAdminPassword defaults to empty string" {
+    const allocator = std.testing.allocator;
+
+    const json_no_admin_password =
+        \\{
+        \\  "apiKey": "test_api_key",
+        \\  "apiUrl": "http://localhost",
+        \\  "apiPort": 9117,
+        \\  "terminal": "ghostty"
+        \\}
+    ;
+
+    const config = try parseConfig(allocator, json_no_admin_password);
+    defer {
+        allocator.free(config.api_key);
+        allocator.free(config.api_url);
+        allocator.free(config.terminal);
+        allocator.free(config.jackett_admin_password);
+    }
+
+    try std.testing.expectEqual(@as(usize, 0), config.jackett_admin_password.len);
 }
 
 test "missing apiKey returns error" {
@@ -406,4 +446,5 @@ test "patchMissingDefaults adds terminal by mutating object and reserializing" {
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, patched.?, .{});
     defer parsed.deinit();
     try std.testing.expect(parsed.value.object.get("terminal") != null);
+    try std.testing.expect(parsed.value.object.get("jackettAdminPassword") != null);
 }

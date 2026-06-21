@@ -13,6 +13,7 @@ pub const Key = enum {
     arrow_right,
     shift_arrow_up,
     shift_arrow_down,
+    f1,
     digit,
     char,
     tab,
@@ -185,6 +186,9 @@ fn classifyEscapeSequence(seq: []const u8) Event {
     // Shift+arrow: \x1b[1;2A (shift+up), \x1b[1;2B (shift+down)
     if (std.mem.eql(u8, seq, "[1;2A")) return Event{ .key = .shift_arrow_up, .value = 0 };
     if (std.mem.eql(u8, seq, "[1;2B")) return Event{ .key = .shift_arrow_down, .value = 0 };
+    // F1: \x1bOP (SS3, most xterm-like terminals) or \x1b[11~ (older/rxvt-style)
+    if (std.mem.eql(u8, seq, "OP")) return Event{ .key = .f1, .value = 0 };
+    if (std.mem.eql(u8, seq, "[11~")) return Event{ .key = .f1, .value = 0 };
     // Shift+backspace variants
     if (std.mem.eql(u8, seq, "[127;2u") or
         std.mem.eql(u8, seq, "[8;2u") or
@@ -539,6 +543,14 @@ test "endsEscapeSequence waits for CSI final byte" {
 
 test "endsEscapeSequence treats alt key suffix as complete sequence" {
     try std.testing.expect(endsEscapeSequence("x"));
+}
+
+test "classifyEscapeSequence recognizes F1 in both SS3 and CSI forms" {
+    const ss3 = classifyEscapeSequence("OP");
+    try std.testing.expectEqual(Key.f1, ss3.key);
+
+    const csi = classifyEscapeSequence("[11~");
+    try std.testing.expectEqual(Key.f1, csi.key);
 }
 
 test "256 color fg escape code" {

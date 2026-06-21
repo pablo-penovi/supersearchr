@@ -2,6 +2,8 @@ const std = @import("std");
 const Torrent = @import("torrent").Torrent;
 const debug_log = @import("debug_log");
 const compat = @import("compat");
+const http_exec = @import("http_exec");
+const url_encode = @import("url_encode");
 
 pub const JackettError = error{
     InvalidUrl,
@@ -695,110 +697,26 @@ pub fn defaultLinkFetchExecutor(allocator: std.mem.Allocator, url: []const u8) L
 }
 
 pub fn defaultBodyExecutor(allocator: std.mem.Allocator, url: []const u8) JackettError![]u8 {
-    var http_client = std.http.Client{ .allocator = allocator, .io = compat.io() };
-    defer http_client.deinit();
+    const raw = try http_exec.execute(allocator, url, .{}, "jackett");
+    defer http_exec.freeHeaderPairs(allocator, raw.response_headers);
 
-    const uri = std.Uri.parse(url) catch |err| {
-        debug_log.writef(
-            allocator,
-            "jackett",
-            "Failed to parse Jackett URL err={s} url=\"{s}\"",
-            .{ @errorName(err), url },
-        );
-        return error.InvalidUrl;
-    };
-    var request = http_client.request(.GET, uri, .{}) catch |err| {
-        debug_log.writef(
-            allocator,
-            "jackett",
-            "Failed to create Jackett request err={s} url=\"{s}\"",
-            .{ @errorName(err), url },
-        );
-        return mapAnyToJackettError(err, error.RequestCreateFailed);
-    };
-    defer request.deinit();
-
-    request.sendBodiless() catch |err| {
-        debug_log.writef(
-            allocator,
-            "jackett",
-            "Failed to send Jackett request err={s} url=\"{s}\"",
-            .{ @errorName(err), url },
-        );
-        return mapAnyToJackettError(err, error.RequestSendFailed);
-    };
-    var header_buf: [1024]u8 = undefined;
-    var response = request.receiveHead(&header_buf) catch |err| {
-        debug_log.writef(
-            allocator,
-            "jackett",
-            "Failed to receive Jackett response head err={s} url=\"{s}\"",
-            .{ @errorName(err), url },
-        );
-        return mapAnyToJackettError(err, error.ResponseHeadReadFailed);
-    };
-
-    const status = response.head.status;
-    if (status != .ok) {
+    if (raw.status != .ok) {
         debug_log.writef(
             allocator,
             "jackett",
             "Jackett returned non-OK status status={s} url=\"{s}\"",
-            .{ @tagName(status), url },
+            .{ @tagName(raw.status), url },
         );
+        allocator.free(raw.body);
         return error.HttpError;
     }
 
-    const decompress_buffer: []u8 = switch (response.head.content_encoding) {
-        .identity => &.{},
-        .zstd => allocator.alloc(u8, std.compress.zstd.default_window_len) catch |err| {
-            debug_log.writef(
-                allocator,
-                "jackett",
-                "Failed to allocate Jackett decompression buffer err={s} url=\"{s}\"",
-                .{ @errorName(err), url },
-            );
-            return error.OutOfMemory;
-        },
-        .deflate, .gzip => allocator.alloc(u8, std.compress.flate.max_window_len) catch |err| {
-            debug_log.writef(
-                allocator,
-                "jackett",
-                "Failed to allocate Jackett decompression buffer err={s} url=\"{s}\"",
-                .{ @errorName(err), url },
-            );
-            return error.OutOfMemory;
-        },
-        .compress => {
-            debug_log.writef(
-                allocator,
-                "jackett",
-                "Jackett returned unsupported content encoding url=\"{s}\"",
-                .{url},
-            );
-            return error.ResponseReadFailed;
-        },
-    };
-    defer if (decompress_buffer.len != 0) allocator.free(decompress_buffer);
-
-    var read_buf: [4096]u8 = undefined;
-    var decompress: std.http.Decompress = undefined;
-    const reader = response.readerDecompressing(&read_buf, &decompress, decompress_buffer);
-    const body = reader.allocRemaining(allocator, .unlimited) catch |err| {
-        debug_log.writef(
-            allocator,
-            "jackett",
-            "Failed to read Jackett response body err={s} url=\"{s}\"",
-            .{ @errorName(err), url },
-        );
-        return mapAnyToJackettError(err, error.ResponseReadFailed);
-    };
-
-    return body;
+    return raw.body;
 }
 
 pub const Indexer = struct {
     id: []u8,
+    name: []u8,
 };
 
 pub const SearchBatch = struct {
@@ -1024,24 +942,6 @@ pub const Client = struct {
     }
 };
 
-fn percentEncode(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
-    var result: std.ArrayList(u8) = .empty;
-    errdefer result.deinit(allocator);
-    for (raw) |c| {
-        switch (c) {
-            'A'...'Z', 'a'...'z', '0'...'9', '-', '_', '.', '~' => {
-                try result.append(allocator, c);
-            },
-            else => {
-                var buf: [3]u8 = undefined;
-                const encoded = std.fmt.bufPrint(&buf, "%{X:0>2}", .{c}) catch unreachable;
-                try result.appendSlice(allocator, encoded);
-            },
-        }
-    }
-    return result.toOwnedSlice(allocator);
-}
-
 fn streamingCoordinator(session: *SearchSession) void {
     const allocator = session.allocator();
     session.progress.setPhase(.discovering);
@@ -1069,7 +969,7 @@ fn streamingCoordinator(session: *SearchSession) void {
         return;
     }
 
-    const encoded_query = percentEncode(allocator, session.query) catch {
+    const encoded_query = url_encode.percentEncode(allocator, session.query) catch {
         session.queue.setFatal(error.OutOfMemory);
         session.fatal_discovery_error.store(true, .release);
         session.progress.setPhase(.done);
@@ -1133,7 +1033,7 @@ fn streamingSearchWorker(ctx: *StreamingSearchContext) void {
 }
 
 fn searchSingleIndexerStreaming(ctx: *StreamingSearchContext, indexer_id: []const u8) JackettError!void {
-    const encoded_indexer = try percentEncode(ctx.allocator, indexer_id);
+    const encoded_indexer = try url_encode.percentEncode(ctx.allocator, indexer_id);
     defer ctx.allocator.free(encoded_indexer);
 
     const url = if (ctx.skip_cache)
@@ -1191,6 +1091,7 @@ fn parseIndexers(allocator: std.mem.Allocator, xml: []const u8) ![]Indexer {
     errdefer {
         for (indexers.items) |indexer| {
             allocator.free(indexer.id);
+            allocator.free(indexer.name);
         }
         indexers.deinit(allocator);
     }
@@ -1214,12 +1115,26 @@ fn parseIndexers(allocator: std.mem.Allocator, xml: []const u8) ![]Indexer {
             continue;
         };
 
+        const end_pos = std.mem.indexOfPos(u8, xml, tag_end + 1, xml_tags.indexer_end);
+        const block_end = end_pos orelse xml.len;
+
+        const name = name_blk: {
+            const title_pos = std.mem.indexOfPos(u8, xml, tag_end + 1, xml_tags.title) orelse
+                break :name_blk try allocator.dupe(u8, xml[id_start..id_end]);
+            if (title_pos >= block_end) break :name_blk try allocator.dupe(u8, xml[id_start..id_end]);
+            const value_start = title_pos + xml_tags.title.len;
+            const value_end = @min(std.mem.indexOfScalarPos(u8, xml, value_start, '<') orelse block_end, block_end);
+            break :name_blk try allocator.dupe(u8, xml[value_start..value_end]);
+        };
+        errdefer allocator.free(name);
+
         try indexers.append(allocator, .{
             .id = try allocator.dupe(u8, xml[id_start..id_end]),
+            .name = name,
         });
 
-        if (std.mem.indexOfPos(u8, xml, tag_end + 1, xml_tags.indexer_end)) |end_pos| {
-            i = end_pos + xml_tags.indexer_end.len;
+        if (end_pos) |pos| {
+            i = pos + xml_tags.indexer_end.len;
         } else {
             i = tag_end + 1;
         }
@@ -1231,6 +1146,7 @@ fn parseIndexers(allocator: std.mem.Allocator, xml: []const u8) ![]Indexer {
 fn freeIndexers(allocator: std.mem.Allocator, indexers: []Indexer) void {
     for (indexers) |indexer| {
         allocator.free(indexer.id);
+        allocator.free(indexer.name);
     }
     allocator.free(indexers);
 }
@@ -1532,7 +1448,22 @@ test "parse configured indexers from Jackett indexer response" {
 
     try std.testing.expectEqual(@as(usize, 2), indexers.len);
     try std.testing.expectEqualStrings("1337x", indexers[0].id);
+    try std.testing.expectEqualStrings("1337x", indexers[0].name);
     try std.testing.expectEqualStrings("thepiratebay", indexers[1].id);
+    try std.testing.expectEqualStrings("The Pirate Bay", indexers[1].name);
+}
+
+test "parse indexers falls back to id when title is missing" {
+    const allocator = std.testing.allocator;
+
+    const xml = "<indexers><indexer id=\"notitle\"></indexer></indexers>";
+
+    const indexers = try parseIndexers(allocator, xml);
+    defer freeIndexers(allocator, indexers);
+
+    try std.testing.expectEqual(@as(usize, 1), indexers.len);
+    try std.testing.expectEqualStrings("notitle", indexers[0].id);
+    try std.testing.expectEqualStrings("notitle", indexers[0].name);
 }
 
 fn gzipStoredBody(allocator: std.mem.Allocator, body: []const u8) ![]u8 {

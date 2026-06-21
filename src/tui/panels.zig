@@ -209,6 +209,10 @@ pub fn renderFailedIndexersOverlay(
 }
 
 fn drawFailedIndexersModal(failed_indexers: []const []const u8) void {
+    drawNamedListModal("Failed Indexers", theme.superseedr_like.err, failed_indexers, "Press any key to close");
+}
+
+fn drawNamedListModal(title: []const u8, title_color: u8, names: []const []const u8, footer_text: []const u8) void {
     const stdout = compat.stdoutWriter();
     const colors = theme.superseedr_like;
     const border = theme.unicode_border;
@@ -217,25 +221,27 @@ fn drawFailedIndexersModal(failed_indexers: []const []const u8) void {
     const is_compact = theme.isCompactViewport(size.rows, size.cols);
     if (is_compact) {
         term.moveCursor(1, 1);
-        term.setFg256(colors.err);
+        term.setFg256(title_color);
         term.setBold(true);
-        stdout.writeAll("Failed Indexers:\r\n") catch {};
+        var title_buf: [64]u8 = undefined;
+        const title_line = std.fmt.bufPrint(&title_buf, "{s}:\r\n", .{title}) catch "List:\r\n";
+        stdout.writeAll(title_line) catch {};
         term.setBold(false);
-        for (failed_indexers) |name| {
+        for (names) |name| {
             term.setFg256(colors.text);
             var item_buf: [128]u8 = undefined;
             const item_line = std.fmt.bufPrint(&item_buf, " • {s}\r\n", .{name}) catch name;
             stdout.writeAll(item_line) catch {};
         }
         term.setFg256(colors.accent);
-        stdout.writeAll("Press any key to close...") catch {};
+        stdout.writeAll(footer_text) catch {};
         term.resetColor();
         return;
     }
 
     const panel_width = @min(@as(usize, 50), @as(usize, @intCast(size.cols - 4)));
     const left_pad = (@as(usize, @intCast(size.cols)) - panel_width) / 2;
-    const panel_height = 5 + failed_indexers.len;
+    const panel_height = 5 + names.len;
     const top_pad = @max(@as(usize, 2), (@as(usize, @intCast(size.rows)) - panel_height) / 2);
     const panel_col = @as(u16, @intCast(left_pad + 1));
     const top_row = @as(u16, @intCast(top_pad));
@@ -248,10 +254,10 @@ fn drawFailedIndexersModal(failed_indexers: []const []const u8) void {
     term.moveCursor(top_row + 1, panel_col);
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
-    term.setFg256(colors.err);
+    term.setFg256(title_color);
     term.setBold(true);
     var title_buf: [64]u8 = undefined;
-    const title_line = std.fmt.bufPrint(&title_buf, " Failed Indexers ", .{}) catch " Failed Indexers ";
+    const title_line = std.fmt.bufPrint(&title_buf, " {s} ", .{title}) catch title;
     theme.writePadded(stdout, title_line, panel_width - 2) catch {};
     term.setBold(false);
     term.setFg256(colors.panel_border);
@@ -259,21 +265,23 @@ fn drawFailedIndexersModal(failed_indexers: []const []const u8) void {
     term.resetColor();
     stdout.writeAll("\r\n") catch {};
 
-    // List of failed indexers
-    for (failed_indexers, 0..) |name, idx| {
+    // List of names
+    for (names, 0..) |name, idx| {
         term.moveCursor(top_row + 2 + @as(u16, @intCast(idx)), panel_col);
         var item_buf: [128]u8 = undefined;
         const item_line = std.fmt.bufPrint(&item_buf, " • {s}", .{name}) catch name;
         theme.drawPanelRow(stdout, panel_width, item_line, border, colors) catch {};
     }
 
-    // Call-to-action close row
-    const footer_row = top_row + 2 + @as(u16, @intCast(failed_indexers.len));
+    // Footer row
+    const footer_row = top_row + 2 + @as(u16, @intCast(names.len));
     term.moveCursor(footer_row, panel_col);
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.setFg256(colors.accent); // Call-to-action color
-    theme.writePadded(stdout, " Press any key to close ", panel_width - 2) catch {};
+    var footer_buf: [64]u8 = undefined;
+    const footer_line = std.fmt.bufPrint(&footer_buf, " {s} ", .{footer_text}) catch footer_text;
+    theme.writePadded(stdout, footer_line, panel_width - 2) catch {};
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.resetColor();
@@ -282,6 +290,43 @@ fn drawFailedIndexersModal(failed_indexers: []const []const u8) void {
     // Bottom border
     term.moveCursor(footer_row + 1, panel_col);
     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
+}
+
+pub const SaveFailuresAction = enum { retry, revert };
+
+pub fn renderIndexerSaveFailuresOverlay(
+    term_rows: *u16,
+    term_cols: *u16,
+    refresh_terminal_size: RefreshTerminalSizeFn,
+    widget: anytype,
+    failed_names: []const []const u8,
+) SaveFailuresAction {
+    term.discardPendingInput();
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
+
+    while (true) {
+        if (refresh_terminal_size(term_rows, term_cols)) {
+            needs_render = true;
+        }
+
+        if (needs_render) {
+            term.setDimPersistent(true);
+            widget.force_full_redraw = true;
+            widget.render(term_rows.*, term_cols.*);
+            term.setDimPersistent(false);
+
+            drawNamedListModal("Failed to Save", theme.superseedr_like.err, failed_names, "ENTER retry failed | ESC revert all");
+            needs_render = false;
+        }
+
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return .revert;
+        if (maybe_event) |event| {
+            term.discardPendingInput();
+            if (event.key == .enter) return .retry;
+            if (event.key == .escape) return .revert;
+        }
+    }
 }
 
 pub fn renderExitConfirmationOverlay(

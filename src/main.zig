@@ -23,6 +23,7 @@ pub fn main() !void {
         gpa.allocator().free(cfg.api_key);
         gpa.allocator().free(cfg.api_url);
         gpa.allocator().free(cfg.terminal);
+        gpa.allocator().free(cfg.jackett_admin_password);
     }
 
     try app.run(gpa.allocator(), cfg);
