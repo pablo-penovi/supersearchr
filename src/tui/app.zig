@@ -470,18 +470,26 @@ fn runIndexersState(app: *App, indexers_state: *IndexersState) !void {
     var source_rows: std.ArrayList(indexers_widget.IndexersWidget.SourceRow) = .empty;
     defer source_rows.deinit(app.allocator);
     for (remote_indexers) |info| {
-        try source_rows.append(app.allocator, .{ .id = info.id, .name = info.name, .configured = info.configured });
+        try source_rows.append(app.allocator, .{ .id = info.id, .name = info.name, .configured = info.configured, .categories = info.categories });
     }
     try widget.setIndexers(source_rows.items);
 
     var needs_render = true;
     const input_poll_ms: i32 = 80;
+    const marquee_step_interval_ms: i64 = scaledMarqueeIntervalMs(input_poll_ms, 30);
+    var marquee_budget_ms: i64 = 0;
+    var last_loop_ms: i64 = compat.milliTimestamp();
 
     while (true) {
         if (refreshTerminalSize(app)) {
             widget.force_full_redraw = true;
             needs_render = true;
         }
+
+        const now_ms = compat.milliTimestamp();
+        const elapsed_ms = nonNegativeElapsedMs(last_loop_ms, now_ms);
+        last_loop_ms = now_ms;
+        marquee_budget_ms += elapsed_ms;
 
         if (needs_render) {
             widget.render(app.term_rows, app.term_cols);
@@ -493,7 +501,16 @@ fn runIndexersState(app: *App, indexers_state: *IndexersState) !void {
             app.state = .{ .err = .{ .message = "Failed to read input" } };
             return;
         };
-        const event = maybe_event orelse continue;
+
+        if (maybe_event == null) {
+            if (consumeMarqueeTick(&marquee_budget_ms, marquee_step_interval_ms)) {
+                if (widget.advanceMarquee(app.term_rows, app.term_cols)) {
+                    needs_render = true;
+                }
+            }
+            continue;
+        }
+        const event = maybe_event.?;
         const action = widget.handleEvent(event);
         needs_render = true;
 

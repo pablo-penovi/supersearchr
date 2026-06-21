@@ -60,6 +60,43 @@ pub const BaseSnapshot = struct {
     item_count: usize,
 };
 
+/// Bounces a marquee offset between 0 and max_offset, pausing for
+/// `hold_ticks` calls at each end before reversing direction. Returns true
+/// when the offset changed (caller should redraw).
+pub fn stepMarqueeState(
+    offset_cols: *usize,
+    moving_right: *bool,
+    edge_hold: *u8,
+    max_offset: usize,
+    hold_ticks: u8,
+) bool {
+    if (max_offset == 0) return false;
+
+    if (edge_hold.* > 0) {
+        edge_hold.* -= 1;
+        return false;
+    }
+
+    if (moving_right.*) {
+        if (offset_cols.* < max_offset) {
+            offset_cols.* += 1;
+            return true;
+        }
+        moving_right.* = false;
+        edge_hold.* = hold_ticks;
+        return false;
+    }
+
+    if (offset_cols.* > 0) {
+        offset_cols.* -= 1;
+        return true;
+    }
+
+    moving_right.* = true;
+    edge_hold.* = hold_ticks;
+    return false;
+}
+
 pub fn computeRedrawMode(
     has_drawn_once: bool,
     force_full_redraw: bool,
@@ -230,4 +267,35 @@ test "computeRedrawMode none when nothing changed" {
     const prev = testSnapshot();
     const current = testSnapshot();
     try std.testing.expectEqual(RenderMode.none, computeRedrawMode(true, false, false, prev, current, false, false));
+}
+
+test "stepMarqueeState bounces and flips direction" {
+    var offset: usize = 0;
+    var moving_right = true;
+    var hold: u8 = 0;
+    const max_offset: usize = 2;
+
+    try std.testing.expect(stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
+    try std.testing.expectEqual(@as(usize, 1), offset);
+    try std.testing.expectEqual(true, moving_right);
+
+    try std.testing.expect(stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
+    try std.testing.expectEqual(@as(usize, 2), offset);
+    try std.testing.expectEqual(true, moving_right);
+
+    try std.testing.expect(!stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
+    try std.testing.expectEqual(@as(usize, 2), offset);
+    try std.testing.expectEqual(false, moving_right);
+
+    try std.testing.expect(stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
+    try std.testing.expectEqual(@as(usize, 1), offset);
+    try std.testing.expectEqual(false, moving_right);
+
+    try std.testing.expect(stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
+    try std.testing.expectEqual(@as(usize, 0), offset);
+    try std.testing.expectEqual(false, moving_right);
+
+    try std.testing.expect(!stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
+    try std.testing.expectEqual(@as(usize, 0), offset);
+    try std.testing.expectEqual(true, moving_right);
 }

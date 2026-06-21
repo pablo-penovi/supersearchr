@@ -543,7 +543,7 @@ pub const ResultsWidget = struct {
             return true;
         }
 
-        if (stepMarqueeState(
+        if (list_nav.stepMarqueeState(
             &self.marquee_offset_cols,
             &self.marquee_moving_right,
             &self.marquee_edge_hold,
@@ -1124,40 +1124,6 @@ fn selectedTitleForRender(
     widget.ensureMarqueeTarget(title_col_width);
     const offset_cols = @min(widget.marquee_offset_cols, overflow);
     return theme.sliceByDisplayColumns(title, offset_cols, title_col_width, marquee_buf);
-}
-
-fn stepMarqueeState(
-    offset_cols: *usize,
-    moving_right: *bool,
-    edge_hold: *u8,
-    max_offset: usize,
-    hold_ticks: u8,
-) bool {
-    if (max_offset == 0) return false;
-
-    if (edge_hold.* > 0) {
-        edge_hold.* -= 1;
-        return false;
-    }
-
-    if (moving_right.*) {
-        if (offset_cols.* < max_offset) {
-            offset_cols.* += 1;
-            return true;
-        }
-        moving_right.* = false;
-        edge_hold.* = hold_ticks;
-        return false;
-    }
-
-    if (offset_cols.* > 0) {
-        offset_cols.* -= 1;
-        return true;
-    }
-
-    moving_right.* = true;
-    edge_hold.* = hold_ticks;
-    return false;
 }
 
 fn formatColumnHeader(
@@ -2344,37 +2310,6 @@ test "ResultsWidget advanceSpinner ticks frame correctly" {
     // 10th tick should wrap around to 0
     try std.testing.expect(widget.advanceSpinner());
     try std.testing.expectEqual(@as(usize, 0), widget.spinner_frame);
-}
-
-test "stepMarqueeState bounces and flips direction" {
-    var offset: usize = 0;
-    var moving_right = true;
-    var hold: u8 = 0;
-    const max_offset: usize = 2;
-
-    try std.testing.expect(stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
-    try std.testing.expectEqual(@as(usize, 1), offset);
-    try std.testing.expectEqual(true, moving_right);
-
-    try std.testing.expect(stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
-    try std.testing.expectEqual(@as(usize, 2), offset);
-    try std.testing.expectEqual(true, moving_right);
-
-    try std.testing.expect(!stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
-    try std.testing.expectEqual(@as(usize, 2), offset);
-    try std.testing.expectEqual(false, moving_right);
-
-    try std.testing.expect(stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
-    try std.testing.expectEqual(@as(usize, 1), offset);
-    try std.testing.expectEqual(false, moving_right);
-
-    try std.testing.expect(stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
-    try std.testing.expectEqual(@as(usize, 0), offset);
-    try std.testing.expectEqual(false, moving_right);
-
-    try std.testing.expect(!stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
-    try std.testing.expectEqual(@as(usize, 0), offset);
-    try std.testing.expectEqual(true, moving_right);
 }
 
 test "advanceMarquee does not animate when title fits" {

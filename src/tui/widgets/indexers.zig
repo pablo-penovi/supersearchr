@@ -14,16 +14,26 @@ pub const IndexersWidget = struct {
     force_full_redraw: bool,
     force_selected_redraw: bool,
     last_snapshot: ?RenderSnapshot,
+    marquee_offset_cols: usize,
+    marquee_moving_right: bool,
+    marquee_edge_hold: u8,
+    marquee_target_set: bool,
+    marquee_cursor: usize,
+    marquee_categories_col_width: usize,
+
+    const marquee_edge_hold_ticks: u8 = 2;
 
     pub const SourceRow = struct {
         id: []const u8,
         name: []const u8,
         configured: bool,
+        categories: []const u8 = "",
     };
 
     pub const Row = struct {
         id: []u8,
         name: []u8,
+        categories: []u8,
         saved_active: bool,
         pending_active: ?bool,
         save_state: enum { none, failed } = .none,
@@ -31,6 +41,7 @@ pub const IndexersWidget = struct {
         fn deinit(self: *Row, allocator: std.mem.Allocator) void {
             allocator.free(self.id);
             allocator.free(self.name);
+            allocator.free(self.categories);
             self.* = undefined;
         }
     };
@@ -53,6 +64,12 @@ pub const IndexersWidget = struct {
             .force_full_redraw = true,
             .force_selected_redraw = false,
             .last_snapshot = null,
+            .marquee_offset_cols = 0,
+            .marquee_moving_right = true,
+            .marquee_edge_hold = 0,
+            .marquee_target_set = false,
+            .marquee_cursor = 0,
+            .marquee_categories_col_width = 0,
         };
     }
 
@@ -76,6 +93,7 @@ pub const IndexersWidget = struct {
             try new_rows.append(self.allocator, .{
                 .id = try self.allocator.dupe(u8, info.id),
                 .name = try self.allocator.dupe(u8, info.name),
+                .categories = try self.allocator.dupe(u8, info.categories),
                 .saved_active = info.configured,
                 .pending_active = null,
                 .save_state = .none,
@@ -89,6 +107,7 @@ pub const IndexersWidget = struct {
         self.cursor = 0;
         self.scroll_offset = 0;
         self.force_full_redraw = true;
+        self.resetMarqueeState();
     }
 
     pub fn hasPendingChanges(self: *const IndexersWidget) bool {
@@ -136,6 +155,7 @@ pub const IndexersWidget = struct {
 
     fn sortRows(self: *IndexersWidget) void {
         std.mem.sort(Row, self.rows, {}, lessThanRow);
+        self.resetMarqueeState();
     }
 
     pub fn handleEvent(self: *IndexersWidget, event: term.Event) IndexersAction {
@@ -143,22 +163,28 @@ pub const IndexersWidget = struct {
             .arrow_down => {
                 if (list_nav.moveDown(&self.cursor, self.rows.len)) {
                     list_nav.adjustScroll(self.cursor, &self.scroll_offset, self.display_count);
+                    self.resetMarqueeState();
                 }
                 return .continue_browsing;
             },
             .arrow_up => {
                 if (list_nav.moveUp(&self.cursor)) {
                     list_nav.adjustScroll(self.cursor, &self.scroll_offset, self.display_count);
+                    self.resetMarqueeState();
                 }
                 return .continue_browsing;
             },
             .shift_arrow_down => {
-                _ = list_nav.movePageDown(&self.cursor, self.rows.len, self.display_count);
+                if (list_nav.movePageDown(&self.cursor, self.rows.len, self.display_count)) {
+                    self.resetMarqueeState();
+                }
                 list_nav.adjustScroll(self.cursor, &self.scroll_offset, self.display_count);
                 return .continue_browsing;
             },
             .shift_arrow_up => {
-                _ = list_nav.movePageUp(&self.cursor, self.display_count);
+                if (list_nav.movePageUp(&self.cursor, self.display_count)) {
+                    self.resetMarqueeState();
+                }
                 list_nav.adjustScroll(self.cursor, &self.scroll_offset, self.display_count);
                 return .continue_browsing;
             },
@@ -176,6 +202,66 @@ pub const IndexersWidget = struct {
             },
             else => return .continue_browsing,
         }
+    }
+
+    pub fn advanceMarquee(self: *IndexersWidget, max_rows: u16, max_cols: u16) bool {
+        if (self.rows.len == 0) return false;
+        if (self.cursor >= self.rows.len) return false;
+
+        const compact = theme.isCompactViewport(max_rows, max_cols);
+        if (compact) return false;
+
+        const panel_width = @as(usize, @intCast(max_cols - 2));
+        const inner_width = panel_width - 2;
+        const layout = TableLayout.forInnerWidth(inner_width);
+        if (layout.categories_col_width == 0) return false;
+
+        self.ensureMarqueeTarget(layout.categories_col_width);
+
+        const categories = self.rows[self.cursor].categories;
+        const categories_cols = theme.displayWidthOfText(categories);
+        if (categories_cols <= layout.categories_col_width) return false;
+
+        const overflow = categories_cols - layout.categories_col_width;
+        if (self.marquee_offset_cols > overflow) {
+            self.marquee_offset_cols = overflow;
+            self.force_selected_redraw = true;
+            return true;
+        }
+
+        if (list_nav.stepMarqueeState(
+            &self.marquee_offset_cols,
+            &self.marquee_moving_right,
+            &self.marquee_edge_hold,
+            overflow,
+            marquee_edge_hold_ticks,
+        )) {
+            self.force_selected_redraw = true;
+            return true;
+        }
+        return false;
+    }
+
+    fn ensureMarqueeTarget(self: *IndexersWidget, categories_col_width: usize) void {
+        if (self.marquee_target_set and self.marquee_cursor == self.cursor and self.marquee_categories_col_width == categories_col_width) {
+            return;
+        }
+        self.marquee_target_set = true;
+        self.marquee_cursor = self.cursor;
+        self.marquee_categories_col_width = categories_col_width;
+        self.marquee_offset_cols = 0;
+        self.marquee_moving_right = true;
+        self.marquee_edge_hold = marquee_edge_hold_ticks;
+    }
+
+    fn resetMarqueeState(self: *IndexersWidget) void {
+        self.marquee_target_set = false;
+        self.marquee_offset_cols = 0;
+        self.marquee_moving_right = true;
+        self.marquee_edge_hold = 0;
+        self.marquee_cursor = 0;
+        self.marquee_categories_col_width = 0;
+        self.force_selected_redraw = false;
     }
 
     pub fn render(self: *IndexersWidget, max_rows: u16, max_cols: u16) void {
@@ -281,29 +367,33 @@ const RenderSnapshot = list_nav.BaseSnapshot;
 
 const TableLayout = struct {
     name_col_width: usize,
+    categories_col_width: usize,
     active_col_width: usize,
-    name_to_active_gap: usize,
+    column_gap: usize,
 
     const fixed_active_width: usize = 8;
+    const fixed_categories_width: usize = 33;
     const fixed_gap: usize = 2;
     const fixed_left_padding: usize = 1;
     const fixed_right_padding: usize = 1;
 
     fn forInnerWidth(inner_width: usize) TableLayout {
-        const fixed_suffix = fixed_left_padding + fixed_gap + fixed_active_width + fixed_right_padding;
+        const fixed_suffix = fixed_left_padding + fixed_gap + fixed_categories_width + fixed_gap + fixed_active_width + fixed_right_padding;
         const name_width = if (inner_width > fixed_suffix) inner_width - fixed_suffix else 1;
         return .{
             .name_col_width = name_width,
+            .categories_col_width = fixed_categories_width,
             .active_col_width = fixed_active_width,
-            .name_to_active_gap = fixed_gap,
+            .column_gap = fixed_gap,
         };
     }
 
     fn compactFallback() TableLayout {
         return .{
             .name_col_width = 0,
+            .categories_col_width = 0,
             .active_col_width = fixed_active_width,
-            .name_to_active_gap = fixed_gap,
+            .column_gap = fixed_gap,
         };
     }
 };
@@ -347,11 +437,13 @@ fn writeHeaderCells(
     try stdout.writeAll(" ");
     term.setFg256(colors.muted);
     try theme.writePadded(stdout, "Indexer", layout.name_col_width);
-    try writeSpaces(stdout, layout.name_to_active_gap);
+    try writeSpaces(stdout, layout.column_gap);
+    try theme.writePadded(stdout, "Categories", layout.categories_col_width);
+    try writeSpaces(stdout, layout.column_gap);
     try theme.writePadded(stdout, "Active", layout.active_col_width);
     try stdout.writeAll(" ");
 
-    const used = 1 + layout.name_col_width + layout.name_to_active_gap + layout.active_col_width + 1;
+    const used = 1 + layout.name_col_width + layout.column_gap + layout.categories_col_width + layout.column_gap + layout.active_col_width + 1;
     if (used < inner_width) {
         try writeSpaces(stdout, inner_width - used);
     }
@@ -408,8 +500,15 @@ fn drawContentRow(
 
     const row = widget.rows[abs_idx];
     var cell_buf: [768]u8 = undefined;
+    var categories_trunc_buf: [512]u8 = undefined;
+    var categories_marquee_buf: [768]u8 = undefined;
     const active = row.pending_active orelse row.saved_active;
-    const content = buildDataCells(&cell_buf, inner_width, layout, row.name, active);
+    const shown_categories = if (row.categories.len == 0) "-" else row.categories;
+    const categories_cell = if (abs_idx == selected_idx)
+        selectedCategoriesForRender(widget, shown_categories, layout.categories_col_width, &categories_trunc_buf, &categories_marquee_buf)
+    else
+        theme.truncateWithEllipsis(shown_categories, layout.categories_col_width, &categories_trunc_buf);
+    const content = buildDataCells(&cell_buf, inner_width, layout, row.name, categories_cell, active);
 
     const is_selected = abs_idx == selected_idx;
     if (is_selected) {
@@ -430,11 +529,32 @@ fn drawContentRow(
     try stdout.writeAll("\r\n");
 }
 
+fn selectedCategoriesForRender(
+    widget: *IndexersWidget,
+    categories: []const u8,
+    categories_col_width: usize,
+    trunc_buf: []u8,
+    marquee_buf: []u8,
+) []const u8 {
+    if (categories_col_width == 0) return "";
+
+    const categories_cols = theme.displayWidthOfText(categories);
+    if (categories_cols <= categories_col_width) {
+        return theme.truncateWithEllipsis(categories, categories_col_width, trunc_buf);
+    }
+
+    const overflow = categories_cols - categories_col_width;
+    widget.ensureMarqueeTarget(categories_col_width);
+    const offset_cols = @min(widget.marquee_offset_cols, overflow);
+    return theme.sliceByDisplayColumns(categories, offset_cols, categories_col_width, marquee_buf);
+}
+
 fn buildDataCells(
     buf: []u8,
     inner_width: usize,
     layout: TableLayout,
     name: []const u8,
+    categories: []const u8,
     active: bool,
 ) []const u8 {
     var writer: std.Io.Writer = .fixed(buf);
@@ -443,7 +563,10 @@ fn buildDataCells(
     var name_buf: [512]u8 = undefined;
     const truncated_name = theme.truncateWithEllipsis(name, layout.name_col_width, &name_buf);
     theme.writePadded(&writer, truncated_name, layout.name_col_width) catch return "";
-    writeSpaces(&writer, layout.name_to_active_gap) catch return "";
+    writeSpaces(&writer, layout.column_gap) catch return "";
+
+    theme.writePadded(&writer, categories, layout.categories_col_width) catch return "";
+    writeSpaces(&writer, layout.column_gap) catch return "";
 
     const active_text = if (active) "\xe2\x9c\x93" else "\xe2\x9c\x97";
     writeCenterAligned(&writer, active_text, layout.active_col_width) catch return "";
@@ -523,6 +646,13 @@ fn drawCompact(
         const shown = theme.truncateWithEllipsis(row.name, compactNameWidth(max_cols), trunc_buf[0..]);
         stdout.writeAll(shown) catch {};
         stdout.writeAll(if (active) " [active]\r\n" else " [inactive]\r\n") catch {};
+        if (row.categories.len != 0) {
+            term.setFg256(colors.muted);
+            var cat_buf: [512]u8 = undefined;
+            const shown_categories = theme.truncateWithEllipsis(row.categories, compactNameWidth(max_cols), &cat_buf);
+            stdout.writeAll(shown_categories) catch {};
+            stdout.writeAll("\r\n") catch {};
+        }
         term.setFg256(colors.panel_title);
         var status_buf: [128]u8 = undefined;
         const status = formatStatusText(&status_buf, self.scroll_offset, @min(self.scroll_offset + self.display_count, self.rows.len), self.rows.len);
@@ -784,4 +914,62 @@ test "setIndexers replacing existing rows frees the old ones" {
     try widget.setIndexers(testSources()[0..1]);
 
     try std.testing.expectEqual(@as(usize, 1), widget.rows.len);
+}
+
+fn categoriesOverflowSources() []const IndexersWidget.SourceRow {
+    return &.{
+        .{ .id = "long", .name = "Long Categories Tracker", .configured = true, .categories = "Movies, TV, Audio, PC, Books, Console, Other, XXX, Documentary" },
+        .{ .id = "short", .name = "Short Categories Tracker", .configured = true, .categories = "Movies" },
+    };
+}
+
+test "advanceMarquee does not animate when categories fit the column" {
+    var widget = IndexersWidget.init(std.testing.allocator);
+    defer widget.deinit();
+    try widget.setIndexers(testSources());
+    widget.cursor = findRowIndex(&widget, "1337x");
+
+    try std.testing.expectEqual(false, widget.advanceMarquee(24, 120));
+    try std.testing.expectEqual(@as(usize, 0), widget.marquee_offset_cols);
+}
+
+test "advanceMarquee bounces categories offset back and forth when overflowing" {
+    var widget = IndexersWidget.init(std.testing.allocator);
+    defer widget.deinit();
+    try widget.setIndexers(categoriesOverflowSources());
+    widget.cursor = 0;
+
+    var advanced = false;
+    for (0..200) |_| {
+        if (widget.advanceMarquee(24, 80)) advanced = true;
+        if (widget.marquee_offset_cols > 0) break;
+    }
+    try std.testing.expect(advanced);
+    try std.testing.expect(widget.marquee_offset_cols > 0);
+
+    var saw_decrease = false;
+    var previous = widget.marquee_offset_cols;
+    for (0..400) |_| {
+        _ = widget.advanceMarquee(24, 80);
+        if (widget.marquee_offset_cols < previous) {
+            saw_decrease = true;
+            break;
+        }
+        previous = widget.marquee_offset_cols;
+    }
+    try std.testing.expect(saw_decrease);
+}
+
+test "moving the cursor resets the categories marquee" {
+    var widget = IndexersWidget.init(std.testing.allocator);
+    defer widget.deinit();
+    try widget.setIndexers(categoriesOverflowSources());
+    widget.cursor = 0;
+
+    for (0..10) |_| _ = widget.advanceMarquee(24, 80);
+    try std.testing.expect(widget.marquee_offset_cols > 0);
+
+    _ = widget.handleEvent(.{ .key = .arrow_down, .value = 0 });
+    try std.testing.expectEqual(@as(usize, 0), widget.marquee_offset_cols);
+    try std.testing.expectEqual(false, widget.marquee_target_set);
 }

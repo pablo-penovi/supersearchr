@@ -210,10 +210,12 @@ pub const IndexerInfo = struct {
     id: []u8,
     name: []u8,
     configured: bool,
+    categories: []u8,
 
     pub fn deinit(self: *IndexerInfo, allocator: std.mem.Allocator) void {
         allocator.free(self.id);
         allocator.free(self.name);
+        allocator.free(self.categories);
         self.* = undefined;
     }
 };
@@ -223,11 +225,54 @@ pub fn freeIndexerInfos(allocator: std.mem.Allocator, infos: []IndexerInfo) void
     allocator.free(infos);
 }
 
+const CapJson = struct {
+    ID: []const u8,
+    Name: []const u8,
+};
+
 const IndexerInfoJson = struct {
     id: []const u8,
     name: []const u8,
     configured: bool,
+    caps: []const CapJson = &.{},
 };
+
+/// Jackett assigns indexer-specific (Cardigann) categories IDs >= 100000,
+/// while the standard Torznab taxonomy (Movies, TV, Audio, ...) stays below
+/// 9000. Indexer-specific names are often non-English subcategories, so they
+/// are noisy for a summary column; only the standard top-level names are kept.
+const custom_category_id_floor: u32 = 100000;
+
+fn deriveCategories(allocator: std.mem.Allocator, caps: []const CapJson) ![]u8 {
+    var seen: std.ArrayList([]const u8) = .empty;
+    defer seen.deinit(allocator);
+    var list: std.ArrayList(u8) = .empty;
+    errdefer list.deinit(allocator);
+
+    for (caps) |cap| {
+        const id_num = std.fmt.parseInt(u32, cap.ID, 10) catch continue;
+        if (id_num >= custom_category_id_floor) continue;
+
+        const slash = std.mem.indexOfScalar(u8, cap.Name, '/') orelse cap.Name.len;
+        const top = std.mem.trim(u8, cap.Name[0..slash], " ");
+        if (top.len == 0) continue;
+
+        var already_seen = false;
+        for (seen.items) |s| {
+            if (std.mem.eql(u8, s, top)) {
+                already_seen = true;
+                break;
+            }
+        }
+        if (already_seen) continue;
+        try seen.append(allocator, top);
+
+        if (list.items.len != 0) try list.appendSlice(allocator, ", ");
+        try list.appendSlice(allocator, top);
+    }
+
+    return list.toOwnedSlice(allocator);
+}
 
 fn parseIndexerInfos(allocator: std.mem.Allocator, json_body: []const u8) AdminError![]IndexerInfo {
     var parsed = std.json.parseFromSlice([]const IndexerInfoJson, allocator, json_body, .{ .ignore_unknown_fields = true }) catch |err| {
@@ -243,10 +288,13 @@ fn parseIndexerInfos(allocator: std.mem.Allocator, json_body: []const u8) AdminE
     }
 
     for (parsed.value) |item| {
+        const categories = try deriveCategories(allocator, item.caps);
+        errdefer allocator.free(categories);
         try result.append(allocator, .{
             .id = try allocator.dupe(u8, item.id),
             .name = try allocator.dupe(u8, item.name),
             .configured = item.configured,
+            .categories = categories,
         });
     }
 
@@ -572,6 +620,48 @@ test "listAllIndexers sends Cookie header and parses JSON ignoring unknown field
     try std.testing.expectEqualStrings("tpb", infos[1].id);
     try std.testing.expectEqualStrings("The Pirate Bay", infos[1].name);
     try std.testing.expect(!infos[1].configured);
+}
+
+test "listAllIndexers derives top-level categories and ignores indexer-specific subcategories" {
+    const allocator = std.testing.allocator;
+    const mock = struct {
+        fn exec(alloc: std.mem.Allocator, _: AdminRequest) AdminError!AdminResponse {
+            return .{ .status = .ok, .body = try alloc.dupe(u8, "[{\"id\":\"nyaa\",\"name\":\"Nyaa.si\",\"configured\":true,\"caps\":[" ++
+                "{\"ID\":\"2000\",\"Name\":\"Movies\"}," ++
+                "{\"ID\":\"2020\",\"Name\":\"Movies/Other\"}," ++
+                "{\"ID\":\"5000\",\"Name\":\"TV\"}," ++
+                "{\"ID\":\"5070\",\"Name\":\"TV/Anime\"}," ++
+                "{\"ID\":\"140679\",\"Name\":\"Anime\"}" ++
+                "]}]") };
+        }
+    };
+
+    var session = AdminSession{ .cookie = try allocator.dupe(u8, "Jackett=abc123") };
+    defer session.deinit(allocator);
+
+    const infos = try listAllIndexers(allocator, "http://localhost:9117", &session, mock.exec);
+    defer freeIndexerInfos(allocator, infos);
+
+    try std.testing.expectEqual(@as(usize, 1), infos.len);
+    try std.testing.expectEqualStrings("Movies, TV", infos[0].categories);
+}
+
+test "listAllIndexers leaves categories empty when an indexer has no caps" {
+    const allocator = std.testing.allocator;
+    const mock = struct {
+        fn exec(alloc: std.mem.Allocator, _: AdminRequest) AdminError!AdminResponse {
+            return .{ .status = .ok, .body = try alloc.dupe(u8, "[{\"id\":\"tpb\",\"name\":\"The Pirate Bay\",\"configured\":false}]") };
+        }
+    };
+
+    var session = AdminSession{ .cookie = try allocator.dupe(u8, "Jackett=abc123") };
+    defer session.deinit(allocator);
+
+    const infos = try listAllIndexers(allocator, "http://localhost:9117", &session, mock.exec);
+    defer freeIndexerInfos(allocator, infos);
+
+    try std.testing.expectEqual(@as(usize, 1), infos.len);
+    try std.testing.expectEqualStrings("", infos[0].categories);
 }
 
 test "getIndexerConfig returns body on success and HttpError on non-ok status" {
