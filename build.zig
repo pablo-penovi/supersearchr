@@ -203,6 +203,12 @@ pub fn build(b: *std.Build) void {
         .{ .name = "compat", .module = compat_mod },
     });
 
+    const record_tests = addModuleTest(b, "test-record", "src/record.zig", target, optimize, strip);
+    addImports(record_tests.artifact.root_module, &.{
+        .{ .name = "compat", .module = compat_mod },
+        .{ .name = "config", .module = config_mod },
+    });
+
     const http_exec_tests = addModuleTest(b, "test-http-exec", "src/jackett/http_exec.zig", target, optimize, strip);
     addImports(http_exec_tests.artifact.root_module, &.{
         .{ .name = "compat", .module = compat_mod },
@@ -344,6 +350,7 @@ pub fn build(b: *std.Build) void {
     const test_runs = [_]*std.Build.Step.Run{
         run_exe_tests,
         config_tests.run,
+        record_tests.run,
         http_exec_tests.run,
         url_encode_tests.run,
         admin_client_tests.run,
@@ -368,6 +375,7 @@ pub fn build(b: *std.Build) void {
     const coverage_tests = [_]CoverageTest{
         .{ .name = "main", .artifact = exe_tests },
         .{ .name = config_tests.name, .artifact = config_tests.artifact },
+        .{ .name = record_tests.name, .artifact = record_tests.artifact },
         .{ .name = http_exec_tests.name, .artifact = http_exec_tests.artifact },
         .{ .name = url_encode_tests.name, .artifact = url_encode_tests.artifact },
         .{ .name = admin_client_tests.name, .artifact = admin_client_tests.artifact },
