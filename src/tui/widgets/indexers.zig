@@ -28,6 +28,8 @@ pub const IndexersWidget = struct {
         name: []const u8,
         configured: bool,
         categories: []const u8 = "",
+        // Transient 0/1 outcome bytes, oldest-first, length 0-5. Not owned.
+        record: []const u8 = &.{},
     };
 
     pub const Row = struct {
@@ -37,6 +39,8 @@ pub const IndexersWidget = struct {
         saved_active: bool,
         pending_active: ?bool,
         save_state: enum { none, failed } = .none,
+        record: [5]bool = undefined,
+        record_len: u8 = 0,
 
         fn deinit(self: *Row, allocator: std.mem.Allocator) void {
             allocator.free(self.id);
@@ -90,14 +94,18 @@ pub const IndexersWidget = struct {
             new_rows.deinit(self.allocator);
         }
         for (infos) |info| {
-            try new_rows.append(self.allocator, .{
+            var row: Row = .{
                 .id = try self.allocator.dupe(u8, info.id),
                 .name = try self.allocator.dupe(u8, info.name),
                 .categories = try self.allocator.dupe(u8, info.categories),
                 .saved_active = info.configured,
                 .pending_active = null,
                 .save_state = .none,
-            });
+            };
+            const record_len: u8 = @intCast(@min(info.record.len, row.record.len));
+            for (info.record[0..record_len], 0..) |byte, i| row.record[i] = byte != 0;
+            row.record_len = record_len;
+            try new_rows.append(self.allocator, row);
         }
 
         std.mem.sort(Row, new_rows.items, {}, lessThanRow);
@@ -368,21 +376,24 @@ const RenderSnapshot = list_nav.BaseSnapshot;
 const TableLayout = struct {
     name_col_width: usize,
     categories_col_width: usize,
+    record_col_width: usize,
     active_col_width: usize,
     column_gap: usize,
 
     const fixed_active_width: usize = 8;
+    const fixed_record_width: usize = 8;
     const fixed_categories_width: usize = 33;
     const fixed_gap: usize = 2;
     const fixed_left_padding: usize = 1;
     const fixed_right_padding: usize = 1;
 
     fn forInnerWidth(inner_width: usize) TableLayout {
-        const fixed_suffix = fixed_left_padding + fixed_gap + fixed_categories_width + fixed_gap + fixed_active_width + fixed_right_padding;
+        const fixed_suffix = fixed_left_padding + fixed_gap + fixed_categories_width + fixed_gap + fixed_record_width + fixed_gap + fixed_active_width + fixed_right_padding;
         const name_width = if (inner_width > fixed_suffix) inner_width - fixed_suffix else 1;
         return .{
             .name_col_width = name_width,
             .categories_col_width = fixed_categories_width,
+            .record_col_width = fixed_record_width,
             .active_col_width = fixed_active_width,
             .column_gap = fixed_gap,
         };
@@ -392,6 +403,7 @@ const TableLayout = struct {
         return .{
             .name_col_width = 0,
             .categories_col_width = 0,
+            .record_col_width = fixed_record_width,
             .active_col_width = fixed_active_width,
             .column_gap = fixed_gap,
         };
@@ -440,10 +452,12 @@ fn writeHeaderCells(
     try writeSpaces(stdout, layout.column_gap);
     try theme.writePadded(stdout, "Categories", layout.categories_col_width);
     try writeSpaces(stdout, layout.column_gap);
+    try theme.writePadded(stdout, "Record", layout.record_col_width);
+    try writeSpaces(stdout, layout.column_gap);
     try theme.writePadded(stdout, "Active", layout.active_col_width);
     try stdout.writeAll(" ");
 
-    const used = 1 + layout.name_col_width + layout.column_gap + layout.categories_col_width + layout.column_gap + layout.active_col_width + 1;
+    const used = 1 + layout.name_col_width + layout.column_gap + layout.categories_col_width + layout.column_gap + layout.record_col_width + layout.column_gap + layout.active_col_width + 1;
     if (used < inner_width) {
         try writeSpaces(stdout, inner_width - used);
     }
@@ -508,7 +522,7 @@ fn drawContentRow(
         selectedCategoriesForRender(widget, shown_categories, layout.categories_col_width, &categories_trunc_buf, &categories_marquee_buf)
     else
         theme.truncateWithEllipsis(shown_categories, layout.categories_col_width, &categories_trunc_buf);
-    const content = buildDataCells(&cell_buf, inner_width, layout, row.name, categories_cell, active);
+    const content = buildDataCells(&cell_buf, inner_width, layout, row.name, categories_cell, row.record[0..row.record_len], active);
 
     const is_selected = abs_idx == selected_idx;
     if (is_selected) {
@@ -555,6 +569,7 @@ fn buildDataCells(
     layout: TableLayout,
     name: []const u8,
     categories: []const u8,
+    record: []const bool,
     active: bool,
 ) []const u8 {
     var writer: std.Io.Writer = .fixed(buf);
@@ -566,6 +581,15 @@ fn buildDataCells(
     writeSpaces(&writer, layout.column_gap) catch return "";
 
     theme.writePadded(&writer, categories, layout.categories_col_width) catch return "";
+    writeSpaces(&writer, layout.column_gap) catch return "";
+
+    // Up to 5 glyphs (3 bytes each): ✓ for success, ✗ for failure.
+    var record_buf: [5 * 3]u8 = undefined;
+    var record_writer: std.Io.Writer = .fixed(&record_buf);
+    for (record) |ok| {
+        record_writer.writeAll(if (ok) "\xe2\x9c\x93" else "\xe2\x9c\x97") catch break;
+    }
+    writeCenterAligned(&writer, record_writer.buffered(), layout.record_col_width) catch return "";
     writeSpaces(&writer, layout.column_gap) catch return "";
 
     const active_text = if (active) "\xe2\x9c\x93" else "\xe2\x9c\x97";
@@ -726,6 +750,35 @@ test "setIndexers sorts rows: enabled group alphabetically, then disabled group 
     try std.testing.expect(!widget.rows[2].saved_active);
     try std.testing.expectEqual(@as(usize, 0), widget.cursor);
     try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
+}
+
+test "setIndexers maps record bytes into fixed Row array, clamped to 5" {
+    var widget = IndexersWidget.init(std.testing.allocator);
+    defer widget.deinit();
+
+    const sources = [_]IndexersWidget.SourceRow{
+        .{ .id = "none", .name = "None", .configured = true, .record = &.{} },
+        .{ .id = "few", .name = "Few", .configured = true, .record = &.{ 1, 0, 1 } },
+        .{ .id = "full", .name = "Full", .configured = true, .record = &.{ 1, 1, 0, 0, 1 } },
+        .{ .id = "over", .name = "Over", .configured = true, .record = &.{ 1, 0, 1, 0, 1, 0, 1 } },
+    };
+    try widget.setIndexers(&sources);
+
+    const none = &widget.rows[findRowIndex(&widget, "none")];
+    try std.testing.expectEqual(@as(u8, 0), none.record_len);
+
+    const few = &widget.rows[findRowIndex(&widget, "few")];
+    try std.testing.expectEqual(@as(u8, 3), few.record_len);
+    try std.testing.expectEqual(true, few.record[0]);
+    try std.testing.expectEqual(false, few.record[1]);
+    try std.testing.expectEqual(true, few.record[2]);
+
+    const full = &widget.rows[findRowIndex(&widget, "full")];
+    try std.testing.expectEqual(@as(u8, 5), full.record_len);
+    try std.testing.expectEqualSlices(bool, &.{ true, true, false, false, true }, full.record[0..full.record_len]);
+
+    const over = &widget.rows[findRowIndex(&widget, "over")];
+    try std.testing.expectEqual(@as(u8, 5), over.record_len);
 }
 
 test "toggleCursorRow sets pending to opposite of saved, toggling back clears pending" {
