@@ -1,7 +1,7 @@
 # Repository Structure
 
 This file summarizes tracked files to avoid re-scanning. Build artifacts in `zig-out/` are excluded by design.
-Current project version: `v0.4.4`.
+Current project version: `v0.5.0`.
 
 ## Root
 

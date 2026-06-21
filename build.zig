@@ -57,7 +57,7 @@ fn addModuleTest(
     };
 }
 pub fn build(b: *std.Build) void {
-    const app_version = "0.4.4";
+    const app_version = "0.5.0";
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});

@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## 0.5.0
+
 ### Added
 - Added an F1 indexers management screen for viewing Jackett indexers, toggling them active/inactive, and saving changes through Jackett's admin API while caching disabled indexer configs for later re-enable.
 - Added `jackettAdminPassword` as an optional config field for Jackett instances that protect the admin API with a password.
