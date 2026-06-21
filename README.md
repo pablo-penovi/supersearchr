@@ -4,7 +4,7 @@
 
 Terminal-first BitTorrent search for [Jackett](https://github.com/Jackett/Jackett) + [Superseedr](https://github.com/Jagalite/superseedr), written in Zig 0.16.0.
 
-`supersearchr` lets you search Jackett from a TUI, browse sorted results, and send a selected magnet/torrent link to `superseedr add`. Searches query configured Jackett indexers in parallel, stream result batches as each indexer finishes, and keep the displayed list sorted by seeders while the search continues.
+`supersearchr` lets you search Jackett from a TUI, browse sorted results, manage active Jackett indexers, and send a selected magnet/torrent link to `superseedr add`. Searches query configured Jackett indexers in parallel, stream result batches as each indexer finishes, and keep the displayed list sorted by seeders while the search continues.
 Current project version: `v0.4.4`.
 
 ## Requirements
@@ -84,7 +84,8 @@ Expected format:
   "apiKey": "YOUR_JACKETT_API_KEY",
   "apiUrl": "http://127.0.0.1",
   "apiPort": 9117,
-  "terminal": "ghostty"
+  "terminal": "ghostty",
+  "jackettAdminPassword": ""
 }
 ```
 
@@ -92,6 +93,7 @@ Notes:
 
 - `apiKey`, `apiUrl`, and `apiPort` are required.
 - `terminal` is kept for compatibility and defaults by OS (`ghostty`/`Terminal`/`wt`).
+- `jackettAdminPassword` is optional. Leave it empty if Jackett's admin API does not require a password.
 - Placeholder values like `YOUR_JACKETT_API_KEY` / `YOUR_JACKET_URL` are rejected.
 
 ## Usage
@@ -100,19 +102,36 @@ Search screen:
 
 - Type query text
 - `Enter`: search
+- `F1`: open indexers management
 - `Esc`: exit app
 
 Results screen:
 
-- `j` / `k`: move down/up one result
-- `J` / `K`: move down/up one page
+- `Up` / `Down`: move one result
+- `Shift+Up` / `Shift+Down`: move one page
+- `Left` / `Right`: move sort cursor
+- `Tab`: apply/toggle sorting
 - `Enter`: send selected link to Superseedr
-- `n` or `N`: new search
+- `s` or `S`: new search
+- `r` or `R`: refresh completed results
+- `/`: search within the current results list
+- `e` or `E`: review failed indexers when failures are present
+- `F1`: open indexers management
 - `Esc`: exit app
+
+Indexers screen:
+
+- `Up` / `Down`: move one indexer
+- `Shift+Up` / `Shift+Down`: move one page
+- `Space`: toggle selected indexer active/inactive
+- `Enter`: save pending changes
+- `Esc`: revert pending changes, or return to the previous screen when there are none
 
 Results show publication age, seeders, leechers, and torrent size when Jackett provides size metadata. New results appear incrementally while configured indexers are still searching, and the bottom status row shows discovery/search progress plus per-indexer failures.
 
-State flow: `SEARCH -> RESULTS -> ERROR`
+Disabling an indexer deletes it through Jackett's admin API after caching its config locally under the app config directory. Re-enabling restores the cached config.
+
+State flow: `SEARCH -> RESULTS -> INDEXERS -> ERROR`
 
 ## Debug Logging
 

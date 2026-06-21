@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const config = @import("config");
 const jackett = @import("jackett");
 const jackett_admin = @import("jackett_admin");
@@ -51,6 +52,7 @@ const AppDeps = struct {
     jackett_link_fetcher: jackett.LinkFetchExecutor = jackett.defaultLinkFetchExecutor,
     jackett_parallel_requests: usize = 4,
     jackett_admin_executor: jackett_admin.AdminExecutor = jackett_admin.defaultAdminExecutor,
+    jackett_indexer_cache_dir_resolver: *const fn (allocator: std.mem.Allocator) anyerror![]u8 = jackett_admin.defaultIndexerCacheDir,
     superseedr_executor: *const fn (allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void = superseedr.defaultExecutor,
     superseedr_process_checker: *const fn (allocator: std.mem.Allocator) anyerror!bool = superseedr.defaultProcessChecker,
     superseedr_spawner: *const fn (allocator: std.mem.Allocator, terminal: []const u8) anyerror!void = superseedr.defaultSpawner,
@@ -434,7 +436,9 @@ fn runIndexersState(app: *App, indexers_state: *IndexersState) !void {
     var widget = indexers_widget.IndexersWidget.init(app.allocator);
     defer widget.deinit();
 
-    panels.renderNoticePanel("Indexers", "Loading indexers...", theme.superseedr_like.accent, true);
+    if (!builtin.is_test) {
+        panels.renderNoticePanel("Indexers", "Loading indexers...", theme.superseedr_like.accent, true);
+    }
 
     var session = jackett_admin.login(
         app.allocator,
@@ -558,7 +562,7 @@ fn saveIndexerChanges(
     var failed_names: std.ArrayList([]const u8) = .empty;
     errdefer failed_names.deinit(app.allocator);
 
-    const cache_dir = try jackett_admin.defaultIndexerCacheDir(app.allocator);
+    const cache_dir = try app.deps.jackett_indexer_cache_dir_resolver(app.allocator);
     defer app.allocator.free(cache_dir);
 
     for (widget.rows, 0..) |*row, idx| {
@@ -885,7 +889,7 @@ fn refreshTerminalSizeValues(term_rows: *u16, term_cols: *u16) bool {
     return true;
 }
 
-test "DISABLED_state transitions smoke path search -> streaming results with injected deps" {
+test "state transitions smoke path search -> streaming results with injected deps" {
     const mock = struct {
         fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]u8 {
             if (std.mem.indexOf(u8, url, "t=indexers&configured=true") != null) {
@@ -927,7 +931,7 @@ test "DISABLED_state transitions smoke path search -> streaming results with inj
     }
 }
 
-test "DISABLED_state transitions smoke path discovery failure goes to error" {
+test "state transitions smoke path discovery failure goes to error" {
     const mock = struct {
         fn exec(_: std.mem.Allocator, _: []const u8) jackett.JackettError![]u8 {
             return error.ConnectionRefused;
@@ -1276,10 +1280,21 @@ test "configureSearchWidgetForApp forwards latest version to search widget" {
 }
 
 test "transitionSearchToStreamingResults preserves sort fields" {
+    const mock = struct {
+        fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]u8 {
+            if (std.mem.indexOf(u8, url, "t=indexers&configured=true") != null) {
+                return allocator.dupe(u8, "<indexers></indexers>") catch error.OutOfMemory;
+            }
+            return error.ParseFailed;
+        }
+    };
+
     var app = App{
         .allocator = std.testing.allocator,
         .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
-        .deps = .{},
+        .deps = .{
+            .jackett_body_executor = mock.exec,
+        },
         .state = .{ .search = .{ .query = "" } },
         .running = true,
         .term_rows = 24,
@@ -1304,6 +1319,7 @@ test "transitionSearchToStreamingResults preserves sort fields" {
             try std.testing.expectEqual(results_widget.SortColumn.size, results_state.sort_column.?);
             try std.testing.expectEqual(results_widget.SortOrder.asc, results_state.sort_order.?);
             try std.testing.expectEqual(results_widget.SortColumn.leechers, results_state.header_cursor.?);
+            try drainUntilDone(&app, results_state);
         },
         else => return error.UnexpectedState,
     }
@@ -1441,6 +1457,18 @@ test "runIndexersState login failure surfaces as ErrorState and cleans up pendin
 }
 
 test "saveIndexerChanges marks rows saved on success and failed on failure" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", std.testing.allocator);
+    defer std.testing.allocator.free(tmp_abs);
+    const cache_dir = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "indexer_cache" });
+    defer std.testing.allocator.free(cache_dir);
+
+    const state = struct {
+        var test_cache_dir: []const u8 = &.{};
+    };
+    state.test_cache_dir = cache_dir;
+
     const mock = struct {
         fn exec(alloc: std.mem.Allocator, request: jackett_admin.AdminRequest) jackett_admin.AdminError!jackett_admin.AdminResponse {
             // "good"'s GET-Config and DELETE URLs both contain this substring -> both succeed.
@@ -1455,6 +1483,10 @@ test "saveIndexerChanges marks rows saved on success and failed on failure" {
             }
             return error.HttpError;
         }
+
+        fn cacheDir(alloc: std.mem.Allocator) anyerror![]u8 {
+            return alloc.dupe(u8, state.test_cache_dir);
+        }
     };
 
     var app = App{
@@ -1462,6 +1494,7 @@ test "saveIndexerChanges marks rows saved on success and failed on failure" {
         .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
         .deps = .{
             .jackett_admin_executor = mock.exec,
+            .jackett_indexer_cache_dir_resolver = mock.cacheDir,
         },
         .state = .{ .search = .{ .query = "" } },
         .running = true,

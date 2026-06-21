@@ -27,11 +27,16 @@ Current project version: `v0.4.4`.
 - `src/debug/log.zig`: Optional debug logging controlled by environment variables.
 - `src/update_checker.zig`: Latest-release checker (GitHub API fetch + semantic version comparison).
 - `src/structs/torrent.zig`: `Torrent` struct definition (title, stats, optional byte size, optional pub date, link) and metadata storage test.
-- `src/jackett/client.zig`: Jackett Torznab API client, gzip-aware body reads, configured-indexer discovery, blocking and streaming parallel per-indexer searches, XML parsing including size and pubDate metadata, sorting, and selected download-link resolution.
+- `src/jackett/admin_client.zig`: Jackett admin REST client for login, indexer listing, config get/set/delete, and local disabled-indexer config caching.
+- `src/jackett/client.zig`: Jackett Torznab API client, gzip-aware body reads, configured-indexer discovery, streaming parallel per-indexer searches, XML parsing including size and pubDate metadata, sorting, and selected download-link resolution.
+- `src/jackett/http_exec.zig`: Shared low-level HTTP request executor used by Jackett client modules.
+- `src/jackett/url_encode.zig`: Percent-encoding helper for Torznab/admin URL path and query components.
 - `src/superseedr/client.zig`: Superseedr integration, final magnet/path validation, process checks, spawn/add flow.
 - `src/tui/term.zig`: Terminal raw mode, key reading, ANSI helpers, terminal size.
 - `src/tui/theme.zig`: Color palette, border styles, and rendering helpers.
 - `src/tui/panels.zig`: Shared panel/overlay rendering helpers for notices and errors.
-- `src/tui/app.zig`: App state machine (search/results/error), streaming Jackett session orchestration, and Superseedr handoff.
+- `src/tui/app.zig`: App state machine (search/results/indexers/error), streaming Jackett session orchestration, indexer management flow, and Superseedr handoff.
+- `src/tui/widgets/indexers.zig`: Indexers table widget with navigation, toggle state, save/revert actions, and tests.
+- `src/tui/widgets/list_nav.zig`: Shared cursor/scroll/page navigation helpers used by list-style widgets.
 - `src/tui/widgets/search.zig`: Search input widget and tests.
 - `src/tui/widgets/results.zig`: Results list widget with navigation, live search status, streaming update preservation, stats/size/age table rendering, and tests.
