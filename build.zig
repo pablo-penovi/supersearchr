@@ -68,6 +68,7 @@ pub fn build(b: *std.Build) void {
     const build_options_mod = build_options.createModule();
 
     const config_mod = b.createModule(.{ .root_source_file = b.path("src/config.zig") });
+    const record_mod = b.createModule(.{ .root_source_file = b.path("src/record.zig") });
     const compat_mod = b.createModule(.{ .root_source_file = b.path("src/compat.zig") });
     const http_exec_mod = b.createModule(.{ .root_source_file = b.path("src/jackett/http_exec.zig") });
     const url_encode_mod = b.createModule(.{ .root_source_file = b.path("src/jackett/url_encode.zig") });
@@ -88,6 +89,10 @@ pub fn build(b: *std.Build) void {
 
     addImports(config_mod, &.{
         .{ .name = "compat", .module = compat_mod },
+    });
+    addImports(record_mod, &.{
+        .{ .name = "compat", .module = compat_mod },
+        .{ .name = "config", .module = config_mod },
     });
     addImports(debug_log_mod, &.{
         .{ .name = "compat", .module = compat_mod },
@@ -150,6 +155,7 @@ pub fn build(b: *std.Build) void {
     });
     addImports(app_mod, &.{
         .{ .name = "config", .module = config_mod },
+        .{ .name = "record", .module = record_mod },
         .{ .name = "jackett", .module = jackett_mod },
         .{ .name = "jackett_admin", .module = admin_client_mod },
         .{ .name = "superseedr", .module = superseedr_mod },
@@ -300,6 +306,7 @@ pub fn build(b: *std.Build) void {
     });
     addImports(app_tests.artifact.root_module, &.{
         .{ .name = "config", .module = config_mod },
+        .{ .name = "record", .module = record_mod },
         .{ .name = "jackett", .module = app_tests_jackett_mod },
         .{ .name = "jackett_admin", .module = app_tests_admin_mod },
         .{ .name = "superseedr", .module = superseedr_mod },

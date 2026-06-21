@@ -11,6 +11,7 @@ const search_widget = @import("search");
 const results_widget = @import("results");
 const indexers_widget = @import("indexers");
 const update_checker = @import("update_checker");
+const record = @import("record");
 const build_options = @import("build_options");
 const Torrent = @import("torrent").Torrent;
 const debug_log = @import("debug_log");
@@ -53,6 +54,7 @@ const AppDeps = struct {
     jackett_parallel_requests: usize = 4,
     jackett_admin_executor: jackett_admin.AdminExecutor = jackett_admin.defaultAdminExecutor,
     jackett_indexer_cache_dir_resolver: *const fn (allocator: std.mem.Allocator) anyerror![]u8 = jackett_admin.defaultIndexerCacheDir,
+    record_path_resolver: *const fn (allocator: std.mem.Allocator) anyerror![]u8 = record.defaultRecordPath,
     superseedr_executor: *const fn (allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void = superseedr.defaultExecutor,
     superseedr_process_checker: *const fn (allocator: std.mem.Allocator) anyerror!bool = superseedr.defaultProcessChecker,
     superseedr_spawner: *const fn (allocator: std.mem.Allocator, terminal: []const u8) anyerror!void = superseedr.defaultSpawner,
@@ -467,10 +469,17 @@ fn runIndexersState(app: *App, indexers_state: *IndexersState) !void {
     };
     defer jackett_admin.freeIndexerInfos(app.allocator, remote_indexers);
 
+    var record_store = blk: {
+        const record_path = app.deps.record_path_resolver(app.allocator) catch break :blk record.RecordStore.init(app.allocator);
+        defer app.allocator.free(record_path);
+        break :blk record.load(app.allocator, record_path) catch record.RecordStore.init(app.allocator);
+    };
+    defer record_store.deinit();
+
     var source_rows: std.ArrayList(indexers_widget.IndexersWidget.SourceRow) = .empty;
     defer source_rows.deinit(app.allocator);
     for (remote_indexers) |info| {
-        try source_rows.append(app.allocator, .{ .id = info.id, .name = info.name, .configured = info.configured, .categories = info.categories });
+        try source_rows.append(app.allocator, .{ .id = info.id, .name = info.name, .configured = info.configured, .categories = info.categories, .record = record_store.get(info.id) });
     }
     try widget.setIndexers(source_rows.items);
 
@@ -774,12 +783,39 @@ fn updateStreamingResults(app: *App, results_state: *ResultsState, widget: ?*res
     if (session.isDone()) {
         _ = try session.drainInto(app.allocator, &results_state.torrents);
         results_state.live_status = liveStatusFromSnapshot(session.snapshot());
+        persistSearchOutcomes(app, session);
         session.deinit();
         results_state.search_session = null;
         return true;
     }
 
     return changed;
+}
+
+// Persist per-indexer success/failure outcomes after a search completes.
+// Best-effort: a filesystem hiccup must never fail a completed search. Must be
+// called before `session.deinit()`, since the queue (and the indexer-id strings
+// it owns) become invalid afterwards.
+fn persistSearchOutcomes(app: *App, session: *jackett.SearchSession) void {
+    const io = compat.io();
+    session.queue.mutex.lockUncancelable(io);
+    const succeeded = app.allocator.dupe([]const u8, session.queue.succeeded_indexers.items) catch {
+        session.queue.mutex.unlock(io);
+        return;
+    };
+    const failed = app.allocator.dupe([]const u8, session.queue.failed_indexers.items) catch {
+        app.allocator.free(succeeded);
+        session.queue.mutex.unlock(io);
+        return;
+    };
+    session.queue.mutex.unlock(io);
+    defer app.allocator.free(succeeded);
+    defer app.allocator.free(failed);
+
+    const record_path = app.deps.record_path_resolver(app.allocator) catch return;
+    defer app.allocator.free(record_path);
+
+    record.updateAfterSearch(app.allocator, record_path, succeeded, failed) catch {};
 }
 
 fn liveStatusFromSnapshot(snapshot: jackett.SearchProgressSnapshot) results_widget.ResultsWidget.LiveStatus {
@@ -991,6 +1027,66 @@ test "state transitions smoke path discovery failure goes to error" {
         ),
         else => return error.UnexpectedState,
     }
+}
+
+test "completed streaming search persists per-indexer outcomes to record.json" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", std.testing.allocator);
+    defer std.testing.allocator.free(tmp_abs);
+    const record_path = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "record.json" });
+    defer std.testing.allocator.free(record_path);
+
+    const state = struct {
+        var test_record_path: []const u8 = &.{};
+    };
+    state.test_record_path = record_path;
+
+    const mock = struct {
+        fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]u8 {
+            if (std.mem.indexOf(u8, url, "t=indexers&configured=true") != null) {
+                return allocator.dupe(u8, "<indexers><indexer id=\"ok\"><title>OK</title></indexer><indexer id=\"bad\"><title>Bad</title></indexer></indexers>") catch error.OutOfMemory;
+            }
+            if (std.mem.indexOf(u8, url, "/indexers/ok/") != null) {
+                return allocator.dupe(u8, "<rss><channel><item><title>OK Result</title><link>magnet:?xt=urn:btih:ok</link><torznab:attr name=\"seeders\" value=\"5\"/></item></channel></rss>") catch error.OutOfMemory;
+            }
+            return error.HttpError;
+        }
+
+        fn recordPath(alloc: std.mem.Allocator) anyerror![]u8 {
+            return alloc.dupe(u8, state.test_record_path);
+        }
+    };
+
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
+        .deps = .{
+            .jackett_body_executor = mock.exec,
+            .record_path_resolver = mock.recordPath,
+        },
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "xterm",
+    };
+
+    const query = try std.testing.allocator.dupe(u8, "ubuntu");
+    transitionSearchToStreamingResults(&app, query, false, null, null, null);
+
+    switch (app.state) {
+        .results => |*results_state| {
+            defer deinitResultsState(std.testing.allocator, results_state);
+            try drainUntilDone(&app, results_state);
+        },
+        else => return error.UnexpectedState,
+    }
+
+    var store = try record.load(std.testing.allocator, record_path);
+    defer store.deinit();
+    try std.testing.expectEqualSlices(u8, &.{1}, store.get("ok"));
+    try std.testing.expectEqualSlices(u8, &.{0}, store.get("bad"));
 }
 
 test "scaledMarqueeIntervalMs slows base interval by percent" {
