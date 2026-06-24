@@ -69,6 +69,7 @@ pub fn build(b: *std.Build) void {
 
     const config_mod = b.createModule(.{ .root_source_file = b.path("src/config.zig") });
     const record_mod = b.createModule(.{ .root_source_file = b.path("src/record.zig") });
+    const profiles_mod = b.createModule(.{ .root_source_file = b.path("src/profiles.zig") });
     const compat_mod = b.createModule(.{ .root_source_file = b.path("src/compat.zig") });
     const http_exec_mod = b.createModule(.{ .root_source_file = b.path("src/jackett/http_exec.zig") });
     const url_encode_mod = b.createModule(.{ .root_source_file = b.path("src/jackett/url_encode.zig") });
@@ -85,12 +86,17 @@ pub fn build(b: *std.Build) void {
     const list_nav_mod = b.createModule(.{ .root_source_file = b.path("src/tui/widgets/list_nav.zig") });
     const results_widget_mod = b.createModule(.{ .root_source_file = b.path("src/tui/widgets/results.zig") });
     const indexers_widget_mod = b.createModule(.{ .root_source_file = b.path("src/tui/widgets/indexers.zig") });
+    const profiles_widget_mod = b.createModule(.{ .root_source_file = b.path("src/tui/widgets/profiles.zig") });
     const app_mod = b.createModule(.{ .root_source_file = b.path("src/tui/app.zig") });
 
     addImports(config_mod, &.{
         .{ .name = "compat", .module = compat_mod },
     });
     addImports(record_mod, &.{
+        .{ .name = "compat", .module = compat_mod },
+        .{ .name = "config", .module = config_mod },
+    });
+    addImports(profiles_mod, &.{
         .{ .name = "compat", .module = compat_mod },
         .{ .name = "config", .module = config_mod },
     });
@@ -147,6 +153,12 @@ pub fn build(b: *std.Build) void {
         .{ .name = "compat", .module = compat_mod },
         .{ .name = "list_nav", .module = list_nav_mod },
     });
+    addImports(profiles_widget_mod, &.{
+        .{ .name = "term", .module = term_mod },
+        .{ .name = "theme", .module = theme_mod },
+        .{ .name = "compat", .module = compat_mod },
+        .{ .name = "list_nav", .module = list_nav_mod },
+    });
     addImports(panels_mod, &.{
         .{ .name = "term", .module = term_mod },
         .{ .name = "theme", .module = theme_mod },
@@ -156,6 +168,7 @@ pub fn build(b: *std.Build) void {
     addImports(app_mod, &.{
         .{ .name = "config", .module = config_mod },
         .{ .name = "record", .module = record_mod },
+        .{ .name = "profiles", .module = profiles_mod },
         .{ .name = "jackett", .module = jackett_mod },
         .{ .name = "jackett_admin", .module = admin_client_mod },
         .{ .name = "superseedr", .module = superseedr_mod },
@@ -165,6 +178,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "search", .module = search_widget_mod },
         .{ .name = "results", .module = results_widget_mod },
         .{ .name = "indexers", .module = indexers_widget_mod },
+        .{ .name = "profiles_widget", .module = profiles_widget_mod },
         .{ .name = "update_checker", .module = update_checker_mod },
         .{ .name = "build_options", .module = build_options_mod },
         .{ .name = "torrent", .module = torrent_mod },
@@ -207,6 +221,20 @@ pub fn build(b: *std.Build) void {
     addImports(record_tests.artifact.root_module, &.{
         .{ .name = "compat", .module = compat_mod },
         .{ .name = "config", .module = config_mod },
+    });
+
+    const profiles_tests = addModuleTest(b, "test-profiles", "src/profiles.zig", target, optimize, strip);
+    addImports(profiles_tests.artifact.root_module, &.{
+        .{ .name = "compat", .module = compat_mod },
+        .{ .name = "config", .module = config_mod },
+    });
+
+    const profiles_widget_tests = addModuleTest(b, "test-profiles-widget", "src/tui/widgets/profiles.zig", target, optimize, strip);
+    addImports(profiles_widget_tests.artifact.root_module, &.{
+        .{ .name = "term", .module = term_mod },
+        .{ .name = "theme", .module = theme_mod },
+        .{ .name = "compat", .module = compat_mod },
+        .{ .name = "list_nav", .module = list_nav_mod },
     });
 
     const http_exec_tests = addModuleTest(b, "test-http-exec", "src/jackett/http_exec.zig", target, optimize, strip);
@@ -313,6 +341,7 @@ pub fn build(b: *std.Build) void {
     addImports(app_tests.artifact.root_module, &.{
         .{ .name = "config", .module = config_mod },
         .{ .name = "record", .module = record_mod },
+        .{ .name = "profiles", .module = profiles_mod },
         .{ .name = "jackett", .module = app_tests_jackett_mod },
         .{ .name = "jackett_admin", .module = app_tests_admin_mod },
         .{ .name = "superseedr", .module = superseedr_mod },
@@ -322,6 +351,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "search", .module = search_widget_mod },
         .{ .name = "results", .module = results_widget_mod },
         .{ .name = "indexers", .module = indexers_widget_mod },
+        .{ .name = "profiles_widget", .module = profiles_widget_mod },
         .{ .name = "update_checker", .module = update_checker_mod },
         .{ .name = "build_options", .module = build_options_mod },
         .{ .name = "torrent", .module = torrent_mod },
@@ -351,6 +381,8 @@ pub fn build(b: *std.Build) void {
         run_exe_tests,
         config_tests.run,
         record_tests.run,
+        profiles_tests.run,
+        profiles_widget_tests.run,
         http_exec_tests.run,
         url_encode_tests.run,
         admin_client_tests.run,
@@ -376,6 +408,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "main", .artifact = exe_tests },
         .{ .name = config_tests.name, .artifact = config_tests.artifact },
         .{ .name = record_tests.name, .artifact = record_tests.artifact },
+        .{ .name = profiles_tests.name, .artifact = profiles_tests.artifact },
+        .{ .name = profiles_widget_tests.name, .artifact = profiles_widget_tests.artifact },
         .{ .name = http_exec_tests.name, .artifact = http_exec_tests.artifact },
         .{ .name = url_encode_tests.name, .artifact = url_encode_tests.artifact },
         .{ .name = admin_client_tests.name, .artifact = admin_client_tests.artifact },

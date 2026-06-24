@@ -14,6 +14,9 @@ pub const Key = enum {
     shift_arrow_up,
     shift_arrow_down,
     f1,
+    f2,
+    f3,
+    delete,
     digit,
     char,
     tab,
@@ -189,6 +192,14 @@ fn classifyEscapeSequence(seq: []const u8) Event {
     // F1: \x1bOP (SS3, most xterm-like terminals) or \x1b[11~ (older/rxvt-style)
     if (std.mem.eql(u8, seq, "OP")) return Event{ .key = .f1, .value = 0 };
     if (std.mem.eql(u8, seq, "[11~")) return Event{ .key = .f1, .value = 0 };
+    // F2: \x1bOQ (SS3) or \x1b[12~ (older/rxvt-style)
+    if (std.mem.eql(u8, seq, "OQ")) return Event{ .key = .f2, .value = 0 };
+    if (std.mem.eql(u8, seq, "[12~")) return Event{ .key = .f2, .value = 0 };
+    // F3: \x1bOR (SS3) or \x1b[13~ (older/rxvt-style)
+    if (std.mem.eql(u8, seq, "OR")) return Event{ .key = .f3, .value = 0 };
+    if (std.mem.eql(u8, seq, "[13~")) return Event{ .key = .f3, .value = 0 };
+    // Delete: \x1b[3~ (plain). Note \x1b[3;2~ below is shift+backspace, not Delete.
+    if (std.mem.eql(u8, seq, "[3~")) return Event{ .key = .delete, .value = 0 };
     // Shift+backspace variants
     if (std.mem.eql(u8, seq, "[127;2u") or
         std.mem.eql(u8, seq, "[8;2u") or
@@ -551,6 +562,21 @@ test "classifyEscapeSequence recognizes F1 in both SS3 and CSI forms" {
 
     const csi = classifyEscapeSequence("[11~");
     try std.testing.expectEqual(Key.f1, csi.key);
+}
+
+test "classifyEscapeSequence recognizes F2 in both SS3 and CSI forms" {
+    try std.testing.expectEqual(Key.f2, classifyEscapeSequence("OQ").key);
+    try std.testing.expectEqual(Key.f2, classifyEscapeSequence("[12~").key);
+}
+
+test "classifyEscapeSequence recognizes F3 in both SS3 and CSI forms" {
+    try std.testing.expectEqual(Key.f3, classifyEscapeSequence("OR").key);
+    try std.testing.expectEqual(Key.f3, classifyEscapeSequence("[13~").key);
+}
+
+test "classifyEscapeSequence distinguishes Delete from shift+backspace" {
+    try std.testing.expectEqual(Key.delete, classifyEscapeSequence("[3~").key);
+    try std.testing.expectEqual(Key.shift_backspace, classifyEscapeSequence("[3;2~").key);
 }
 
 test "256 color fg escape code" {

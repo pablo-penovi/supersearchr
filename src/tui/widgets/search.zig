@@ -192,7 +192,7 @@ fn drawPanelFrame(stdout: compat.FileWriter, colors: theme.Theme, border: theme.
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.setFg256(colors.muted);
-    theme.writePadded(stdout, " ENTER submit | ESC quit | Ctrl-BS clear ", layout.panel_width - 2) catch {};
+    theme.writePadded(stdout, " ENTER submit | ESC quit | Ctrl-BS clear | F2 load profile ", layout.panel_width - 2) catch {};
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.resetColor();

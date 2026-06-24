@@ -321,9 +321,9 @@ pub const IndexersWidget = struct {
 
                     term.setFg256(colors.muted);
                     if (self.hasPendingChanges()) {
-                        stdout.writeAll("  \xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | SPACE toggle | ENTER save | ESC revert") catch {};
+                        stdout.writeAll("  \xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | SPACE toggle | ENTER save | ESC revert | F3 save profile") catch {};
                     } else {
-                        stdout.writeAll("  \xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | SPACE toggle | ESC back") catch {};
+                        stdout.writeAll("  \xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | SPACE toggle | ESC back | F3 save profile") catch {};
                     }
                     term.resetColor();
                     term.clearBelow();

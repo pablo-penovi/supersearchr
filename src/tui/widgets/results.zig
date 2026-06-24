@@ -276,9 +276,9 @@ pub const ResultsWidget = struct {
 
                     term.setFg256(colors.muted);
                     if (self.live_status.phase == .done) {
-                        stdout.writeAll("  ENTER select | s search | r refresh | ESC exit | \xe2\x86\x91\xe2\x86\x93 line | shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort") catch {};
+                        stdout.writeAll("  ENTER select | s search | r refresh | ESC exit | \xe2\x86\x91\xe2\x86\x93 line | shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort | F2 load profile") catch {};
                     } else {
-                        stdout.writeAll("  ENTER select | s search | ESC exit | \xe2\x86\x91\xe2\x86\x93 line | shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort") catch {};
+                        stdout.writeAll("  ENTER select | s search | ESC exit | \xe2\x86\x91\xe2\x86\x93 line | shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort | F2 load profile") catch {};
                     }
                     term.resetColor();
                     term.clearBelow();
