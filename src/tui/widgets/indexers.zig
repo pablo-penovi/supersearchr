@@ -30,6 +30,8 @@ pub const IndexersWidget = struct {
         categories: []const u8 = "",
         // Transient 0/1 outcome bytes, oldest-first, length 0-5. Not owned.
         record: []const u8 = &.{},
+        // Last commit outcome: true = succeeded, false = failed, null = unknown.
+        last_status: ?bool = null,
     };
 
     pub const Row = struct {
@@ -41,6 +43,7 @@ pub const IndexersWidget = struct {
         save_state: enum { none, failed } = .none,
         record: [5]bool = undefined,
         record_len: u8 = 0,
+        last_status: ?bool = null,
 
         fn deinit(self: *Row, allocator: std.mem.Allocator) void {
             allocator.free(self.id);
@@ -101,6 +104,7 @@ pub const IndexersWidget = struct {
                 .saved_active = info.configured,
                 .pending_active = null,
                 .save_state = .none,
+                .last_status = info.last_status,
             };
             const record_len: u8 = @intCast(@min(info.record.len, row.record.len));
             for (info.record[0..record_len], 0..) |byte, i| row.record[i] = byte != 0;
@@ -138,11 +142,13 @@ pub const IndexersWidget = struct {
         self.rows[idx].saved_active = self.rows[idx].pending_active.?;
         self.rows[idx].pending_active = null;
         self.rows[idx].save_state = .none;
+        self.rows[idx].last_status = true;
         self.force_full_redraw = true;
     }
 
     pub fn markFailed(self: *IndexersWidget, idx: usize) void {
         self.rows[idx].save_state = .failed;
+        self.rows[idx].last_status = false;
         self.force_full_redraw = true;
     }
 
@@ -377,23 +383,27 @@ const TableLayout = struct {
     name_col_width: usize,
     categories_col_width: usize,
     record_col_width: usize,
+    last_status_col_width: usize,
     active_col_width: usize,
     column_gap: usize,
 
     const fixed_active_width: usize = 8;
     const fixed_record_width: usize = 8;
+    // Wide enough to print the "Last Status" header without truncation.
+    const fixed_last_status_width: usize = 11;
     const fixed_categories_width: usize = 33;
     const fixed_gap: usize = 2;
     const fixed_left_padding: usize = 1;
     const fixed_right_padding: usize = 1;
 
     fn forInnerWidth(inner_width: usize) TableLayout {
-        const fixed_suffix = fixed_left_padding + fixed_gap + fixed_categories_width + fixed_gap + fixed_record_width + fixed_gap + fixed_active_width + fixed_right_padding;
+        const fixed_suffix = fixed_left_padding + fixed_gap + fixed_categories_width + fixed_gap + fixed_record_width + fixed_gap + fixed_last_status_width + fixed_gap + fixed_active_width + fixed_right_padding;
         const name_width = if (inner_width > fixed_suffix) inner_width - fixed_suffix else 1;
         return .{
             .name_col_width = name_width,
             .categories_col_width = fixed_categories_width,
             .record_col_width = fixed_record_width,
+            .last_status_col_width = fixed_last_status_width,
             .active_col_width = fixed_active_width,
             .column_gap = fixed_gap,
         };
@@ -404,6 +414,7 @@ const TableLayout = struct {
             .name_col_width = 0,
             .categories_col_width = 0,
             .record_col_width = fixed_record_width,
+            .last_status_col_width = fixed_last_status_width,
             .active_col_width = fixed_active_width,
             .column_gap = fixed_gap,
         };
@@ -454,10 +465,12 @@ fn writeHeaderCells(
     try writeSpaces(stdout, layout.column_gap);
     try theme.writePadded(stdout, "Record", layout.record_col_width);
     try writeSpaces(stdout, layout.column_gap);
+    try theme.writePadded(stdout, "Last Status", layout.last_status_col_width);
+    try writeSpaces(stdout, layout.column_gap);
     try theme.writePadded(stdout, "Active", layout.active_col_width);
     try stdout.writeAll(" ");
 
-    const used = 1 + layout.name_col_width + layout.column_gap + layout.categories_col_width + layout.column_gap + layout.record_col_width + layout.column_gap + layout.active_col_width + 1;
+    const used = 1 + layout.name_col_width + layout.column_gap + layout.categories_col_width + layout.column_gap + layout.record_col_width + layout.column_gap + layout.last_status_col_width + layout.column_gap + layout.active_col_width + 1;
     if (used < inner_width) {
         try writeSpaces(stdout, inner_width - used);
     }
@@ -522,7 +535,7 @@ fn drawContentRow(
         selectedCategoriesForRender(widget, shown_categories, layout.categories_col_width, &categories_trunc_buf, &categories_marquee_buf)
     else
         theme.truncateWithEllipsis(shown_categories, layout.categories_col_width, &categories_trunc_buf);
-    const content = buildDataCells(&cell_buf, inner_width, layout, row.name, categories_cell, row.record[0..row.record_len], active);
+    const content = buildDataCells(&cell_buf, inner_width, layout, row.name, categories_cell, row.record[0..row.record_len], row.last_status, active);
 
     const is_selected = abs_idx == selected_idx;
     if (is_selected) {
@@ -570,6 +583,7 @@ fn buildDataCells(
     name: []const u8,
     categories: []const u8,
     record: []const bool,
+    last_status: ?bool,
     active: bool,
 ) []const u8 {
     var writer: std.Io.Writer = .fixed(buf);
@@ -590,6 +604,11 @@ fn buildDataCells(
         record_writer.writeAll(if (ok) "\xe2\x9c\x93" else "\xe2\x9c\x97") catch break;
     }
     writeCenterAligned(&writer, record_writer.buffered(), layout.record_col_width) catch return "";
+    writeSpaces(&writer, layout.column_gap) catch return "";
+
+    // ✓ if the last commit succeeded, ✗ if it failed, blank if never attempted.
+    const last_status_text = if (last_status) |ok| (if (ok) "\xe2\x9c\x93" else "\xe2\x9c\x97") else "";
+    writeCenterAligned(&writer, last_status_text, layout.last_status_col_width) catch return "";
     writeSpaces(&writer, layout.column_gap) catch return "";
 
     const active_text = if (active) "\xe2\x9c\x93" else "\xe2\x9c\x97";
@@ -781,6 +800,22 @@ test "setIndexers maps record bytes into fixed Row array, clamped to 5" {
     try std.testing.expectEqual(@as(u8, 5), over.record_len);
 }
 
+test "setIndexers carries last_status through, defaulting to null" {
+    var widget = IndexersWidget.init(std.testing.allocator);
+    defer widget.deinit();
+
+    const sources = [_]IndexersWidget.SourceRow{
+        .{ .id = "ok", .name = "Ok", .configured = true, .last_status = true },
+        .{ .id = "bad", .name = "Bad", .configured = true, .last_status = false },
+        .{ .id = "unknown", .name = "Unknown", .configured = true },
+    };
+    try widget.setIndexers(&sources);
+
+    try std.testing.expectEqual(@as(?bool, true), widget.rows[findRowIndex(&widget, "ok")].last_status);
+    try std.testing.expectEqual(@as(?bool, false), widget.rows[findRowIndex(&widget, "bad")].last_status);
+    try std.testing.expectEqual(@as(?bool, null), widget.rows[findRowIndex(&widget, "unknown")].last_status);
+}
+
 test "toggleCursorRow sets pending to opposite of saved, toggling back clears pending" {
     var widget = IndexersWidget.init(std.testing.allocator);
     defer widget.deinit();
@@ -912,6 +947,7 @@ test "markSaved clears pending and updates saved_active" {
     try std.testing.expect(!widget.rows[idx].saved_active);
     try std.testing.expect(widget.rows[idx].pending_active == null);
     try std.testing.expect(widget.rows[idx].save_state == .none);
+    try std.testing.expectEqual(@as(?bool, true), widget.rows[idx].last_status);
 }
 
 test "markFailed sets save_state and leaves pending_active untouched for retry" {
@@ -926,6 +962,7 @@ test "markFailed sets save_state and leaves pending_active untouched for retry" 
 
     try std.testing.expect(widget.rows[idx].save_state == .failed);
     try std.testing.expect(widget.rows[idx].pending_active != null);
+    try std.testing.expectEqual(@as(?bool, false), widget.rows[idx].last_status);
 }
 
 test "revertPending clears all pending changes and failure markers, restoring saved-state order" {

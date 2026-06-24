@@ -13,6 +13,7 @@ const indexers_widget = @import("indexers");
 const profiles_widget = @import("profiles_widget");
 const update_checker = @import("update_checker");
 const record = @import("record");
+const last_status = @import("last_status");
 const profiles = @import("profiles");
 const build_options = @import("build_options");
 const Torrent = @import("torrent").Torrent;
@@ -64,6 +65,7 @@ const AppDeps = struct {
     jackett_admin_executor: jackett_admin.AdminExecutor = jackett_admin.defaultAdminExecutor,
     jackett_indexer_cache_dir_resolver: *const fn (allocator: std.mem.Allocator) anyerror![]u8 = jackett_admin.defaultIndexerCacheDir,
     record_path_resolver: *const fn (allocator: std.mem.Allocator) anyerror![]u8 = record.defaultRecordPath,
+    last_status_path_resolver: *const fn (allocator: std.mem.Allocator) anyerror![]u8 = last_status.defaultStatusPath,
     profiles_path_resolver: *const fn (allocator: std.mem.Allocator) anyerror![]u8 = profiles.defaultProfilesPath,
     superseedr_executor: *const fn (allocator: std.mem.Allocator, argv: []const []const u8) anyerror!void = superseedr.defaultExecutor,
     superseedr_process_checker: *const fn (allocator: std.mem.Allocator) anyerror!bool = superseedr.defaultProcessChecker,
@@ -526,10 +528,17 @@ fn runIndexersState(app: *App, indexers_state: *IndexersState) !void {
     };
     defer record_store.deinit();
 
+    var status_store = blk: {
+        const status_path = app.deps.last_status_path_resolver(app.allocator) catch break :blk last_status.StatusStore.init(app.allocator);
+        defer app.allocator.free(status_path);
+        break :blk last_status.load(app.allocator, status_path) catch last_status.StatusStore.init(app.allocator);
+    };
+    defer status_store.deinit();
+
     var source_rows: std.ArrayList(indexers_widget.IndexersWidget.SourceRow) = .empty;
     defer source_rows.deinit(app.allocator);
     for (remote_indexers) |info| {
-        try source_rows.append(app.allocator, .{ .id = info.id, .name = info.name, .configured = info.configured, .categories = info.categories, .record = record_store.get(info.id) });
+        try source_rows.append(app.allocator, .{ .id = info.id, .name = info.name, .configured = info.configured, .categories = info.categories, .record = record_store.get(info.id), .last_status = status_store.get(info.id) });
     }
     try widget.setIndexers(source_rows.items);
 
@@ -840,16 +849,32 @@ fn applyProfileChanges(
     var plan = try profiles.applyPlan(app.allocator, profile_ids, enabled_ids);
     defer plan.deinit(app.allocator);
 
+    // Commit outcomes for the Last Status column. Ids borrow from the plan,
+    // valid until return.
+    var succeeded_ids: std.ArrayList([]const u8) = .empty;
+    defer succeeded_ids.deinit(app.allocator);
+    var failed_ids: std.ArrayList([]const u8) = .empty;
+    defer failed_ids.deinit(app.allocator);
+
     for (plan.to_enable) |id| {
         enableIndexer(app, session, cache_dir, id) catch {
             try failed.append(app.allocator, nameForId(remote, id));
+            try failed_ids.append(app.allocator, id);
+            continue;
         };
+        try succeeded_ids.append(app.allocator, id);
     }
     for (plan.to_disable) |id| {
         disableIndexer(app, session, cache_dir, id) catch {
             try failed.append(app.allocator, nameForId(remote, id));
+            try failed_ids.append(app.allocator, id);
+            continue;
         };
+        try succeeded_ids.append(app.allocator, id);
     }
+
+    persistLastStatus(app, succeeded_ids.items, failed_ids.items);
+
     return failed;
 }
 
@@ -1026,6 +1051,13 @@ fn saveIndexerChanges(
     var failed_names: std.ArrayList([]const u8) = .empty;
     errdefer failed_names.deinit(app.allocator);
 
+    // Indexer ids whose commit succeeded/failed this pass, for persisting the
+    // Last Status column. Slices borrow from widget.rows, valid until return.
+    var succeeded_ids: std.ArrayList([]const u8) = .empty;
+    defer succeeded_ids.deinit(app.allocator);
+    var failed_ids: std.ArrayList([]const u8) = .empty;
+    defer failed_ids.deinit(app.allocator);
+
     const cache_dir = try app.deps.jackett_indexer_cache_dir_resolver(app.allocator);
     defer app.allocator.free(cache_dir);
 
@@ -1035,19 +1067,33 @@ fn saveIndexerChanges(
             enableIndexer(app, session, cache_dir, row.id) catch {
                 widget.markFailed(idx);
                 try failed_names.append(app.allocator, row.name);
+                try failed_ids.append(app.allocator, row.id);
                 continue;
             };
         } else {
             disableIndexer(app, session, cache_dir, row.id) catch {
                 widget.markFailed(idx);
                 try failed_names.append(app.allocator, row.name);
+                try failed_ids.append(app.allocator, row.id);
                 continue;
             };
         }
         widget.markSaved(idx);
+        try succeeded_ids.append(app.allocator, row.id);
     }
 
+    persistLastStatus(app, succeeded_ids.items, failed_ids.items);
+
     return failed_names;
+}
+
+/// Best-effort persistence of the latest commit outcomes to last_status.json.
+/// Never fails the commit: a missing/unwritable file just leaves the column stale.
+fn persistLastStatus(app: *App, succeeded: []const []const u8, failed: []const []const u8) void {
+    if (succeeded.len == 0 and failed.len == 0) return;
+    const path = app.deps.last_status_path_resolver(app.allocator) catch return;
+    defer app.allocator.free(path);
+    last_status.updateAfterCommit(app.allocator, path, succeeded, failed) catch {};
 }
 
 fn disableIndexer(
@@ -2014,11 +2060,15 @@ test "saveIndexerChanges marks rows saved on success and failed on failure" {
     defer std.testing.allocator.free(tmp_abs);
     const cache_dir = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "indexer_cache" });
     defer std.testing.allocator.free(cache_dir);
+    const status_path = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "last_status.json" });
+    defer std.testing.allocator.free(status_path);
 
     const state = struct {
         var test_cache_dir: []const u8 = &.{};
+        var test_status_path: []const u8 = &.{};
     };
     state.test_cache_dir = cache_dir;
+    state.test_status_path = status_path;
 
     const mock = struct {
         fn exec(alloc: std.mem.Allocator, request: jackett_admin.AdminRequest) jackett_admin.AdminError!jackett_admin.AdminResponse {
@@ -2038,6 +2088,10 @@ test "saveIndexerChanges marks rows saved on success and failed on failure" {
         fn cacheDir(alloc: std.mem.Allocator) anyerror![]u8 {
             return alloc.dupe(u8, state.test_cache_dir);
         }
+
+        fn statusPath(alloc: std.mem.Allocator) anyerror![]u8 {
+            return alloc.dupe(u8, state.test_status_path);
+        }
     };
 
     var app = App{
@@ -2046,6 +2100,7 @@ test "saveIndexerChanges marks rows saved on success and failed on failure" {
         .deps = .{
             .jackett_admin_executor = mock.exec,
             .jackett_indexer_cache_dir_resolver = mock.cacheDir,
+            .last_status_path_resolver = mock.statusPath,
         },
         .state = .{ .search = .{ .query = "" } },
         .running = true,
@@ -2079,6 +2134,15 @@ test "saveIndexerChanges marks rows saved on success and failed on failure" {
 
     try std.testing.expectEqual(@as(usize, 1), failed_names.items.len);
     try std.testing.expectEqualStrings("Bad Indexer", failed_names.items[0]);
+
+    // The Last Status of each row reflects its commit outcome, both live...
+    try std.testing.expectEqual(@as(?bool, false), widget.rows[0].last_status);
+    try std.testing.expectEqual(@as(?bool, true), widget.rows[1].last_status);
+    // ...and persisted to last_status.json.
+    var store = try last_status.load(std.testing.allocator, status_path);
+    defer store.deinit();
+    try std.testing.expectEqual(@as(?bool, true), store.get("good"));
+    try std.testing.expectEqual(@as(?bool, false), store.get("bad"));
 }
 
 test "decideProfileSave maps active/match combinations" {
@@ -2095,11 +2159,15 @@ test "applyProfileChanges enables/disables to match profile and reports failures
     defer std.testing.allocator.free(tmp_abs);
     const cache_dir = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "indexer_cache" });
     defer std.testing.allocator.free(cache_dir);
+    const status_path = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "last_status.json" });
+    defer std.testing.allocator.free(status_path);
 
     const state = struct {
         var test_cache_dir: []const u8 = &.{};
+        var test_status_path: []const u8 = &.{};
     };
     state.test_cache_dir = cache_dir;
+    state.test_status_path = status_path;
 
     const mock = struct {
         // Every request touching "add" succeeds; everything else (i.e. "drop")
@@ -2114,6 +2182,10 @@ test "applyProfileChanges enables/disables to match profile and reports failures
         fn cacheDir(alloc: std.mem.Allocator) anyerror![]u8 {
             return alloc.dupe(u8, state.test_cache_dir);
         }
+
+        fn statusPath(alloc: std.mem.Allocator) anyerror![]u8 {
+            return alloc.dupe(u8, state.test_status_path);
+        }
     };
 
     var app = App{
@@ -2122,6 +2194,7 @@ test "applyProfileChanges enables/disables to match profile and reports failures
         .deps = .{
             .jackett_admin_executor = mock.exec,
             .jackett_indexer_cache_dir_resolver = mock.cacheDir,
+            .last_status_path_resolver = mock.statusPath,
         },
         .state = .{ .search = .{ .query = "" } },
         .running = true,
@@ -2146,6 +2219,12 @@ test "applyProfileChanges enables/disables to match profile and reports failures
 
     try std.testing.expectEqual(@as(usize, 1), failed.items.len);
     try std.testing.expectEqualStrings("drop", failed.items[0]);
+
+    // Applying a profile also records each tracker's commit outcome.
+    var store = try last_status.load(std.testing.allocator, status_path);
+    defer store.deinit();
+    try std.testing.expectEqual(@as(?bool, true), store.get("add"));
+    try std.testing.expectEqual(@as(?bool, false), store.get("drop"));
 }
 
 test "applyProfileChanges no-ops when sets already match" {

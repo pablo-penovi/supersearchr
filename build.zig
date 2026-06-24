@@ -69,6 +69,7 @@ pub fn build(b: *std.Build) void {
 
     const config_mod = b.createModule(.{ .root_source_file = b.path("src/config.zig") });
     const record_mod = b.createModule(.{ .root_source_file = b.path("src/record.zig") });
+    const last_status_mod = b.createModule(.{ .root_source_file = b.path("src/last_status.zig") });
     const profiles_mod = b.createModule(.{ .root_source_file = b.path("src/profiles.zig") });
     const compat_mod = b.createModule(.{ .root_source_file = b.path("src/compat.zig") });
     const http_exec_mod = b.createModule(.{ .root_source_file = b.path("src/jackett/http_exec.zig") });
@@ -93,6 +94,10 @@ pub fn build(b: *std.Build) void {
         .{ .name = "compat", .module = compat_mod },
     });
     addImports(record_mod, &.{
+        .{ .name = "compat", .module = compat_mod },
+        .{ .name = "config", .module = config_mod },
+    });
+    addImports(last_status_mod, &.{
         .{ .name = "compat", .module = compat_mod },
         .{ .name = "config", .module = config_mod },
     });
@@ -168,6 +173,7 @@ pub fn build(b: *std.Build) void {
     addImports(app_mod, &.{
         .{ .name = "config", .module = config_mod },
         .{ .name = "record", .module = record_mod },
+        .{ .name = "last_status", .module = last_status_mod },
         .{ .name = "profiles", .module = profiles_mod },
         .{ .name = "jackett", .module = jackett_mod },
         .{ .name = "jackett_admin", .module = admin_client_mod },
@@ -219,6 +225,12 @@ pub fn build(b: *std.Build) void {
 
     const record_tests = addModuleTest(b, "test-record", "src/record.zig", target, optimize, strip);
     addImports(record_tests.artifact.root_module, &.{
+        .{ .name = "compat", .module = compat_mod },
+        .{ .name = "config", .module = config_mod },
+    });
+
+    const last_status_tests = addModuleTest(b, "test-last-status", "src/last_status.zig", target, optimize, strip);
+    addImports(last_status_tests.artifact.root_module, &.{
         .{ .name = "compat", .module = compat_mod },
         .{ .name = "config", .module = config_mod },
     });
@@ -341,6 +353,7 @@ pub fn build(b: *std.Build) void {
     addImports(app_tests.artifact.root_module, &.{
         .{ .name = "config", .module = config_mod },
         .{ .name = "record", .module = record_mod },
+        .{ .name = "last_status", .module = last_status_mod },
         .{ .name = "profiles", .module = profiles_mod },
         .{ .name = "jackett", .module = app_tests_jackett_mod },
         .{ .name = "jackett_admin", .module = app_tests_admin_mod },
@@ -381,6 +394,7 @@ pub fn build(b: *std.Build) void {
         run_exe_tests,
         config_tests.run,
         record_tests.run,
+        last_status_tests.run,
         profiles_tests.run,
         profiles_widget_tests.run,
         http_exec_tests.run,
@@ -408,6 +422,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "main", .artifact = exe_tests },
         .{ .name = config_tests.name, .artifact = config_tests.artifact },
         .{ .name = record_tests.name, .artifact = record_tests.artifact },
+        .{ .name = last_status_tests.name, .artifact = last_status_tests.artifact },
         .{ .name = profiles_tests.name, .artifact = profiles_tests.artifact },
         .{ .name = profiles_widget_tests.name, .artifact = profiles_widget_tests.artifact },
         .{ .name = http_exec_tests.name, .artifact = http_exec_tests.artifact },
