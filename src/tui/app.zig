@@ -631,7 +631,7 @@ fn commitIndexerChanges(
     widget: *indexers_widget.IndexersWidget,
     session: *const jackett_admin.AdminSession,
 ) !CommitOutcome {
-    var failed_names = try saveIndexerChanges(app, widget, session);
+    var failed_names = try runCommitWithProgress(app, widget, session);
     defer failed_names.deinit(app.allocator);
     widget.force_full_redraw = true;
 
@@ -650,7 +650,7 @@ fn commitIndexerChanges(
             },
             .retry => {
                 failed_names.deinit(app.allocator);
-                failed_names = try saveIndexerChanges(app, widget, session);
+                failed_names = try runCommitWithProgress(app, widget, session);
                 widget.force_full_redraw = true;
             },
         }
@@ -1038,53 +1038,160 @@ fn runProfilesState(app: *App, profiles_state: *ProfilesState) !void {
     }
 }
 
-/// Attempts the disable/enable round-trip for every pending row and returns
-/// the names of rows that failed (caller owns and must `.deinit()` the
-/// returned list). Pure data-transformation only — does not drive any
-/// interactive UI, so it stays unit-testable; the interactive
-/// retry/revert overlay lives in `commitIndexerChanges`.
-fn saveIndexerChanges(
+/// One pending enable/disable to commit. `id`/`idx` borrow from the widget's
+/// rows, which stay stable for the duration of a commit (no re-sort occurs).
+const CommitItem = struct { idx: usize, enable: bool, id: []const u8 };
+
+/// Collects the widget's pending toggles into a flat list (caller owns the
+/// returned slice). Snapshotting them up front lets the per-item HTTP work run
+/// on a worker thread without touching widget state.
+fn gatherCommitItems(app: *App, widget: *indexers_widget.IndexersWidget) ![]CommitItem {
+    var list: std.ArrayList(CommitItem) = .empty;
+    errdefer list.deinit(app.allocator);
+    for (widget.rows, 0..) |row, idx| {
+        const target = row.pending_active orelse continue;
+        try list.append(app.allocator, .{ .idx = idx, .enable = target, .id = row.id });
+    }
+    return list.toOwnedSlice(app.allocator);
+}
+
+/// Performs the enable/disable round-trip for each item, recording the outcome
+/// into `outcomes` (parallel to `items`) and publishing progress. Touches no
+/// widget state, so it is safe to run on a worker thread while the UI renders.
+/// Each enable/disable is a synchronous Jackett call that can take minutes when
+/// the indexer's site is slow, which is exactly why it runs off the UI thread.
+fn commitItems(
+    app: *App,
+    session: *const jackett_admin.AdminSession,
+    cache_dir: []const u8,
+    items: []const CommitItem,
+    outcomes: []bool,
+    progress: *jackett.Progress,
+    cancel: *std.atomic.Value(bool),
+) void {
+    for (items, 0..) |item, i| {
+        // ESC sets `cancel`; the in-flight item already finished, so the item
+        // becoming "last" is whichever we are about to start — stop before it.
+        if (cancel.load(.monotonic)) break;
+        const ok = if (item.enable)
+            (if (enableIndexer(app, session, cache_dir, item.id)) |_| true else |_| false)
+        else
+            (if (disableIndexer(app, session, cache_dir, item.id)) |_| true else |_| false);
+        outcomes[i] = ok;
+        if (!ok) progress.recordFailed();
+        progress.recordCompleted();
+    }
+    progress.setPhase(.done);
+}
+
+/// Applies worker outcomes back onto the widget (mark each row saved/failed),
+/// persists the Last Status column, and returns the names of rows that failed
+/// (caller owns and must `.deinit()`). Borrowed name slices reference the
+/// widget rows, which outlive the returned list.
+///
+/// Only the first `completed` items were attempted by the worker (the rest were
+/// skipped by an ESC cancel); untouched rows keep their pending toggle and are
+/// neither marked saved nor failed.
+fn applyCommitOutcomes(
     app: *App,
     widget: *indexers_widget.IndexersWidget,
-    session: *const jackett_admin.AdminSession,
+    items: []const CommitItem,
+    outcomes: []const bool,
+    completed: usize,
 ) !std.ArrayList([]const u8) {
     var failed_names: std.ArrayList([]const u8) = .empty;
     errdefer failed_names.deinit(app.allocator);
 
-    // Indexer ids whose commit succeeded/failed this pass, for persisting the
-    // Last Status column. Slices borrow from widget.rows, valid until return.
     var succeeded_ids: std.ArrayList([]const u8) = .empty;
     defer succeeded_ids.deinit(app.allocator);
     var failed_ids: std.ArrayList([]const u8) = .empty;
     defer failed_ids.deinit(app.allocator);
 
-    const cache_dir = try app.deps.jackett_indexer_cache_dir_resolver(app.allocator);
-    defer app.allocator.free(cache_dir);
-
-    for (widget.rows, 0..) |*row, idx| {
-        const target = row.pending_active orelse continue;
-        if (target) {
-            enableIndexer(app, session, cache_dir, row.id) catch {
-                widget.markFailed(idx);
-                try failed_names.append(app.allocator, row.name);
-                try failed_ids.append(app.allocator, row.id);
-                continue;
-            };
+    const attempted = @min(completed, items.len);
+    for (items[0..attempted], outcomes[0..attempted]) |item, ok| {
+        if (ok) {
+            widget.markSaved(item.idx);
+            try succeeded_ids.append(app.allocator, item.id);
         } else {
-            disableIndexer(app, session, cache_dir, row.id) catch {
-                widget.markFailed(idx);
-                try failed_names.append(app.allocator, row.name);
-                try failed_ids.append(app.allocator, row.id);
-                continue;
-            };
+            widget.markFailed(item.idx);
+            try failed_names.append(app.allocator, widget.rows[item.idx].name);
+            try failed_ids.append(app.allocator, item.id);
         }
-        widget.markSaved(idx);
-        try succeeded_ids.append(app.allocator, row.id);
     }
 
     persistLastStatus(app, succeeded_ids.items, failed_ids.items);
-
     return failed_names;
+}
+
+/// Commits pending toggles on a worker thread, animating an in-panel
+/// "Committing c/t" status row (mirroring the results screen) until the worker
+/// finishes, then applies the outcomes. During the wait the list stays
+/// scrollable (arrow keys move the cursor) but toggles/save/exit are ignored;
+/// ESC requests a graceful stop after the in-flight tracker.
+fn runCommitWithProgress(
+    app: *App,
+    widget: *indexers_widget.IndexersWidget,
+    session: *const jackett_admin.AdminSession,
+) !std.ArrayList([]const u8) {
+    const items = try gatherCommitItems(app, widget);
+    defer app.allocator.free(items);
+    const outcomes = try app.allocator.alloc(bool, items.len);
+    defer app.allocator.free(outcomes);
+    const cache_dir = try app.deps.jackett_indexer_cache_dir_resolver(app.allocator);
+    defer app.allocator.free(cache_dir);
+
+    var progress = jackett.Progress.init();
+    progress.setTotal(items.len);
+    progress.setPhase(.querying);
+    var cancel = std.atomic.Value(bool).init(false);
+
+    const thread = std.Thread.spawn(.{}, commitItems, .{ app, session, cache_dir, items, outcomes, &progress, &cancel }) catch {
+        // No worker thread available: commit synchronously (UI stays blocked).
+        commitItems(app, session, cache_dir, items, outcomes, &progress, &cancel);
+        widget.setCommitProgress(null);
+        return applyCommitOutcomes(app, widget, items, outcomes, progress.snapshot().completed);
+    };
+
+    const input_poll_ms: i32 = 80;
+    var spinner_frame: usize = 0;
+    var canceling = false;
+    while (true) {
+        if (refreshTerminalSize(app)) widget.force_full_redraw = true;
+
+        const snap = progress.snapshot();
+        widget.setCommitProgress(.{
+            .completed = snap.completed,
+            .total = snap.total,
+            .failed = snap.failed,
+            .spinner_frame = spinner_frame,
+            .canceling = canceling,
+        });
+
+        term.beginSyncRender();
+        widget.render(app.term_rows, app.term_cols);
+        term.endSyncRender();
+
+        if (snap.phase == .done) break;
+
+        // ~80ms tick. ESC requests a graceful stop; arrows scroll the list;
+        // everything else (toggle/save/exit) is ignored mid-commit.
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch null;
+        if (maybe_event) |event| {
+            if (event.key == .escape) {
+                cancel.store(true, .monotonic);
+                canceling = true;
+            } else if (widget.handleNavigationOnly(event)) {
+                widget.force_full_redraw = true;
+            }
+        }
+        _ = widget.advanceMarquee(app.term_rows, app.term_cols);
+        spinner_frame +%= 1;
+    }
+
+    thread.join();
+    widget.setCommitProgress(null);
+    widget.force_full_redraw = true;
+    return applyCommitOutcomes(app, widget, items, outcomes, progress.snapshot().completed);
 }
 
 /// Best-effort persistence of the latest commit outcomes to last_status.json.
@@ -1299,7 +1406,7 @@ fn persistSearchOutcomes(app: *App, session: *jackett.SearchSession) void {
     record.updateAfterSearch(app.allocator, record_path, succeeded, failed) catch {};
 }
 
-fn liveStatusFromSnapshot(snapshot: jackett.SearchProgressSnapshot) results_widget.ResultsWidget.LiveStatus {
+fn liveStatusFromSnapshot(snapshot: jackett.ProgressSnapshot) results_widget.ResultsWidget.LiveStatus {
     return .{
         .phase = switch (snapshot.phase) {
             .discovering => .discovering,
@@ -2053,7 +2160,7 @@ test "runIndexersState login failure surfaces as ErrorState and cleans up pendin
     }
 }
 
-test "saveIndexerChanges marks rows saved on success and failed on failure" {
+test "commit core marks rows saved/failed and persists Last Status" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const tmp_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", std.testing.allocator);
@@ -2122,7 +2229,17 @@ test "saveIndexerChanges marks rows saved on success and failed on failure" {
     var session = jackett_admin.AdminSession{ .cookie = try std.testing.allocator.dupe(u8, "Jackett=abc123") };
     defer session.deinit(std.testing.allocator);
 
-    var failed_names = try saveIndexerChanges(&app, &widget, &session);
+    const items = try gatherCommitItems(&app, &widget);
+    defer std.testing.allocator.free(items);
+    const outcomes = try std.testing.allocator.alloc(bool, items.len);
+    defer std.testing.allocator.free(outcomes);
+    const cache_dir_resolved = try app.deps.jackett_indexer_cache_dir_resolver(std.testing.allocator);
+    defer std.testing.allocator.free(cache_dir_resolved);
+    var progress = jackett.Progress.init();
+    progress.setTotal(items.len);
+    var cancel = std.atomic.Value(bool).init(false);
+    commitItems(&app, &session, cache_dir_resolved, items, outcomes, &progress, &cancel);
+    var failed_names = try applyCommitOutcomes(&app, &widget, items, outcomes, progress.snapshot().completed);
     defer failed_names.deinit(std.testing.allocator);
 
     try std.testing.expect(widget.rows[0].pending_active != null);
@@ -2143,6 +2260,161 @@ test "saveIndexerChanges marks rows saved on success and failed on failure" {
     defer store.deinit();
     try std.testing.expectEqual(@as(?bool, true), store.get("good"));
     try std.testing.expectEqual(@as(?bool, false), store.get("bad"));
+}
+
+test "commitItems runs on a worker thread, recording outcomes and progress" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", std.testing.allocator);
+    defer std.testing.allocator.free(tmp_abs);
+    const cache_dir = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "indexer_cache" });
+    defer std.testing.allocator.free(cache_dir);
+
+    const mock = struct {
+        // Everything under /indexers/ok succeeds; /indexers/bad fails.
+        fn exec(alloc: std.mem.Allocator, request: jackett_admin.AdminRequest) jackett_admin.AdminError!jackett_admin.AdminResponse {
+            if (std.mem.indexOf(u8, request.url, "/indexers/ok") != null) {
+                return .{ .status = .ok, .body = try alloc.dupe(u8, "{}") };
+            }
+            return error.HttpError;
+        }
+    };
+
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
+        .deps = .{ .jackett_admin_executor = mock.exec },
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "xterm",
+    };
+
+    var session = jackett_admin.AdminSession{ .cookie = try std.testing.allocator.dupe(u8, "Jackett=abc123") };
+    defer session.deinit(std.testing.allocator);
+
+    const items = [_]CommitItem{
+        .{ .idx = 0, .enable = true, .id = "ok" },
+        .{ .idx = 1, .enable = true, .id = "bad" },
+    };
+    var outcomes: [2]bool = undefined;
+    var progress = jackett.Progress.init();
+    progress.setTotal(items.len);
+    progress.setPhase(.querying);
+    var cancel = std.atomic.Value(bool).init(false);
+
+    const thread = try std.Thread.spawn(.{}, commitItems, .{ &app, &session, cache_dir, items[0..], outcomes[0..], &progress, &cancel });
+    thread.join();
+
+    try std.testing.expectEqual(true, outcomes[0]);
+    try std.testing.expectEqual(false, outcomes[1]);
+
+    const snap = progress.snapshot();
+    try std.testing.expectEqual(jackett.ProgressPhase.done, snap.phase);
+    try std.testing.expectEqual(@as(usize, 2), snap.completed);
+    try std.testing.expectEqual(@as(usize, 1), snap.failed);
+}
+
+test "commitItems stops early when cancel is set, leaving later items unattempted" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", std.testing.allocator);
+    defer std.testing.allocator.free(tmp_abs);
+    const cache_dir = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "indexer_cache" });
+    defer std.testing.allocator.free(cache_dir);
+
+    const mock = struct {
+        fn exec(alloc: std.mem.Allocator, _: jackett_admin.AdminRequest) jackett_admin.AdminError!jackett_admin.AdminResponse {
+            return .{ .status = .ok, .body = try alloc.dupe(u8, "{}") };
+        }
+    };
+
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
+        .deps = .{ .jackett_admin_executor = mock.exec },
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "xterm",
+    };
+
+    var session = jackett_admin.AdminSession{ .cookie = try std.testing.allocator.dupe(u8, "Jackett=abc123") };
+    defer session.deinit(std.testing.allocator);
+
+    const items = [_]CommitItem{
+        .{ .idx = 0, .enable = true, .id = "ok" },
+        .{ .idx = 1, .enable = true, .id = "ok" },
+    };
+    var outcomes = [_]bool{ false, false };
+    var progress = jackett.Progress.init();
+    progress.setTotal(items.len);
+
+    // Cancel before any item runs: the loop breaks at the top, nothing attempted.
+    var cancel = std.atomic.Value(bool).init(true);
+    commitItems(&app, &session, cache_dir, items[0..], outcomes[0..], &progress, &cancel);
+
+    const snap = progress.snapshot();
+    try std.testing.expectEqual(jackett.ProgressPhase.done, snap.phase);
+    try std.testing.expectEqual(@as(usize, 0), snap.completed);
+}
+
+test "applyCommitOutcomes leaves unattempted rows pending" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", std.testing.allocator);
+    defer std.testing.allocator.free(tmp_abs);
+    const status_path = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "last_status.json" });
+    defer std.testing.allocator.free(status_path);
+
+    const state = struct {
+        var test_status_path: []const u8 = &.{};
+    };
+    state.test_status_path = status_path;
+    const mock = struct {
+        fn statusPath(alloc: std.mem.Allocator) anyerror![]u8 {
+            return alloc.dupe(u8, state.test_status_path);
+        }
+    };
+
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
+        .deps = .{ .last_status_path_resolver = mock.statusPath },
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "xterm",
+    };
+
+    var widget = indexers_widget.IndexersWidget.init(std.testing.allocator);
+    defer widget.deinit();
+    try widget.setIndexers(&.{
+        .{ .id = "a", .name = "Aaa", .configured = true },
+        .{ .id = "b", .name = "Bbb", .configured = true },
+    });
+    widget.rows[0].pending_active = false;
+    widget.rows[1].pending_active = false;
+
+    const items = [_]CommitItem{
+        .{ .idx = 0, .enable = false, .id = "a" },
+        .{ .idx = 1, .enable = false, .id = "b" },
+    };
+    const outcomes = [_]bool{ true, false };
+
+    // Only the first item was attempted (completed = 1); the second keeps its
+    // pending toggle and is left untouched (no last_status recorded).
+    var failed_names = try applyCommitOutcomes(&app, &widget, items[0..], outcomes[0..], 1);
+    defer failed_names.deinit(std.testing.allocator);
+
+    try std.testing.expect(widget.rows[0].pending_active == null);
+    try std.testing.expectEqual(@as(?bool, true), widget.rows[0].last_status);
+    try std.testing.expectEqual(@as(?bool, false), widget.rows[1].pending_active);
+    try std.testing.expectEqual(@as(?bool, null), widget.rows[1].last_status);
+    try std.testing.expectEqual(@as(usize, 0), failed_names.items.len);
 }
 
 test "decideProfileSave maps active/match combinations" {

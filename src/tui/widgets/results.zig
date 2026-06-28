@@ -5,18 +5,7 @@ const Torrent = @import("torrent").Torrent;
 const compat = @import("compat");
 const list_nav = @import("list_nav");
 
-const spinner_frames = [_][]const u8{
-    "⣎⡇",
-    "⣇⡇",
-    "⣏⡆",
-    "⣏⡅",
-    "⣏⡃",
-    "⣏⠇",
-    "⡏⡇",
-    "⢏⡇",
-    "⣋⡇",
-    "⣍⡇",
-};
+const spinner_frames = theme.spinner_frames;
 
 pub const SortColumn = enum {
     age,

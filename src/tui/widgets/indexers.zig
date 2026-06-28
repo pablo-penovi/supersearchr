@@ -20,8 +20,21 @@ pub const IndexersWidget = struct {
     marquee_target_set: bool,
     marquee_cursor: usize,
     marquee_categories_col_width: usize,
+    commit_progress: ?CommitProgress,
 
     const marquee_edge_hold_ticks: u8 = 2;
+
+    /// Live progress of an in-flight commit, shown in the footer in place of
+    /// the key hints. `null` when no commit is running.
+    pub const CommitProgress = struct {
+        completed: usize,
+        total: usize,
+        failed: usize,
+        spinner_frame: usize,
+        /// True once ESC has been pressed: the worker finishes the in-flight
+        /// tracker then stops. Drives the "Finishing current…" footer hint.
+        canceling: bool = false,
+    };
 
     pub const SourceRow = struct {
         id: []const u8,
@@ -77,7 +90,17 @@ pub const IndexersWidget = struct {
             .marquee_target_set = false,
             .marquee_cursor = 0,
             .marquee_categories_col_width = 0,
+            .commit_progress = null,
         };
+    }
+
+    /// Sets (or clears) the in-flight commit progress shown in the footer.
+    /// Forces a full redraw when the displayed value changes so the spinner
+    /// and counts animate.
+    pub fn setCommitProgress(self: *IndexersWidget, progress: ?CommitProgress) void {
+        if (std.meta.eql(self.commit_progress, progress)) return;
+        self.commit_progress = progress;
+        self.force_full_redraw = true;
     }
 
     pub fn deinit(self: *IndexersWidget) void {
@@ -218,6 +241,40 @@ pub const IndexersWidget = struct {
         }
     }
 
+    /// Navigation-only handling for use while a commit is in flight: arrow keys
+    /// move the cursor/scroll, everything else (toggle/save/exit) is ignored so
+    /// the user can browse but not mutate or leave mid-commit. Returns true when
+    /// the view changed and should be re-rendered.
+    pub fn handleNavigationOnly(self: *IndexersWidget, event: term.Event) bool {
+        switch (event.key) {
+            .arrow_down => {
+                if (!list_nav.moveDown(&self.cursor, self.rows.len)) return false;
+                list_nav.adjustScroll(self.cursor, &self.scroll_offset, self.display_count);
+                self.resetMarqueeState();
+                return true;
+            },
+            .arrow_up => {
+                if (!list_nav.moveUp(&self.cursor)) return false;
+                list_nav.adjustScroll(self.cursor, &self.scroll_offset, self.display_count);
+                self.resetMarqueeState();
+                return true;
+            },
+            .shift_arrow_down => {
+                const moved = list_nav.movePageDown(&self.cursor, self.rows.len, self.display_count);
+                if (moved) self.resetMarqueeState();
+                list_nav.adjustScroll(self.cursor, &self.scroll_offset, self.display_count);
+                return moved;
+            },
+            .shift_arrow_up => {
+                const moved = list_nav.movePageUp(&self.cursor, self.display_count);
+                if (moved) self.resetMarqueeState();
+                list_nav.adjustScroll(self.cursor, &self.scroll_offset, self.display_count);
+                return moved;
+            },
+            else => return false,
+        }
+    }
+
     pub fn advanceMarquee(self: *IndexersWidget, max_rows: u16, max_cols: u16) bool {
         if (self.rows.len == 0) return false;
         if (self.cursor >= self.rows.len) return false;
@@ -326,7 +383,13 @@ pub const IndexersWidget = struct {
                     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 
                     term.setFg256(colors.muted);
-                    if (self.hasPendingChanges()) {
+                    if (self.commit_progress) |progress| {
+                        if (progress.canceling) {
+                            stdout.writeAll("  Finishing current tracker\xe2\x80\xa6") catch {};
+                        } else {
+                            stdout.writeAll("  \xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | ESC stop after current") catch {};
+                        }
+                    } else if (self.hasPendingChanges()) {
                         stdout.writeAll("  \xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | SPACE toggle | ENTER save | ESC revert | F3 save profile") catch {};
                     } else {
                         stdout.writeAll("  \xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | SPACE toggle | ESC back | F3 save profile") catch {};
@@ -645,7 +708,7 @@ fn drawStatusRow(
     end_idx: usize,
 ) !void {
     var status_buf: [128]u8 = undefined;
-    const status = formatStatusText(&status_buf, self.scroll_offset, end_idx, self.rows.len);
+    const status = formatStatusText(&status_buf, self.scroll_offset, end_idx, self.rows.len, self.commit_progress);
     try writeSpaces(stdout, 1);
     const inner_width = panel_width - 2;
     term.setFg256(colors.panel_border);
@@ -658,7 +721,31 @@ fn drawStatusRow(
     try stdout.writeAll("\r\n");
 }
 
-fn formatStatusText(buf: []u8, scroll_offset: usize, end_idx: usize, total_count: usize) []const u8 {
+/// Status row text. While a commit is in flight, mirrors the results screen's
+/// in-panel search-progress row ("Showing 1-12 of 80 | Committing 2/4 ⣏⡆",
+/// plus a failed tally) so both screens read identically.
+fn formatStatusText(
+    buf: []u8,
+    scroll_offset: usize,
+    end_idx: usize,
+    total_count: usize,
+    commit_progress: ?IndexersWidget.CommitProgress,
+) []const u8 {
+    if (commit_progress) |progress| {
+        const spinner = theme.spinnerGlyph(progress.spinner_frame);
+        if (progress.failed == 0) {
+            return std.fmt.bufPrint(
+                buf,
+                "Showing {d}-{d} of {d} | Committing {d}/{d} {s}",
+                .{ scroll_offset + 1, end_idx, total_count, progress.completed, progress.total, spinner },
+            ) catch "Committing";
+        }
+        return std.fmt.bufPrint(
+            buf,
+            "Showing {d}-{d} of {d} | Committing {d}/{d}, {d} failed {s}",
+            .{ scroll_offset + 1, end_idx, total_count, progress.completed, progress.total, progress.failed, spinner },
+        ) catch "Committing";
+    }
     if (total_count == 0) return "No indexers found";
     return std.fmt.bufPrint(buf, "Showing {d}-{d} of {d}", .{ scroll_offset + 1, end_idx, total_count }) catch "Showing";
 }
@@ -698,7 +785,7 @@ fn drawCompact(
         }
         term.setFg256(colors.panel_title);
         var status_buf: [128]u8 = undefined;
-        const status = formatStatusText(&status_buf, self.scroll_offset, @min(self.scroll_offset + self.display_count, self.rows.len), self.rows.len);
+        const status = formatStatusText(&status_buf, self.scroll_offset, @min(self.scroll_offset + self.display_count, self.rows.len), self.rows.len, self.commit_progress);
         stdout.writeAll(status) catch {};
         stdout.writeAll("\r\n") catch {};
     }
@@ -798,6 +885,39 @@ test "setIndexers maps record bytes into fixed Row array, clamped to 5" {
 
     const over = &widget.rows[findRowIndex(&widget, "over")];
     try std.testing.expectEqual(@as(u8, 5), over.record_len);
+}
+
+test "formatStatusText folds commit progress into the showing row" {
+    var buf: [128]u8 = undefined;
+
+    const idle = formatStatusText(&buf, 0, 12, 80, null);
+    try std.testing.expect(std.mem.indexOf(u8, idle, "Showing 1-12 of 80") != null);
+    try std.testing.expect(std.mem.indexOf(u8, idle, "Committing") == null);
+
+    const without_failed = formatStatusText(&buf, 0, 12, 80, .{ .completed = 2, .total = 4, .failed = 0, .spinner_frame = 0 });
+    try std.testing.expect(std.mem.indexOf(u8, without_failed, "Showing 1-12 of 80 | Committing 2/4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, without_failed, "failed") == null);
+
+    const with_failed = formatStatusText(&buf, 0, 12, 80, .{ .completed = 3, .total = 4, .failed = 1, .spinner_frame = 0 });
+    try std.testing.expect(std.mem.indexOf(u8, with_failed, "Committing 3/4, 1 failed") != null);
+}
+
+test "setCommitProgress only forces a redraw when the value changes" {
+    var widget = IndexersWidget.init(std.testing.allocator);
+    defer widget.deinit();
+    widget.force_full_redraw = false;
+
+    widget.setCommitProgress(.{ .completed = 1, .total = 4, .failed = 0, .spinner_frame = 0 });
+    try std.testing.expect(widget.force_full_redraw);
+    try std.testing.expect(widget.commit_progress != null);
+
+    widget.force_full_redraw = false;
+    widget.setCommitProgress(.{ .completed = 1, .total = 4, .failed = 0, .spinner_frame = 0 });
+    try std.testing.expect(!widget.force_full_redraw);
+
+    widget.setCommitProgress(null);
+    try std.testing.expect(widget.force_full_redraw);
+    try std.testing.expect(widget.commit_progress == null);
 }
 
 test "setIndexers carries last_status through, defaulting to null" {

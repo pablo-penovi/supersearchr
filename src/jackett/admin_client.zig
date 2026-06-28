@@ -318,7 +318,7 @@ pub fn listAllIndexers(
     defer allocator.free(response.body);
     defer if (response.set_cookie) |c| allocator.free(c);
 
-    if (response.status != .ok) {
+    if (response.status.class() != .success) {
         debug_log.writef(allocator, "jackett-admin", "listAllIndexers: unexpected status={d} body=\"{s}\"", .{ @intFromEnum(response.status), bodySnippet(response.body) });
         return error.HttpError;
     }
@@ -345,7 +345,7 @@ pub fn getIndexerConfig(
     });
     defer if (response.set_cookie) |c| allocator.free(c);
 
-    if (response.status != .ok) {
+    if (response.status.class() != .success) {
         debug_log.writef(allocator, "jackett-admin", "getIndexerConfig: unexpected status={d} body=\"{s}\"", .{ @intFromEnum(response.status), bodySnippet(response.body) });
         allocator.free(response.body);
         return error.HttpError;
@@ -376,7 +376,7 @@ pub fn setIndexerConfig(
     defer allocator.free(response.body);
     defer if (response.set_cookie) |c| allocator.free(c);
 
-    if (response.status != .ok) {
+    if (response.status.class() != .success) {
         debug_log.writef(allocator, "jackett-admin", "setIndexerConfig: unexpected status={d} body=\"{s}\"", .{ @intFromEnum(response.status), bodySnippet(response.body) });
         return error.HttpError;
     }
@@ -402,7 +402,7 @@ pub fn deleteIndexer(
     defer allocator.free(response.body);
     defer if (response.set_cookie) |c| allocator.free(c);
 
-    if (response.status != .ok) {
+    if (response.status.class() != .success) {
         debug_log.writef(allocator, "jackett-admin", "deleteIndexer: unexpected status={d} body=\"{s}\"", .{ @intFromEnum(response.status), bodySnippet(response.body) });
         return error.HttpError;
     }
@@ -712,6 +712,21 @@ test "setIndexerConfig sends POST with Cookie header and body" {
 
     try setIndexerConfig(allocator, "http://localhost:9117", "1337x", "{\"field\":\"value\"}", &session, mock.exec);
     try std.testing.expect(test_observed_set_config_request_ok);
+}
+
+test "setIndexerConfig accepts any 2xx (e.g. 204 No Content) as success" {
+    const allocator = std.testing.allocator;
+    const mock = struct {
+        fn exec(alloc: std.mem.Allocator, _: AdminRequest) AdminError!AdminResponse {
+            // Jackett answers a successful config save with 204 No Content.
+            return .{ .status = .no_content, .body = try alloc.dupe(u8, "") };
+        }
+    };
+
+    var session = AdminSession{ .cookie = try allocator.dupe(u8, "Jackett=abc123") };
+    defer session.deinit(allocator);
+
+    try setIndexerConfig(allocator, "http://localhost:9117", "1337x", "{}", &session, mock.exec);
 }
 
 var test_observed_delete_request_ok: bool = false;

@@ -4,6 +4,26 @@ const term = @import("term");
 pub const compact_cols: u16 = 56;
 pub const compact_rows: u16 = 10;
 
+/// Animation frames for in-progress activity (streaming search, indexer
+/// commit). Shared so every progress footer animates identically.
+pub const spinner_frames = [_][]const u8{
+    "⣎⡇",
+    "⣇⡇",
+    "⣏⡆",
+    "⣏⡅",
+    "⣏⡃",
+    "⣏⠇",
+    "⡏⡇",
+    "⢏⡇",
+    "⣋⡇",
+    "⣍⡇",
+};
+
+/// Returns the spinner glyph for an arbitrary frame counter (wraps).
+pub fn spinnerGlyph(frame: usize) []const u8 {
+    return spinner_frames[frame % spinner_frames.len];
+}
+
 pub const Theme = struct {
     panel_border: u8,
     panel_title: u8,

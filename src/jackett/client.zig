@@ -365,20 +365,20 @@ pub const ProgressPhase = enum(u8) {
     done = 2,
 };
 
-pub const SearchProgressSnapshot = struct {
+pub const ProgressSnapshot = struct {
     phase: ProgressPhase,
     completed: usize,
     total: usize,
     failed: usize,
 };
 
-pub const SearchProgress = struct {
+pub const Progress = struct {
     phase: std.atomic.Value(u8),
     completed: std.atomic.Value(usize),
     total: std.atomic.Value(usize),
     failed: std.atomic.Value(usize),
 
-    pub fn init() SearchProgress {
+    pub fn init() Progress {
         return .{
             .phase = std.atomic.Value(u8).init(@intFromEnum(ProgressPhase.discovering)),
             .completed = std.atomic.Value(usize).init(0),
@@ -387,23 +387,23 @@ pub const SearchProgress = struct {
         };
     }
 
-    pub fn setPhase(self: *SearchProgress, phase: ProgressPhase) void {
+    pub fn setPhase(self: *Progress, phase: ProgressPhase) void {
         self.phase.store(@intFromEnum(phase), .release);
     }
 
-    pub fn setTotal(self: *SearchProgress, total: usize) void {
+    pub fn setTotal(self: *Progress, total: usize) void {
         self.total.store(total, .release);
     }
 
-    pub fn recordCompleted(self: *SearchProgress) void {
+    pub fn recordCompleted(self: *Progress) void {
         _ = self.completed.fetchAdd(1, .release);
     }
 
-    pub fn recordFailed(self: *SearchProgress) void {
+    pub fn recordFailed(self: *Progress) void {
         _ = self.failed.fetchAdd(1, .release);
     }
 
-    pub fn snapshot(self: *SearchProgress) SearchProgressSnapshot {
+    pub fn snapshot(self: *Progress) ProgressSnapshot {
         const phase_value = self.phase.load(.acquire);
         const phase: ProgressPhase = switch (phase_value) {
             @intFromEnum(ProgressPhase.querying) => .querying,
@@ -740,7 +740,7 @@ const StreamingSearchContext = struct {
     encoded_query: []const u8,
     indexers: []const Indexer,
     next_index: std.atomic.Value(usize),
-    progress: *SearchProgress,
+    progress: *Progress,
     queue: *SearchBatchQueue,
     skip_cache: bool,
 };
@@ -829,7 +829,7 @@ pub const SearchSession = struct {
     api_key: []u8,
     query: []u8,
     max_parallel: usize,
-    progress: SearchProgress,
+    progress: Progress,
     queue: SearchBatchQueue,
     coordinator_thread: ?std.Thread = null,
     done: std.atomic.Value(bool),
@@ -840,7 +840,7 @@ pub const SearchSession = struct {
         return self.allocator_value;
     }
 
-    pub fn snapshot(self: *SearchSession) SearchProgressSnapshot {
+    pub fn snapshot(self: *SearchSession) ProgressSnapshot {
         return self.progress.snapshot();
     }
 
@@ -929,7 +929,7 @@ pub const Client = struct {
             .api_key = &.{},
             .query = &.{},
             .max_parallel = max_parallel,
-            .progress = SearchProgress.init(),
+            .progress = Progress.init(),
             .queue = undefined,
             .done = std.atomic.Value(bool).init(false),
             .fatal_discovery_error = std.atomic.Value(bool).init(false),
