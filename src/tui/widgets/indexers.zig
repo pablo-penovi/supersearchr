@@ -3,6 +3,7 @@ const term = @import("term");
 const theme = @import("theme");
 const compat = @import("compat");
 const list_nav = @import("list_nav");
+const hints = @import("hints");
 
 pub const IndexersWidget = struct {
     allocator: std.mem.Allocator,
@@ -20,6 +21,7 @@ pub const IndexersWidget = struct {
     marquee_target_set: bool,
     marquee_cursor: usize,
     marquee_categories_col_width: usize,
+    hints_marquee: hints.HintsMarquee,
     commit_progress: ?CommitProgress,
 
     const marquee_edge_hold_ticks: u8 = 2;
@@ -90,6 +92,7 @@ pub const IndexersWidget = struct {
             .marquee_target_set = false,
             .marquee_cursor = 0,
             .marquee_categories_col_width = 0,
+            .hints_marquee = .{},
             .commit_progress = null,
         };
     }
@@ -276,22 +279,23 @@ pub const IndexersWidget = struct {
     }
 
     pub fn advanceMarquee(self: *IndexersWidget, max_rows: u16, max_cols: u16) bool {
-        if (self.rows.len == 0) return false;
-        if (self.cursor >= self.rows.len) return false;
-
         const compact = theme.isCompactViewport(max_rows, max_cols);
-        if (compact) return false;
+        const hints_changed = self.advanceHintsMarquee(max_cols, compact);
+
+        if (compact) return hints_changed;
+        if (self.rows.len == 0) return hints_changed;
+        if (self.cursor >= self.rows.len) return hints_changed;
 
         const panel_width = @as(usize, @intCast(max_cols - 2));
         const inner_width = panel_width - 2;
         const layout = TableLayout.forInnerWidth(inner_width);
-        if (layout.categories_col_width == 0) return false;
+        if (layout.categories_col_width == 0) return hints_changed;
 
         self.ensureMarqueeTarget(layout.categories_col_width);
 
         const categories = self.rows[self.cursor].categories;
         const categories_cols = theme.displayWidthOfText(categories);
-        if (categories_cols <= layout.categories_col_width) return false;
+        if (categories_cols <= layout.categories_col_width) return hints_changed;
 
         const overflow = categories_cols - layout.categories_col_width;
         if (self.marquee_offset_cols > overflow) {
@@ -310,7 +314,37 @@ pub const IndexersWidget = struct {
             self.force_selected_redraw = true;
             return true;
         }
-        return false;
+        return hints_changed;
+    }
+
+    /// Scrolls the key-hints footer when it is wider than the terminal. In the
+    /// compact layout the whole screen is repainted, so a step forces a full
+    /// redraw; the panel layout repaints the footer row on its own.
+    fn advanceHintsMarquee(self: *IndexersWidget, max_cols: u16, compact: bool) bool {
+        const indent = if (compact) hints.compact_indent_cols else hints.panel_indent_cols;
+        if (!self.hints_marquee.advance(self.hintsText(compact), max_cols, indent)) return false;
+        if (compact) self.force_full_redraw = true;
+        return true;
+    }
+
+    /// Key hints for the current state, shown in the footer.
+    fn hintsText(self: *IndexersWidget, compact: bool) []const u8 {
+        if (compact) {
+            return if (self.hasPendingChanges())
+                "SPACE toggle | ENTER save | ESC revert"
+            else
+                "SPACE toggle | ESC back";
+        }
+        if (self.commit_progress) |progress| {
+            return if (progress.canceling)
+                "Finishing current tracker\xe2\x80\xa6"
+            else
+                "\xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | ESC stop after current";
+        }
+        return if (self.hasPendingChanges())
+            "\xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | SPACE toggle | ENTER save | ESC revert | F3 save profile"
+        else
+            "\xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | SPACE toggle | ESC back | F3 save profile";
     }
 
     fn ensureMarqueeTarget(self: *IndexersWidget, categories_col_width: usize) void {
@@ -383,17 +417,7 @@ pub const IndexersWidget = struct {
                     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 
                     term.setFg256(colors.muted);
-                    if (self.commit_progress) |progress| {
-                        if (progress.canceling) {
-                            stdout.writeAll("  Finishing current tracker\xe2\x80\xa6") catch {};
-                        } else {
-                            stdout.writeAll("  \xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | ESC stop after current") catch {};
-                        }
-                    } else if (self.hasPendingChanges()) {
-                        stdout.writeAll("  \xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | SPACE toggle | ENTER save | ESC revert | F3 save profile") catch {};
-                    } else {
-                        stdout.writeAll("  \xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | SPACE toggle | ESC back | F3 save profile") catch {};
-                    }
+                    self.hints_marquee.draw(stdout, self.hintsText(false), max_cols, hints.panel_indent_cols);
                     term.resetColor();
                     term.clearBelow();
                 }
@@ -424,6 +448,10 @@ pub const IndexersWidget = struct {
                 }
             },
             .none => {},
+        }
+
+        if (!compact and self.hints_marquee.dirty) {
+            drawHintsRow(stdout, colors, self, max_rows, max_cols);
         }
 
         self.has_drawn_once = true;
@@ -792,11 +820,23 @@ fn drawCompact(
 
     drawCompactDivider(stdout, colors, border, max_cols);
     term.setFg256(colors.muted);
-    if (self.hasPendingChanges()) {
-        stdout.writeAll("SPACE toggle | ENTER save | ESC revert") catch {};
-    } else {
-        stdout.writeAll("SPACE toggle | ESC back") catch {};
-    }
+    self.hints_marquee.draw(stdout, self.hintsText(true), max_cols, hints.compact_indent_cols);
+    term.resetColor();
+    term.clearBelow();
+}
+
+/// Repaints just the hints footer, for marquee steps that leave the rest of the
+/// screen untouched.
+fn drawHintsRow(
+    stdout: compat.FileWriter,
+    colors: theme.Theme,
+    widget: *IndexersWidget,
+    max_rows: u16,
+    max_cols: u16,
+) void {
+    term.moveCursor(hints.rowFromDisplayCount(widget.display_count, max_rows), 1);
+    term.setFg256(colors.muted);
+    widget.hints_marquee.draw(stdout, widget.hintsText(false), max_cols, hints.panel_indent_cols);
     term.resetColor();
     term.clearBelow();
 }
@@ -1182,4 +1222,30 @@ test "moving the cursor resets the categories marquee" {
     _ = widget.handleEvent(.{ .key = .arrow_down, .value = 0 });
     try std.testing.expectEqual(@as(usize, 0), widget.marquee_offset_cols);
     try std.testing.expectEqual(false, widget.marquee_target_set);
+}
+
+test "the hints footer scrolls when it outgrows the terminal" {
+    var widget = IndexersWidget.init(std.testing.allocator);
+    defer widget.deinit();
+
+    // 60 columns is narrower than the footer, which fits at 80.
+    var moved = false;
+    for (0..8) |_| {
+        if (widget.advanceMarquee(24, 60)) moved = true;
+    }
+    try std.testing.expect(moved);
+    try std.testing.expect(widget.hints_marquee.offset_cols > 0);
+}
+
+test "the hints footer stays inside the terminal width" {
+    var widget = IndexersWidget.init(std.testing.allocator);
+    defer widget.deinit();
+
+    var buf: [512]u8 = undefined;
+    for ([_]u16{ 56, 80, 120, 200 }) |cols| {
+        var writer: std.Io.Writer = .fixed(&buf);
+        widget.hints_marquee.reset();
+        widget.hints_marquee.draw(&writer, widget.hintsText(false), cols, hints.panel_indent_cols);
+        try std.testing.expect(theme.displayWidthOfText(writer.buffered()) < cols);
+    }
 }

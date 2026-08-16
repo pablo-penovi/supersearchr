@@ -157,11 +157,18 @@ fn runSearchState(app: *App) !void {
     configureSearchWidgetForApp(&widget, app);
     var needs_render = true;
     const input_poll_ms: i32 = 80;
+    const marquee_step_interval_ms: i64 = scaledMarqueeIntervalMs(input_poll_ms, 30);
+    var marquee_budget_ms: i64 = 0;
+    var last_loop_ms: i64 = compat.milliTimestamp();
 
     while (true) {
         if (refreshTerminalSize(app)) {
             needs_render = true;
         }
+
+        const now_ms = compat.milliTimestamp();
+        marquee_budget_ms += nonNegativeElapsedMs(last_loop_ms, now_ms);
+        last_loop_ms = now_ms;
 
         if (needs_render) {
             widget.render();
@@ -172,7 +179,12 @@ fn runSearchState(app: *App) !void {
             app.state = .{ .err = .{ .message = "Failed to read input" } };
             return;
         };
-        const event = maybe_event orelse continue;
+        const event = maybe_event orelse {
+            if (consumeMarqueeTick(&marquee_budget_ms, marquee_step_interval_ms)) {
+                if (widget.advanceHintsMarquee()) needs_render = true;
+            }
+            continue;
+        };
         if (event.key == .f1) {
             const query = try app.allocator.dupe(u8, widget.getQuery());
             app.state = .{ .indexers = .{
@@ -962,12 +974,19 @@ fn runProfilesState(app: *App, profiles_state: *ProfilesState) !void {
 
     var needs_render = true;
     const input_poll_ms: i32 = 80;
+    const marquee_step_interval_ms: i64 = scaledMarqueeIntervalMs(input_poll_ms, 30);
+    var marquee_budget_ms: i64 = 0;
+    var last_loop_ms: i64 = compat.milliTimestamp();
 
     while (true) {
         if (refreshTerminalSize(app)) {
             widget.force_full_redraw = true;
             needs_render = true;
         }
+
+        const now_ms = compat.milliTimestamp();
+        marquee_budget_ms += nonNegativeElapsedMs(last_loop_ms, now_ms);
+        last_loop_ms = now_ms;
 
         if (needs_render) {
             widget.render(app.term_rows, app.term_cols);
@@ -979,7 +998,14 @@ fn runProfilesState(app: *App, profiles_state: *ProfilesState) !void {
             app.state = .{ .err = .{ .message = "Failed to read input" } };
             return;
         };
-        const event = maybe_event orelse continue;
+        const event = maybe_event orelse {
+            if (consumeMarqueeTick(&marquee_budget_ms, marquee_step_interval_ms)) {
+                if (widget.advanceHintsMarquee(app.term_rows, app.term_cols)) {
+                    needs_render = true;
+                }
+            }
+            continue;
+        };
         const action = widget.handleEvent(event);
         needs_render = true;
 

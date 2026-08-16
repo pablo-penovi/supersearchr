@@ -3,10 +3,12 @@ const term = @import("term");
 const theme = @import("theme");
 const compat = @import("compat");
 const list_nav = @import("list_nav");
+const hints = @import("hints");
 
 /// Scrollable list of saved tracker profiles. Used by the F2 "Load Tracker
 /// Profile" screen. Mirrors the structure of `indexers.zig` (panel frame +
-/// header + content rows + status + footer) but without toggles or marquee.
+/// header + content rows + status + footer) but without toggles or a column
+/// marquee; only the footer hints scroll when they outgrow the terminal.
 pub const ProfilesWidget = struct {
     allocator: std.mem.Allocator,
     rows: []Row,
@@ -16,6 +18,7 @@ pub const ProfilesWidget = struct {
     has_drawn_once: bool,
     force_full_redraw: bool,
     last_snapshot: ?RenderSnapshot,
+    hints_marquee: hints.HintsMarquee,
 
     pub const SourceRow = struct {
         name: []const u8,
@@ -51,6 +54,7 @@ pub const ProfilesWidget = struct {
             .has_drawn_once = false,
             .force_full_redraw = true,
             .last_snapshot = null,
+            .hints_marquee = .{},
         };
     }
 
@@ -171,7 +175,7 @@ pub const ProfilesWidget = struct {
                     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 
                     term.setFg256(colors.muted);
-                    stdout.writeAll("  \xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | ENTER load | Del delete | ESC back") catch {};
+                    self.hints_marquee.draw(stdout, hintsText(false), max_cols, hints.panel_indent_cols);
                     term.resetColor();
                     term.clearBelow();
                 }
@@ -204,11 +208,51 @@ pub const ProfilesWidget = struct {
             .none => {},
         }
 
+        if (!compact and self.hints_marquee.dirty) {
+            drawHintsRow(stdout, colors, self, max_rows, max_cols);
+        }
+
         self.has_drawn_once = true;
         self.force_full_redraw = false;
         self.last_snapshot = snapshot;
     }
+
+    /// Scrolls the key-hints footer when it is wider than the terminal. In the
+    /// compact layout the whole screen is repainted, so a step forces a full
+    /// redraw; the panel layout repaints the footer row on its own.
+    pub fn advanceHintsMarquee(self: *ProfilesWidget, max_rows: u16, max_cols: u16) bool {
+        const compact = theme.isCompactViewport(max_rows, max_cols);
+        const indent = if (compact) hints.compact_indent_cols else hints.panel_indent_cols;
+        if (!self.hints_marquee.advance(hintsText(compact), max_cols, indent)) return false;
+        if (compact) self.force_full_redraw = true;
+        return true;
+    }
 };
+
+/// Key hints shown in the footer. The compact layout drops the navigation
+/// hints that do not fit alongside the shorter list.
+fn hintsText(compact: bool) []const u8 {
+    return if (compact)
+        "ENTER load | Del delete | ESC back"
+    else
+        "\xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | ENTER load | Del delete | ESC back";
+}
+
+/// Repaints just the hints footer, for marquee steps that leave the rest of the
+/// screen untouched.
+fn drawHintsRow(
+    stdout: compat.FileWriter,
+    colors: theme.Theme,
+    widget: *ProfilesWidget,
+    max_rows: u16,
+    max_cols: u16,
+) void {
+    term.moveCursor(hints.rowFromDisplayCount(widget.display_count, max_rows), 1);
+    term.setFg256(colors.muted);
+    widget.hints_marquee.draw(stdout, hintsText(false), max_cols, hints.panel_indent_cols);
+    term.resetColor();
+    term.clearBelow();
+}
 
 const RenderSnapshot = list_nav.BaseSnapshot;
 
@@ -447,7 +491,7 @@ fn drawCompact(
 
     drawCompactDivider(stdout, colors, border, max_cols);
     term.setFg256(colors.muted);
-    stdout.writeAll("ENTER load | Del delete | ESC back") catch {};
+    self.hints_marquee.draw(stdout, hintsText(true), max_cols, hints.compact_indent_cols);
     term.resetColor();
     term.clearBelow();
 }
@@ -549,4 +593,29 @@ test "handleEvent Enter on empty list closes" {
     defer widget.deinit();
 
     try std.testing.expectEqual(ProfilesWidget.ProfilesAction.close, widget.handleEvent(.{ .key = .enter, .value = 0 }));
+}
+
+test "the hints footer scrolls when it outgrows the terminal" {
+    var widget = ProfilesWidget.init(std.testing.allocator);
+    defer widget.deinit();
+
+    var moved = false;
+    for (0..8) |_| {
+        if (widget.advanceHintsMarquee(24, 60)) moved = true;
+    }
+    try std.testing.expect(moved);
+    try std.testing.expect(widget.hints_marquee.offset_cols > 0);
+}
+
+test "the hints footer stays inside the terminal width" {
+    var widget = ProfilesWidget.init(std.testing.allocator);
+    defer widget.deinit();
+
+    var buf: [512]u8 = undefined;
+    for ([_]u16{ 56, 80, 120 }) |cols| {
+        var writer: std.Io.Writer = .fixed(&buf);
+        widget.hints_marquee.reset();
+        widget.hints_marquee.draw(&writer, hintsText(false), cols, hints.panel_indent_cols);
+        try std.testing.expect(theme.displayWidthOfText(writer.buffered()) < cols);
+    }
 }

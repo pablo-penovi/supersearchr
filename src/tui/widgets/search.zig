@@ -3,6 +3,12 @@ const term = @import("term");
 const theme = @import("theme");
 const build_options = @import("build_options");
 const compat = @import("compat");
+const hints = @import("hints");
+
+/// Key hints shown under the query. Both are wider than the narrowest
+/// supported terminal, so they scroll rather than wrap onto the next row.
+const panel_hints_text = " ENTER submit | ESC quit | Ctrl-BS clear | F2 load profile ";
+const compact_hints_text = "ENTER search | ESC exit | Ctrl-BS clear";
 
 pub const SearchWidget = struct {
     allocator: std.mem.Allocator,
@@ -10,6 +16,7 @@ pub const SearchWidget = struct {
     latest_version: ?[]const u8,
     has_drawn_once: bool,
     last_size: ?term.TerminalSize,
+    hints_marquee: hints.HintsMarquee,
 
     pub fn init(allocator: std.mem.Allocator) SearchWidget {
         return .{
@@ -18,6 +25,7 @@ pub const SearchWidget = struct {
             .latest_version = null,
             .has_drawn_once = false,
             .last_size = null,
+            .hints_marquee = .{},
         };
     }
 
@@ -35,14 +43,19 @@ pub const SearchWidget = struct {
 
         if (theme.isCompactViewport(size.rows, size.cols)) {
             switch (redraw_mode) {
-                .full => drawCompactFull(stdout, colors, self.query.items, self.latest_version),
-                .partial => drawCompactInputLine(stdout, size, colors, self.query.items),
+                .full => drawCompactFull(stdout, colors, self.query.items, self.latest_version, &self.hints_marquee, size),
+                .partial => {
+                    drawCompactInputLine(stdout, size, colors, self.query.items);
+                    if (self.hints_marquee.dirty) drawCompactHintsRow(stdout, size, colors, &self.hints_marquee);
+                },
             }
         } else {
             const layout = computePanelLayout(size);
             switch (redraw_mode) {
-                .full => drawPanelFrame(stdout, colors, border, layout, self.latest_version),
-                .partial => {},
+                .full => drawPanelFrame(stdout, colors, border, layout, self.latest_version, &self.hints_marquee),
+                .partial => {
+                    if (self.hints_marquee.dirty) drawPanelHintsRow(stdout, size, colors, border, layout, &self.hints_marquee);
+                },
             }
             drawPanelQueryRow(stdout, size, colors, border, layout, self.query.items);
         }
@@ -52,6 +65,16 @@ pub const SearchWidget = struct {
         term.showCursor();
         self.has_drawn_once = true;
         self.last_size = size;
+    }
+
+    /// Scrolls the key hints when they are wider than the space under the
+    /// query. Returns true when the row needs a repaint.
+    pub fn advanceHintsMarquee(self: *SearchWidget) bool {
+        const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
+        if (theme.isCompactViewport(size.rows, size.cols)) {
+            return self.hints_marquee.advance(compact_hints_text, size.cols, hints.compact_indent_cols);
+        }
+        return self.hints_marquee.advanceIn(panel_hints_text, computePanelLayout(size).panel_width - 2);
     }
 
     pub fn handleEvent(self: *SearchWidget, event: term.Event) SearchAction {
@@ -133,7 +156,14 @@ fn computePanelLayout(size: term.TerminalSize) PanelLayout {
     return .{ .panel_width = panel_width, .left_pad = left_pad, .top_pad = top_pad };
 }
 
-fn drawCompactFull(stdout: compat.FileWriter, colors: theme.Theme, query: []const u8, latest_version: ?[]const u8) void {
+fn drawCompactFull(
+    stdout: compat.FileWriter,
+    colors: theme.Theme,
+    query: []const u8,
+    latest_version: ?[]const u8,
+    hints_marquee: *hints.HintsMarquee,
+    size: term.TerminalSize,
+) void {
     term.moveCursor(1, 1);
     term.clearScreen();
     term.setFg256(colors.panel_title);
@@ -145,7 +175,8 @@ fn drawCompactFull(stdout: compat.FileWriter, colors: theme.Theme, query: []cons
     stdout.writeAll(query) catch {};
     stdout.writeAll("\r\n") catch {};
     term.setFg256(colors.muted);
-    stdout.writeAll("ENTER search | ESC exit | Ctrl-BS clear\r\n") catch {};
+    hints_marquee.draw(stdout, compact_hints_text, size.cols, hints.compact_indent_cols);
+    stdout.writeAll("\r\n") catch {};
     writeVersionLine(stdout, colors, latest_version);
 }
 
@@ -164,7 +195,14 @@ fn drawCompactInputLine(stdout: compat.FileWriter, size: term.TerminalSize, colo
     term.resetColor();
 }
 
-fn drawPanelFrame(stdout: compat.FileWriter, colors: theme.Theme, border: theme.BorderChars, layout: PanelLayout, latest_version: ?[]const u8) void {
+fn drawPanelFrame(
+    stdout: compat.FileWriter,
+    colors: theme.Theme,
+    border: theme.BorderChars,
+    layout: PanelLayout,
+    latest_version: ?[]const u8,
+    hints_marquee: *hints.HintsMarquee,
+) void {
     term.moveCursor(1, 1);
     term.clearScreen();
     term.moveCursor(@as(u16, @intCast(layout.top_pad)), 1);
@@ -192,7 +230,7 @@ fn drawPanelFrame(stdout: compat.FileWriter, colors: theme.Theme, border: theme.
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.setFg256(colors.muted);
-    theme.writePadded(stdout, " ENTER submit | ESC quit | Ctrl-BS clear | F2 load profile ", layout.panel_width - 2) catch {};
+    hints_marquee.drawPaddedIn(stdout, panel_hints_text, layout.panel_width - 2);
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.resetColor();
@@ -214,6 +252,41 @@ fn writeVersionLine(stdout: compat.FileWriter, colors: theme.Theme, latest_versi
         stdout.writeAll(latest) catch {};
         stdout.writeAll("]") catch {};
     }
+    term.resetColor();
+}
+
+/// Repaints only the hints row inside the panel, for marquee steps.
+fn drawPanelHintsRow(
+    stdout: compat.FileWriter,
+    size: term.TerminalSize,
+    colors: theme.Theme,
+    border: theme.BorderChars,
+    layout: PanelLayout,
+    hints_marquee: *hints.HintsMarquee,
+) void {
+    const hints_row = clampCursorCoord(size.rows, layout.top_pad + 4);
+    term.moveCursor(hints_row, @as(u16, @intCast(layout.left_pad + 1)));
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.setFg256(colors.muted);
+    hints_marquee.drawPaddedIn(stdout, panel_hints_text, layout.panel_width - 2);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.resetColor();
+}
+
+/// Repaints only the hints row of the compact layout, for marquee steps.
+fn drawCompactHintsRow(
+    stdout: compat.FileWriter,
+    size: term.TerminalSize,
+    colors: theme.Theme,
+    hints_marquee: *hints.HintsMarquee,
+) void {
+    term.moveCursor(clampCursorCoord(size.rows, 3), 1);
+    term.setFg256(colors.muted);
+    // Padded rather than cleared to the end of the screen: the version line
+    // sits on the row below.
+    hints_marquee.drawPaddedIn(stdout, compact_hints_text, hints.availableCols(size.cols, hints.compact_indent_cols));
     term.resetColor();
 }
 

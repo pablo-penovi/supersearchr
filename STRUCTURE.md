@@ -38,5 +38,6 @@ Current project version: `v0.5.0`.
 - `src/tui/app.zig`: App state machine (search/results/indexers/error), streaming Jackett session orchestration, indexer management flow, and Superseedr handoff.
 - `src/tui/widgets/indexers.zig`: Indexers table widget with navigation, toggle state, save/revert actions, and tests.
 - `src/tui/widgets/list_nav.zig`: Shared cursor/scroll/page navigation helpers used by list-style widgets.
+- `src/tui/widgets/hints.zig`: Key-hints footer marquee: scrolls the hints back and forth when they are wider than the terminal instead of letting them wrap.
 - `src/tui/widgets/search.zig`: Search input widget and tests.
 - `src/tui/widgets/results.zig`: Results list widget with navigation, live search status, streaming update preservation, stats/size/age table rendering, and tests.

@@ -4,6 +4,7 @@ const theme = @import("theme");
 const Torrent = @import("torrent").Torrent;
 const compat = @import("compat");
 const list_nav = @import("list_nav");
+const hints = @import("hints");
 
 const spinner_frames = theme.spinner_frames;
 
@@ -36,6 +37,7 @@ pub const ResultsWidget = struct {
     marquee_target_set: bool,
     marquee_cursor: usize,
     marquee_title_col_width: usize,
+    hints_marquee: hints.HintsMarquee,
     sent_torrents: std.ArrayList(SentTorrent),
     failed_indexers: std.ArrayList([]const u8),
     live_status: LiveStatus,
@@ -90,6 +92,7 @@ pub const ResultsWidget = struct {
             .marquee_target_set = false,
             .marquee_cursor = 0,
             .marquee_title_col_width = 0,
+            .hints_marquee = .{},
             .sent_torrents = .empty,
             .failed_indexers = .empty,
             .live_status = .{},
@@ -264,11 +267,7 @@ pub const ResultsWidget = struct {
                     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 
                     term.setFg256(colors.muted);
-                    if (self.live_status.phase == .done) {
-                        stdout.writeAll("  ENTER select | s search | r refresh | ESC exit | \xe2\x86\x91\xe2\x86\x93 line | shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort | F2 load profile") catch {};
-                    } else {
-                        stdout.writeAll("  ENTER select | s search | ESC exit | \xe2\x86\x91\xe2\x86\x93 line | shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort | F2 load profile") catch {};
-                    }
+                    self.hints_marquee.draw(stdout, self.hintsText(false), max_cols, hints.panel_indent_cols);
                     term.resetColor();
                     term.clearBelow();
                 }
@@ -350,10 +349,29 @@ pub const ResultsWidget = struct {
             .none => {},
         }
 
+        if (!compact and self.hints_marquee.dirty) {
+            drawHintsRow(stdout, colors, self, max_rows, max_cols);
+        }
+
         self.has_drawn_once = true;
         self.force_full_redraw = false;
         self.force_selected_redraw = false;
         self.last_snapshot = snapshot;
+    }
+
+    /// Key hints for the current state. The marquee compares the returned text
+    /// with the one it is scrolling, so a state change restarts the scroll.
+    fn hintsText(self: *ResultsWidget, compact: bool) []const u8 {
+        if (compact) {
+            return if (self.live_status.phase == .done)
+                "ENTER select | s search | r refresh | ESC exit | \xe2\x86\x91\xe2\x86\x93 line"
+            else
+                "ENTER select | s search | ESC exit | \xe2\x86\x91\xe2\x86\x93 line";
+        }
+        return if (self.live_status.phase == .done)
+            "ENTER select | s search | r refresh | ESC exit | \xe2\x86\x91\xe2\x86\x93 line | shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort | F2 load profile"
+        else
+            "ENTER select | s search | ESC exit | \xe2\x86\x91\xe2\x86\x93 line | shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort | F2 load profile";
     }
 
     pub fn renderStatusOnly(self: *ResultsWidget, max_rows: u16, max_cols: u16) bool {
@@ -507,23 +525,24 @@ pub const ResultsWidget = struct {
     }
 
     pub fn advanceMarquee(self: *ResultsWidget, max_rows: u16, max_cols: u16) bool {
-        if (self.torrents.len == 0) return false;
-        if (self.cursor >= self.torrents.len) return false;
-
         self.display_count = list_nav.computeDisplayCount(max_rows);
         const compact = theme.isCompactViewport(max_rows, max_cols);
-        if (compact) return false;
+        const hints_changed = self.advanceHintsMarquee(max_cols, compact);
+
+        if (compact) return hints_changed;
+        if (self.torrents.len == 0) return hints_changed;
+        if (self.cursor >= self.torrents.len) return hints_changed;
 
         const panel_width = @as(usize, @intCast(max_cols - 2));
         const inner_width = panel_width - 2;
         const layout = TableLayout.forInnerWidth(inner_width);
-        if (layout.title_col_width == 0) return false;
+        if (layout.title_col_width == 0) return hints_changed;
 
         self.ensureMarqueeTarget(layout.title_col_width);
 
         const title = self.torrents[self.cursor].title;
         const title_cols = theme.displayWidthOfText(title);
-        if (title_cols <= layout.title_col_width) return false;
+        if (title_cols <= layout.title_col_width) return hints_changed;
 
         const overflow = title_cols - layout.title_col_width;
         if (self.marquee_offset_cols > overflow) {
@@ -542,7 +561,17 @@ pub const ResultsWidget = struct {
             self.force_selected_redraw = true;
             return true;
         }
-        return false;
+        return hints_changed;
+    }
+
+    /// Scrolls the key-hints footer when it is wider than the terminal. In the
+    /// compact layout the whole screen is repainted, so a step forces a full
+    /// redraw; the panel layout repaints the footer row on its own.
+    fn advanceHintsMarquee(self: *ResultsWidget, max_cols: u16, compact: bool) bool {
+        const indent = if (compact) hints.compact_indent_cols else hints.panel_indent_cols;
+        if (!self.hints_marquee.advance(self.hintsText(compact), max_cols, indent)) return false;
+        if (compact) self.force_full_redraw = true;
+        return true;
     }
 
     fn ensureMarqueeTarget(self: *ResultsWidget, title_col_width: usize) void {
@@ -947,11 +976,23 @@ fn drawCompact(
     }
     drawCompactDivider(stdout, colors, border, max_cols);
     term.setFg256(colors.muted);
-    if (self.live_status.phase == .done) {
-        stdout.writeAll("ENTER select | s search | r refresh | ESC exit | \xe2\x86\x91\xe2\x86\x93 line") catch {};
-    } else {
-        stdout.writeAll("ENTER select | s search | ESC exit | \xe2\x86\x91\xe2\x86\x93 line") catch {};
-    }
+    self.hints_marquee.draw(stdout, self.hintsText(true), max_cols, hints.compact_indent_cols);
+    term.resetColor();
+    term.clearBelow();
+}
+
+/// Repaints just the hints footer, for marquee steps that leave the rest of the
+/// screen untouched.
+fn drawHintsRow(
+    stdout: compat.FileWriter,
+    colors: theme.Theme,
+    widget: *ResultsWidget,
+    max_rows: u16,
+    max_cols: u16,
+) void {
+    term.moveCursor(hints.rowFromDisplayCount(widget.display_count, max_rows), 1);
+    term.setFg256(colors.muted);
+    widget.hints_marquee.draw(stdout, widget.hintsText(false), max_cols, hints.panel_indent_cols);
     term.resetColor();
     term.clearBelow();
 }
@@ -2484,4 +2525,45 @@ test "ResultsWidget TAB resets selection cursor" {
 
     // Cursor should reset to 0!
     try std.testing.expectEqual(@as(usize, 0), widget.cursor);
+}
+
+test "the hints footer scrolls when it outgrows the terminal" {
+    var widget = ResultsWidget.init(std.testing.allocator);
+    defer widget.deinit();
+
+    // No torrents, so only the footer can move.
+    var moved = false;
+    for (0..8) |_| {
+        if (widget.advanceMarquee(24, 80)) moved = true;
+    }
+    try std.testing.expect(moved);
+    try std.testing.expect(widget.hints_marquee.offset_cols > 0);
+    try std.testing.expect(widget.hints_marquee.dirty);
+}
+
+test "the hints footer stays inside the terminal width" {
+    var widget = ResultsWidget.init(std.testing.allocator);
+    defer widget.deinit();
+
+    var buf: [512]u8 = undefined;
+    for ([_]u16{ 56, 80, 120, 200 }) |cols| {
+        var writer: std.Io.Writer = .fixed(&buf);
+        widget.hints_marquee.reset();
+        widget.hints_marquee.draw(&writer, widget.hintsText(false), cols, hints.panel_indent_cols);
+        try std.testing.expect(theme.displayWidthOfText(writer.buffered()) < cols);
+    }
+}
+
+test "the hints footer restarts when the live status changes" {
+    var widget = ResultsWidget.init(std.testing.allocator);
+    defer widget.deinit();
+    widget.live_status = .{ .phase = .querying, .completed = 0, .total = 2, .failed = 0 };
+
+    for (0..8) |_| _ = widget.advanceMarquee(24, 80);
+    try std.testing.expect(widget.hints_marquee.offset_cols > 0);
+
+    // The "r refresh" hint appears once the search finishes.
+    widget.live_status = .{ .phase = .done, .completed = 2, .total = 2, .failed = 0 };
+    _ = widget.advanceMarquee(24, 80);
+    try std.testing.expectEqual(@as(usize, 0), widget.hints_marquee.offset_cols);
 }

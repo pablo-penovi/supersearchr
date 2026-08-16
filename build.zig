@@ -85,6 +85,7 @@ pub fn build(b: *std.Build) void {
     const update_checker_mod = b.createModule(.{ .root_source_file = b.path("src/update_checker.zig") });
     const search_widget_mod = b.createModule(.{ .root_source_file = b.path("src/tui/widgets/search.zig") });
     const list_nav_mod = b.createModule(.{ .root_source_file = b.path("src/tui/widgets/list_nav.zig") });
+    const hints_mod = b.createModule(.{ .root_source_file = b.path("src/tui/widgets/hints.zig") });
     const results_widget_mod = b.createModule(.{ .root_source_file = b.path("src/tui/widgets/results.zig") });
     const indexers_widget_mod = b.createModule(.{ .root_source_file = b.path("src/tui/widgets/indexers.zig") });
     const profiles_widget_mod = b.createModule(.{ .root_source_file = b.path("src/tui/widgets/profiles.zig") });
@@ -139,11 +140,16 @@ pub fn build(b: *std.Build) void {
         .{ .name = "debug_log", .module = debug_log_mod },
         .{ .name = "compat", .module = compat_mod },
     });
+    addImports(hints_mod, &.{
+        .{ .name = "theme", .module = theme_mod },
+        .{ .name = "list_nav", .module = list_nav_mod },
+    });
     addImports(search_widget_mod, &.{
         .{ .name = "term", .module = term_mod },
         .{ .name = "theme", .module = theme_mod },
         .{ .name = "build_options", .module = build_options_mod },
         .{ .name = "compat", .module = compat_mod },
+        .{ .name = "hints", .module = hints_mod },
     });
     addImports(results_widget_mod, &.{
         .{ .name = "term", .module = term_mod },
@@ -151,18 +157,21 @@ pub fn build(b: *std.Build) void {
         .{ .name = "torrent", .module = torrent_mod },
         .{ .name = "compat", .module = compat_mod },
         .{ .name = "list_nav", .module = list_nav_mod },
+        .{ .name = "hints", .module = hints_mod },
     });
     addImports(indexers_widget_mod, &.{
         .{ .name = "term", .module = term_mod },
         .{ .name = "theme", .module = theme_mod },
         .{ .name = "compat", .module = compat_mod },
         .{ .name = "list_nav", .module = list_nav_mod },
+        .{ .name = "hints", .module = hints_mod },
     });
     addImports(profiles_widget_mod, &.{
         .{ .name = "term", .module = term_mod },
         .{ .name = "theme", .module = theme_mod },
         .{ .name = "compat", .module = compat_mod },
         .{ .name = "list_nav", .module = list_nav_mod },
+        .{ .name = "hints", .module = hints_mod },
     });
     addImports(panels_mod, &.{
         .{ .name = "term", .module = term_mod },
@@ -247,6 +256,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "theme", .module = theme_mod },
         .{ .name = "compat", .module = compat_mod },
         .{ .name = "list_nav", .module = list_nav_mod },
+        .{ .name = "hints", .module = hints_mod },
     });
 
     const http_exec_tests = addModuleTest(b, "test-http-exec", "src/jackett/http_exec.zig", target, optimize, strip);
@@ -299,9 +309,16 @@ pub fn build(b: *std.Build) void {
         .{ .name = "theme", .module = theme_mod },
         .{ .name = "build_options", .module = build_options_mod },
         .{ .name = "compat", .module = compat_mod },
+        .{ .name = "hints", .module = hints_mod },
     });
 
     const list_nav_tests = addModuleTest(b, "test-list-nav", "src/tui/widgets/list_nav.zig", target, optimize, strip);
+
+    const hints_tests = addModuleTest(b, "test-hints", "src/tui/widgets/hints.zig", target, optimize, strip);
+    addImports(hints_tests.artifact.root_module, &.{
+        .{ .name = "theme", .module = theme_mod },
+        .{ .name = "list_nav", .module = list_nav_mod },
+    });
 
     const results_widget_tests = addModuleTest(b, "test-results", "src/tui/widgets/results.zig", target, optimize, strip);
     addImports(results_widget_tests.artifact.root_module, &.{
@@ -310,6 +327,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "torrent", .module = torrent_mod },
         .{ .name = "compat", .module = compat_mod },
         .{ .name = "list_nav", .module = list_nav_mod },
+        .{ .name = "hints", .module = hints_mod },
     });
 
     const indexers_widget_tests = addModuleTest(b, "test-indexers", "src/tui/widgets/indexers.zig", target, optimize, strip);
@@ -318,6 +336,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "theme", .module = theme_mod },
         .{ .name = "compat", .module = compat_mod },
         .{ .name = "list_nav", .module = list_nav_mod },
+        .{ .name = "hints", .module = hints_mod },
     });
 
     const theme_tests = addModuleTest(b, "test-theme", "src/tui/theme.zig", target, optimize, strip);
@@ -409,6 +428,7 @@ pub fn build(b: *std.Build) void {
         panels_tests.run,
         search_widget_tests.run,
         list_nav_tests.run,
+        hints_tests.run,
         results_widget_tests.run,
         indexers_widget_tests.run,
         app_tests.run,
@@ -437,6 +457,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = panels_tests.name, .artifact = panels_tests.artifact },
         .{ .name = search_widget_tests.name, .artifact = search_widget_tests.artifact },
         .{ .name = list_nav_tests.name, .artifact = list_nav_tests.artifact },
+        .{ .name = hints_tests.name, .artifact = hints_tests.artifact },
         .{ .name = results_widget_tests.name, .artifact = results_widget_tests.artifact },
         .{ .name = indexers_widget_tests.name, .artifact = indexers_widget_tests.artifact },
         .{ .name = app_tests.name, .artifact = app_tests.artifact },
