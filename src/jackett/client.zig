@@ -278,7 +278,43 @@ fn extractEnclosureInfo(xml: []const u8, i: usize) ?struct { url: ?[]const u8, l
     };
 }
 
-fn normalizeLink(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+/// Link text is kept byte-exact after entity decoding; display text is also
+/// stripped of control characters, which would otherwise move the terminal
+/// cursor and wreck the surrounding panel when rendered.
+const NormalizeMode = enum { link, display };
+
+fn isControlCodepoint(cp: u21) bool {
+    return cp < 0x20 or cp == 0x7F or (cp >= 0x80 and cp <= 0x9F);
+}
+
+/// In display mode, control characters and spaces collapse into a single
+/// space so that indexers embedding multi-line blocks in a title still yield
+/// one readable row.
+fn appendCodepoint(
+    allocator: std.mem.Allocator,
+    out: *std.ArrayList(u8),
+    cp: u21,
+    mode: NormalizeMode,
+) !void {
+    if (mode == .display and (isControlCodepoint(cp) or cp == ' ')) {
+        if (out.items.len == 0 or out.items[out.items.len - 1] == ' ') return;
+        try out.append(allocator, ' ');
+        return;
+    }
+
+    var utf8_buf: [4]u8 = undefined;
+    const utf8_len = std.unicode.utf8Encode(cp, utf8_buf[0..]) catch return;
+    try out.appendSlice(allocator, utf8_buf[0..utf8_len]);
+}
+
+fn validUtf8SequenceLength(bytes: []const u8) ?usize {
+    const seq_len = std.unicode.utf8ByteSequenceLength(bytes[0]) catch return null;
+    if (seq_len > bytes.len) return null;
+    _ = std.unicode.utf8Decode(bytes[0..seq_len]) catch return null;
+    return seq_len;
+}
+
+fn normalizeXmlText(allocator: std.mem.Allocator, raw: []const u8, mode: NormalizeMode) ![]u8 {
     const trimmed = std.mem.trim(u8, raw, " \t\r\n");
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
@@ -286,41 +322,63 @@ fn normalizeLink(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
     var i: usize = 0;
     while (i < trimmed.len) {
         if (std.mem.startsWith(u8, trimmed[i..], "&amp;")) {
-            try out.append(allocator, '&');
+            try appendCodepoint(allocator, &out, '&', mode);
             i += 5;
         } else if (std.mem.startsWith(u8, trimmed[i..], "&lt;")) {
-            try out.append(allocator, '<');
+            try appendCodepoint(allocator, &out, '<', mode);
             i += 4;
         } else if (std.mem.startsWith(u8, trimmed[i..], "&gt;")) {
-            try out.append(allocator, '>');
+            try appendCodepoint(allocator, &out, '>', mode);
             i += 4;
         } else if (std.mem.startsWith(u8, trimmed[i..], "&quot;")) {
-            try out.append(allocator, '"');
+            try appendCodepoint(allocator, &out, '"', mode);
             i += 6;
         } else if (std.mem.startsWith(u8, trimmed[i..], "&apos;")) {
-            try out.append(allocator, '\'');
+            try appendCodepoint(allocator, &out, '\'', mode);
             i += 6;
         } else if (trimmed[i] == '&' and i + 3 < trimmed.len and trimmed[i + 1] == '#') {
             if (decodeNumericEntity(trimmed[i..])) |decoded| {
-                var utf8_buf: [4]u8 = undefined;
-                const utf8_len = std.unicode.utf8Encode(decoded.codepoint, utf8_buf[0..]) catch {
-                    try out.append(allocator, trimmed[i]);
+                _ = std.unicode.utf8CodepointSequenceLength(decoded.codepoint) catch {
+                    try appendCodepoint(allocator, &out, trimmed[i], mode);
                     i += 1;
                     continue;
                 };
-                try out.appendSlice(allocator, utf8_buf[0..utf8_len]);
+                try appendCodepoint(allocator, &out, decoded.codepoint, mode);
                 i += decoded.consumed;
             } else {
-                try out.append(allocator, trimmed[i]);
+                try appendCodepoint(allocator, &out, trimmed[i], mode);
                 i += 1;
             }
+        } else if (trimmed[i] < 0x80) {
+            try appendCodepoint(allocator, &out, trimmed[i], mode);
+            i += 1;
+        } else if (validUtf8SequenceLength(trimmed[i..])) |seq_len| {
+            try out.appendSlice(allocator, trimmed[i .. i + seq_len]);
+            i += seq_len;
+        } else if (mode == .display) {
+            // Display width can only be measured over valid UTF-8, so a stray
+            // byte from a mis-encoded feed becomes a placeholder.
+            try out.append(allocator, '?');
+            i += 1;
         } else {
             try out.append(allocator, trimmed[i]);
             i += 1;
         }
     }
 
+    if (mode == .display and out.items.len > 0 and out.items[out.items.len - 1] == ' ') {
+        _ = out.pop();
+    }
+
     return out.toOwnedSlice(allocator);
+}
+
+fn normalizeLink(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    return normalizeXmlText(allocator, raw, .link);
+}
+
+fn normalizeTitle(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    return normalizeXmlText(allocator, raw, .display);
 }
 
 fn decodeNumericEntity(input: []const u8) ?struct { codepoint: u21, consumed: usize } {
@@ -1142,7 +1200,7 @@ fn parseIndexers(allocator: std.mem.Allocator, xml: []const u8) ![]Indexer {
             if (title_pos >= block_end) break :name_blk try allocator.dupe(u8, xml[id_start..id_end]);
             const value_start = title_pos + xml_tags.title.len;
             const value_end = @min(std.mem.indexOfScalarPos(u8, xml, value_start, '<') orelse block_end, block_end);
-            break :name_blk try allocator.dupe(u8, xml[value_start..value_end]);
+            break :name_blk try normalizeTitle(allocator, xml[value_start..value_end]);
         };
         errdefer allocator.free(name);
 
@@ -1270,17 +1328,17 @@ fn parseTorrents(allocator: std.mem.Allocator, xml: []const u8) ![]Torrent {
             }
 
             if (title != null and link != null) {
-                const title_copy = try allocator.dupe(u8, title.?);
+                const title_copy = try normalizeTitle(allocator, title.?);
                 const link_copy = try normalizeLink(allocator, link.?);
                 if (link_copy.len == 0) {
-                    allocator.free(title_copy);
-                    allocator.free(link_copy);
                     debug_log.writef(
                         allocator,
                         "jackett",
                         "Skipping torrent with empty normalized link title=\"{s}\" source={s}",
-                        .{ title.?, link_source },
+                        .{ title_copy, link_source },
                     );
+                    allocator.free(title_copy);
+                    allocator.free(link_copy);
                     continue;
                 }
                 try torrents.append(allocator, .{
@@ -1295,7 +1353,7 @@ fn parseTorrents(allocator: std.mem.Allocator, xml: []const u8) ![]Torrent {
                     allocator,
                     "jackett",
                     "Parsed torrent title=\"{s}\" source={s} link=\"{s}\"",
-                    .{ title.?, link_source, link_copy },
+                    .{ title_copy, link_source, link_copy },
                 );
             } else if (title != null) {
                 debug_log.writef(
@@ -1335,6 +1393,74 @@ test "parse XML with valid response" {
     try std.testing.expectEqual(@as(u32, 75), torrents[0].leechers);
     try std.testing.expectEqualStrings("Movie.2024.1080p.WEB.h264", torrents[1].title);
     try std.testing.expectEqual(@as(u32, 100), torrents[1].seeders);
+}
+
+test "parse strips control characters from multi-line titles" {
+    const allocator = std.testing.allocator;
+
+    // Verbatim from the catorrent indexer, which scrapes a multi-line page
+    // block into <title>. The raw newlines used to move the terminal cursor
+    // mid-row and wreck the results panel.
+    const xml = "<rss><channel><item><title>Dwarf Fortress (Dwarf Fortress Classic)\n2008\u{00a0}\u{00a0}\u{2022}\u{00a0}\u{00a0}Пиратка\u{00a0}(53.15)\nSandbox (Песочница), Role-Playing</title><link>magnet:?xt=urn:btih:catorrent</link></item></channel></rss>";
+
+    const torrents = try parseTorrents(allocator, xml);
+    defer {
+        for (torrents) |t| {
+            allocator.free(t.title);
+            allocator.free(t.link);
+        }
+        allocator.free(torrents);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), torrents.len);
+    try std.testing.expectEqualStrings(
+        "Dwarf Fortress (Dwarf Fortress Classic) 2008\u{00a0}\u{00a0}\u{2022}\u{00a0}\u{00a0}Пиратка\u{00a0}(53.15) Sandbox (Песочница), Role-Playing",
+        torrents[0].title,
+    );
+    for (torrents[0].title) |byte| {
+        try std.testing.expect(byte >= 0x20 and byte != 0x7F);
+    }
+}
+
+test "normalizeTitle decodes entities, trims, and collapses whitespace runs" {
+    const allocator = std.testing.allocator;
+
+    const decoded = try normalizeTitle(allocator, "  Red Dwarf DVD Boxset S01, 2 &amp; 8 + Extras DVD  ");
+    defer allocator.free(decoded);
+    try std.testing.expectEqualStrings("Red Dwarf DVD Boxset S01, 2 & 8 + Extras DVD", decoded);
+
+    const collapsed = try normalizeTitle(allocator, "Show\t\tName\n\nS01\r\n");
+    defer allocator.free(collapsed);
+    try std.testing.expectEqualStrings("Show Name S01", collapsed);
+
+    // Numeric entities can smuggle in control characters too.
+    const entity_newline = try normalizeTitle(allocator, "Line&#10;Break");
+    defer allocator.free(entity_newline);
+    try std.testing.expectEqualStrings("Line Break", entity_newline);
+}
+
+test "normalizeTitle replaces invalid UTF-8 while normalizeLink preserves bytes" {
+    const allocator = std.testing.allocator;
+
+    // Lone 0xE9 (Latin-1 "é") from a mis-encoded feed.
+    const raw = "Caf\xE9 Movie";
+
+    const title = try normalizeTitle(allocator, raw);
+    defer allocator.free(title);
+    try std.testing.expectEqualStrings("Caf? Movie", title);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(title));
+
+    const link = try normalizeLink(allocator, raw);
+    defer allocator.free(link);
+    try std.testing.expectEqualStrings(raw, link);
+}
+
+test "normalizeLink keeps whitespace and control bytes untouched" {
+    const allocator = std.testing.allocator;
+
+    const link = try normalizeLink(allocator, " magnet:?xt=urn:btih:abc&amp;dn=A%20B  ");
+    defer allocator.free(link);
+    try std.testing.expectEqualStrings("magnet:?xt=urn:btih:abc&dn=A%20B", link);
 }
 
 test "parse RSS date RFC 822 and ISO 8601" {
