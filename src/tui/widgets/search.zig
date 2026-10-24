@@ -297,7 +297,7 @@ fn drawPanelQueryRow(stdout: compat.FileWriter, size: term.TerminalSize, colors:
     var trunc_buf: [512]u8 = undefined;
     var line_buf: [640]u8 = undefined;
     const shown = theme.truncateWithEllipsis(query, layout.panel_width - 11, trunc_buf[0..]);
-    const query_line = std.fmt.bufPrint(&line_buf, " Query: {s}", .{shown}) catch " Query:";
+    const query_line = std.mem.print(&line_buf, " Query: {s}", .{shown}) catch " Query:";
 
     writePanelRowNoNewline(stdout, layout.panel_width, query_line, border, colors, true) catch {};
 }
@@ -499,7 +499,7 @@ test "writePanelRowNoNewline writes row without CRLF" {
     try writePanelRowNoNewline(&writer.writer, 10, " Query:", ascii_border, theme.superseedr_like, false);
     try writer.writer.flush();
     out = writer.toArrayList();
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "\r\n") == null);
+    try std.testing.expect(std.mem.find(u8, out.items, "\r\n") == null);
 }
 
 test "writePanelRowNoNewline fills to width with borders" {
@@ -520,7 +520,7 @@ test "writePanelRowNoNewline fills to width with borders" {
     try writePanelRowNoNewline(&writer.writer, 12, " Query: x", ascii_border, theme.superseedr_like, false);
     try writer.writer.flush();
     out = writer.toArrayList();
-    try std.testing.expect(std.mem.indexOf(u8, out.items, "\r\n") == null);
+    try std.testing.expect(std.mem.find(u8, out.items, "\r\n") == null);
     try std.testing.expectEqual(@as(usize, 12), out.items.len);
 }
 

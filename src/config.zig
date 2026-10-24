@@ -38,16 +38,16 @@ pub fn loadConfig(allocator: std.mem.Allocator) !Config {
 fn getConfigPath(allocator: std.mem.Allocator) ![]const u8 {
     const config_dir = try getConfigDir(allocator);
     defer allocator.free(config_dir);
-    return std.fs.path.join(allocator, &.{ config_dir, "supersearchr", "config.json" });
+    return std.Io.Dir.path.join(allocator, &.{ config_dir, "supersearchr", "config.json" });
 }
 
 fn createConfigFile(config_path: []const u8) !void {
-    const config_dir = std.fs.path.dirname(config_path) orelse ".";
+    const config_dir = std.Io.Dir.path.dirname(config_path) orelse ".";
     const io = compat.io();
     try std.Io.Dir.cwd().createDirPath(io, config_dir);
 
     var placeholder_buf: [320]u8 = undefined;
-    const placeholder = try std.fmt.bufPrint(
+    const placeholder = try std.mem.print(
         &placeholder_buf,
         \\{{
         \\  "apiKey": "YOUR_JACKETT_API_KEY",
@@ -85,7 +85,7 @@ pub fn getConfigDir(allocator: std.mem.Allocator) ![]const u8 {
                 return err;
             };
             defer allocator.free(home);
-            return std.fs.path.join(allocator, &.{ home, "Library", "Application Support" });
+            return std.Io.Dir.path.join(allocator, &.{ home, "Library", "Application Support" });
         },
         else => {
             if (compat.getEnvVarOwned(allocator, "XDG_CONFIG_HOME")) |xdg| {
@@ -100,7 +100,7 @@ pub fn getConfigDir(allocator: std.mem.Allocator) ![]const u8 {
                 return err;
             };
             defer allocator.free(home);
-            return std.fs.path.join(allocator, &.{ home, ".config" });
+            return std.Io.Dir.path.join(allocator, &.{ home, ".config" });
         },
     }
 }
@@ -428,7 +428,7 @@ test "patchMissingDefaults adds terminal by mutating object and reserializing" {
     const dir_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", allocator);
     defer allocator.free(dir_abs);
 
-    const config_path = try std.fs.path.join(allocator, &.{ dir_abs, "config.json" });
+    const config_path = try std.Io.Dir.path.join(allocator, &.{ dir_abs, "config.json" });
     defer allocator.free(config_path);
 
     const original =

@@ -860,12 +860,12 @@ fn highlightSearchTerm(
             if (is_selected) {
                 var buf: [64]u8 = undefined;
                 const fg = selectedColorForSendState(colors, send_state);
-                const style = std.fmt.bufPrint(&buf, "\x1b[48;5;{d}m\x1b[38;5;{d}m\x1b[1m", .{ colors.selected_bg, fg }) catch "";
+                const style = std.mem.print(&buf, "\x1b[48;5;{d}m\x1b[38;5;{d}m\x1b[1m", .{ colors.selected_bg, fg }) catch "";
                 writer.writeAll(style) catch break;
             } else {
                 var buf: [32]u8 = undefined;
                 const fg = colorForSendState(colors, send_state);
-                const style = std.fmt.bufPrint(&buf, "\x1b[38;5;{d}m", .{fg}) catch "";
+                const style = std.mem.print(&buf, "\x1b[38;5;{d}m", .{fg}) catch "";
                 writer.writeAll(style) catch break;
             }
 
@@ -1338,17 +1338,17 @@ fn formatAgeText(buf: []u8, pub_date: ?i64, current_time: i64) []const u8 {
     const age = @max(diff, 0);
 
     if (age < 60) {
-        return std.fmt.bufPrint(buf, "{d}s", .{age}) catch "N/A";
+        return std.mem.print(buf, "{d}s", .{age}) catch "N/A";
     } else if (age < 3600) {
-        return std.fmt.bufPrint(buf, "{d}mi", .{age / 60}) catch "N/A";
+        return std.mem.print(buf, "{d}mi", .{age / 60}) catch "N/A";
     } else if (age < 86400) {
-        return std.fmt.bufPrint(buf, "{d}h", .{age / 3600}) catch "N/A";
+        return std.mem.print(buf, "{d}h", .{age / 3600}) catch "N/A";
     } else if (age < 30 * 86400) {
-        return std.fmt.bufPrint(buf, "{d}d", .{age / 86400}) catch "N/A";
+        return std.mem.print(buf, "{d}d", .{age / 86400}) catch "N/A";
     } else if (age < 365 * 86400) {
-        return std.fmt.bufPrint(buf, "{d}mo", .{age / (30 * 86400)}) catch "N/A";
+        return std.mem.print(buf, "{d}mo", .{age / (30 * 86400)}) catch "N/A";
     } else {
-        return std.fmt.bufPrint(buf, "{d}y", .{age / (365 * 86400)}) catch "N/A";
+        return std.mem.print(buf, "{d}y", .{age / (365 * 86400)}) catch "N/A";
     }
 }
 
@@ -1375,12 +1375,12 @@ fn buildDataCells(
     writeSpaces(&writer, layout.age_to_seeders_gap) catch return "";
 
     var sbuf: [16]u8 = undefined;
-    const seeders_text = std.fmt.bufPrint(&sbuf, "{d}", .{seeders}) catch "";
+    const seeders_text = std.mem.print(&sbuf, "{d}", .{seeders}) catch "";
     writeRightAligned(&writer, seeders_text, layout.seeders_width) catch return "";
     writeSpaces(&writer, layout.between_stats_gap) catch return "";
 
     var lbuf: [16]u8 = undefined;
-    const leechers_text = std.fmt.bufPrint(&lbuf, "{d}", .{leechers}) catch "";
+    const leechers_text = std.mem.print(&lbuf, "{d}", .{leechers}) catch "";
     writeRightAligned(&writer, leechers_text, layout.leechers_width) catch return "";
     writeSpaces(&writer, layout.between_stats_gap) catch return "";
 
@@ -1404,9 +1404,9 @@ fn formatSizeBytes(buf: []u8, size_bytes: ?u64) []const u8 {
     const unit = if (bytes >= gib) "GB" else "MB";
     const tenths = (@as(u128, bytes) * 10 + divisor / 2) / divisor;
     if (tenths % 10 == 0) {
-        return std.fmt.bufPrint(buf, "{d} {s}", .{ tenths / 10, unit }) catch "-";
+        return std.mem.print(buf, "{d} {s}", .{ tenths / 10, unit }) catch "-";
     }
-    return std.fmt.bufPrint(buf, "{d}.{d} {s}", .{ tenths / 10, tenths % 10, unit }) catch "-";
+    return std.mem.print(buf, "{d}.{d} {s}", .{ tenths / 10, tenths % 10, unit }) catch "-";
 }
 
 fn writeRightAligned(writer: anytype, text: []const u8, width: usize) !void {
@@ -1453,29 +1453,29 @@ fn formatStatusText(
 ) []const u8 {
     const base = switch (live_status.phase) {
         .discovering => if (torrents_len == 0)
-            std.fmt.bufPrint(buf, "No results yet | Discovering indexers... {s}", .{spinner_frames[spinner_frame % spinner_frames.len]}) catch "No results yet"
+            std.mem.print(buf, "No results yet | Discovering indexers... {s}", .{spinner_frames[spinner_frame % spinner_frames.len]}) catch "No results yet"
         else
             formatShowing(buf, scroll_offset, end_idx, total_count),
         .querying => querying: {
             const spinner = spinner_frames[spinner_frame % spinner_frames.len];
             if (torrents_len == 0) {
                 if (live_status.failed == 0) {
-                    break :querying std.fmt.bufPrint(buf, "No results yet | Searching {d}/{d} {s}", .{ live_status.completed, live_status.total, spinner }) catch "No results yet";
+                    break :querying std.mem.print(buf, "No results yet | Searching {d}/{d} {s}", .{ live_status.completed, live_status.total, spinner }) catch "No results yet";
                 }
-                break :querying std.fmt.bufPrint(
+                break :querying std.mem.print(
                     buf,
                     "No results yet | Searching {d}/{d}, {d} failed {s}",
                     .{ live_status.completed, live_status.total, live_status.failed, spinner },
                 ) catch "No results yet";
             }
             if (live_status.failed == 0) {
-                break :querying std.fmt.bufPrint(
+                break :querying std.mem.print(
                     buf,
                     "Showing {d}-{d} of {d} | Searching {d}/{d} {s}",
                     .{ scroll_offset + 1, end_idx, total_count, live_status.completed, live_status.total, spinner },
                 ) catch "Showing";
             }
-            break :querying std.fmt.bufPrint(
+            break :querying std.mem.print(
                 buf,
                 "Showing {d}-{d} of {d} | Searching {d}/{d}, {d} failed {s}",
                 .{ scroll_offset + 1, end_idx, total_count, live_status.completed, live_status.total, live_status.failed, spinner },
@@ -1484,26 +1484,26 @@ fn formatStatusText(
         .done => done: {
             if (live_status.failed == 0) {
                 if (torrents_len == 0) {
-                    break :done std.fmt.bufPrint(
+                    break :done std.mem.print(
                         buf,
                         "No results found | All indexers successful",
                         .{},
                     ) catch "No results found";
                 }
-                break :done std.fmt.bufPrint(
+                break :done std.mem.print(
                     buf,
                     "Showing {d}-{d} of {d} | All indexers successful",
                     .{ scroll_offset + 1, end_idx, total_count },
                 ) catch "Showing";
             } else {
                 if (torrents_len == 0) {
-                    break :done std.fmt.bufPrint(
+                    break :done std.mem.print(
                         buf,
                         "No results found | {d} indexers failed ('e' to review)",
                         .{live_status.failed},
                     ) catch "No results found";
                 }
-                break :done std.fmt.bufPrint(
+                break :done std.mem.print(
                     buf,
                     "Showing {d}-{d} of {d} | {d} indexers failed ('e' to review)",
                     .{ scroll_offset + 1, end_idx, total_count, live_status.failed },
@@ -1515,7 +1515,7 @@ fn formatStatusText(
 }
 
 fn formatShowing(buf: []u8, scroll_offset: usize, end_idx: usize, total_count: usize) []const u8 {
-    return std.fmt.bufPrint(buf, "Showing {d}-{d} of {d}", .{ scroll_offset + 1, end_idx, total_count }) catch "Showing";
+    return std.mem.print(buf, "Showing {d}-{d} of {d}", .{ scroll_offset + 1, end_idx, total_count }) catch "Showing";
 }
 
 fn contentRowFromRelative(rel_idx: usize) u16 {

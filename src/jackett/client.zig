@@ -40,7 +40,7 @@ const xml_tags = .{
 fn extractStringField(xml: []const u8, i: usize, tag: []const u8) ?struct { value: []const u8, end: usize } {
     if (std.mem.startsWith(u8, xml[i..], tag)) {
         const start = i + tag.len;
-        const end = std.mem.indexOfScalarPos(u8, xml, start, '<') orelse xml.len;
+        const end = std.mem.findScalarPos(u8, xml, start, '<') orelse xml.len;
         return .{ .value = xml[start..end], .end = end };
     }
     return null;
@@ -105,7 +105,7 @@ fn parseTimezoneOffset(tz: []const u8) i64 {
         const digits = trimmed[1..];
         var hh: i64 = 0;
         var mm: i64 = 0;
-        if (std.mem.indexOfScalar(u8, digits, ':')) |colon| {
+        if (std.mem.findScalar(u8, digits, ':')) |colon| {
             hh = std.fmt.parseInt(i64, digits[0..colon], 10) catch 0;
             mm = std.fmt.parseInt(i64, digits[colon + 1 ..], 10) catch 0;
         } else {
@@ -125,13 +125,13 @@ pub fn parseRssDate(raw_date: []const u8) ?i64 {
     var date_str = std.mem.trim(u8, raw_date, " \t\r\n");
     if (date_str.len == 0) return null;
 
-    if (std.mem.indexOfScalar(u8, date_str, ',')) |comma_idx| {
+    if (std.mem.findScalar(u8, date_str, ',')) |comma_idx| {
         if (comma_idx + 1 < date_str.len) {
             date_str = std.mem.trim(u8, date_str[comma_idx + 1 ..], " \t\r\n");
         }
     }
 
-    if (std.mem.indexOfScalar(u8, date_str, 'T') != null and std.mem.indexOfScalar(u8, date_str, '-') != null) {
+    if (std.mem.findScalar(u8, date_str, 'T') != null and std.mem.findScalar(u8, date_str, '-') != null) {
         var it = std.mem.tokenizeScalar(u8, date_str, 'T');
         const date_part = it.next() orelse return null;
         const time_tz_part = it.next() orelse return null;
@@ -150,7 +150,7 @@ pub fn parseRssDate(raw_date: []const u8) ?i64 {
         var mm: i64 = 0;
         var ss: i64 = 0;
 
-        if (std.mem.indexOfAny(u8, time_tz_part, "+-Z")) |tz_pos| {
+        if (std.mem.findAny(u8, time_tz_part, "+-Z")) |tz_pos| {
             const time_part = time_tz_part[0..tz_pos];
             const tz_part = time_tz_part[tz_pos..];
 
@@ -207,7 +207,7 @@ pub fn parseRssDate(raw_date: []const u8) ?i64 {
 fn extractIntField(xml: []const u8, i: usize, tag: []const u8, default: u32) ?struct { value: u32, end: usize } {
     if (std.mem.startsWith(u8, xml[i..], tag)) {
         const start = i + tag.len;
-        const end = std.mem.indexOfScalarPos(u8, xml, start, '"') orelse xml.len;
+        const end = std.mem.findScalarPos(u8, xml, start, '"') orelse xml.len;
         return .{ .value = std.fmt.parseInt(u32, xml[start..end], 10) catch default, .end = end };
     }
     return null;
@@ -216,7 +216,7 @@ fn extractIntField(xml: []const u8, i: usize, tag: []const u8, default: u32) ?st
 fn extractOptionalU64Element(xml: []const u8, i: usize, tag: []const u8) ?struct { value: ?u64, end: usize } {
     if (std.mem.startsWith(u8, xml[i..], tag)) {
         const start = i + tag.len;
-        const end = std.mem.indexOfScalarPos(u8, xml, start, '<') orelse xml.len;
+        const end = std.mem.findScalarPos(u8, xml, start, '<') orelse xml.len;
         const trimmed = std.mem.trim(u8, xml[start..end], " \t\r\n");
         return .{ .value = std.fmt.parseInt(u64, trimmed, 10) catch null, .end = end };
     }
@@ -227,14 +227,14 @@ fn extractTorznabSizeAttr(xml: []const u8, i: usize) ?struct { value: ?u64, end:
     const attr_tag = "<torznab:attr ";
     if (!std.mem.startsWith(u8, xml[i..], attr_tag)) return null;
 
-    const tag_end = std.mem.indexOfScalarPos(u8, xml, i, '>') orelse return null;
+    const tag_end = std.mem.findScalarPos(u8, xml, i, '>') orelse return null;
     const tag = xml[i .. tag_end + 1];
 
-    if (std.mem.indexOf(u8, tag, xml_tags.size_attr_name) == null) return null;
+    if (std.mem.find(u8, tag, xml_tags.size_attr_name) == null) return null;
 
-    const value_pos = std.mem.indexOf(u8, tag, xml_tags.attr_value) orelse return null;
+    const value_pos = std.mem.find(u8, tag, xml_tags.attr_value) orelse return null;
     const value_start = i + value_pos + xml_tags.attr_value.len;
-    const value_end = std.mem.indexOfScalarPos(u8, xml, value_start, '"') orelse return null;
+    const value_end = std.mem.findScalarPos(u8, xml, value_start, '"') orelse return null;
     return .{
         .value = std.fmt.parseInt(u64, xml[value_start..value_end], 10) catch null,
         .end = tag_end + 1,
@@ -245,30 +245,30 @@ fn extractMagnetUrlAttr(xml: []const u8, i: usize) ?struct { value: []const u8, 
     const attr_tag = "<torznab:attr ";
     if (!std.mem.startsWith(u8, xml[i..], attr_tag)) return null;
 
-    const tag_end = std.mem.indexOfScalarPos(u8, xml, i, '>') orelse return null;
+    const tag_end = std.mem.findScalarPos(u8, xml, i, '>') orelse return null;
     const tag = xml[i .. tag_end + 1];
 
-    if (std.mem.indexOf(u8, tag, xml_tags.magneturl_attr_name) == null) return null;
+    if (std.mem.find(u8, tag, xml_tags.magneturl_attr_name) == null) return null;
 
-    const value_pos = std.mem.indexOf(u8, tag, xml_tags.attr_value) orelse return null;
+    const value_pos = std.mem.find(u8, tag, xml_tags.attr_value) orelse return null;
     const value_start = i + value_pos + xml_tags.attr_value.len;
-    const value_end = std.mem.indexOfScalarPos(u8, xml, value_start, '"') orelse return null;
+    const value_end = std.mem.findScalarPos(u8, xml, value_start, '"') orelse return null;
     return .{ .value = xml[value_start..value_end], .end = tag_end + 1 };
 }
 
 fn extractEnclosureInfo(xml: []const u8, i: usize) ?struct { url: ?[]const u8, length: ?u64, end: usize } {
     if (!std.mem.startsWith(u8, xml[i..], xml_tags.enclosure)) return null;
 
-    const tag_end = std.mem.indexOfScalarPos(u8, xml, i, '>') orelse return null;
+    const tag_end = std.mem.findScalarPos(u8, xml, i, '>') orelse return null;
     const tag = xml[i .. tag_end + 1];
-    const url = if (std.mem.indexOf(u8, tag, xml_tags.enclosure_url)) |url_pos| url: {
+    const url = if (std.mem.find(u8, tag, xml_tags.enclosure_url)) |url_pos| url: {
         const url_start = i + url_pos + xml_tags.enclosure_url.len;
-        const url_end = std.mem.indexOfScalarPos(u8, xml, url_start, '"') orelse break :url null;
+        const url_end = std.mem.findScalarPos(u8, xml, url_start, '"') orelse break :url null;
         break :url xml[url_start..url_end];
     } else null;
-    const length = if (std.mem.indexOf(u8, tag, xml_tags.enclosure_length)) |length_pos| length: {
+    const length = if (std.mem.find(u8, tag, xml_tags.enclosure_length)) |length_pos| length: {
         const length_start = i + length_pos + xml_tags.enclosure_length.len;
-        const length_end = std.mem.indexOfScalarPos(u8, xml, length_start, '"') orelse break :length null;
+        const length_end = std.mem.findScalarPos(u8, xml, length_start, '"') orelse break :length null;
         break :length std.fmt.parseInt(u64, xml[length_start..length_end], 10) catch null;
     } else null;
     return .{
@@ -310,7 +310,7 @@ fn appendCodepoint(
 fn validUtf8SequenceLength(bytes: []const u8) ?usize {
     const seq_len = std.unicode.utf8ByteSequenceLength(bytes[0]) catch return null;
     if (seq_len > bytes.len) return null;
-    _ = std.unicode.utf8Decode(bytes[0..seq_len]) catch return null;
+    if (!std.unicode.utf8ValidateSlice(bytes[0..seq_len])) return null;
     return seq_len;
 }
 
@@ -385,7 +385,7 @@ fn decodeNumericEntity(input: []const u8) ?struct { codepoint: u21, consumed: us
     if (input.len < 4) return null;
     if (input[0] != '&' or input[1] != '#') return null;
 
-    const semicolon_idx = std.mem.indexOfScalar(u8, input, ';') orelse return null;
+    const semicolon_idx = std.mem.findScalar(u8, input, ';') orelse return null;
     if (semicolon_idx < 3) return null;
 
     const number_slice = input[2..semicolon_idx];
@@ -438,7 +438,7 @@ pub const Progress = struct {
 
     pub fn init() Progress {
         return .{
-            .phase = std.atomic.Value(u8).init(@intFromEnum(ProgressPhase.discovering)),
+            .phase = std.atomic.Value(u8).init(@backingInt(ProgressPhase.discovering)),
             .completed = std.atomic.Value(usize).init(0),
             .total = std.atomic.Value(usize).init(0),
             .failed = std.atomic.Value(usize).init(0),
@@ -446,7 +446,7 @@ pub const Progress = struct {
     }
 
     pub fn setPhase(self: *Progress, phase: ProgressPhase) void {
-        self.phase.store(@intFromEnum(phase), .release);
+        self.phase.store(@backingInt(phase), .release);
     }
 
     pub fn setTotal(self: *Progress, total: usize) void {
@@ -464,8 +464,8 @@ pub const Progress = struct {
     pub fn snapshot(self: *Progress) ProgressSnapshot {
         const phase_value = self.phase.load(.acquire);
         const phase: ProgressPhase = switch (phase_value) {
-            @intFromEnum(ProgressPhase.querying) => .querying,
-            @intFromEnum(ProgressPhase.done) => .done,
+            @backingInt(ProgressPhase.querying) => .querying,
+            @backingInt(ProgressPhase.done) => .done,
             else => .discovering,
         };
         return .{
@@ -528,7 +528,7 @@ fn isHttpLink(link: []const u8) bool {
 }
 
 fn isRedirectStatus(status: std.http.Status) bool {
-    const code = @intFromEnum(status);
+    const code = @backingInt(status);
     return code >= 300 and code < 400;
 }
 
@@ -569,7 +569,7 @@ pub fn resolveDownloadLink(
                 allocator,
                 "jackett",
                 "HTTP link redirect had no location status={d}",
-                .{@intFromEnum(response.status)},
+                .{@backingInt(response.status)},
             );
             return error.UnresolvableLink;
         };
@@ -578,7 +578,7 @@ pub fn resolveDownloadLink(
                 allocator,
                 "jackett",
                 "HTTP link redirected to non-magnet status={d}",
-                .{@intFromEnum(response.status)},
+                .{@backingInt(response.status)},
             );
             return error.UnresolvableLink;
         }
@@ -586,7 +586,7 @@ pub fn resolveDownloadLink(
             allocator,
             "jackett",
             "HTTP link resolved to magnet redirect status={d}",
-            .{@intFromEnum(response.status)},
+            .{@backingInt(response.status)},
         );
         return .{
             .value = try allocator.dupe(u8, location),
@@ -599,7 +599,7 @@ pub fn resolveDownloadLink(
             allocator,
             "jackett",
             "HTTP link returned non-OK status={d}",
-            .{@intFromEnum(response.status)},
+            .{@backingInt(response.status)},
         );
         return error.HttpError;
     }
@@ -640,9 +640,9 @@ fn writeTempTorrentFile(allocator: std.mem.Allocator, bytes: []const u8) LinkRes
         const hex = std.fmt.bytesToHex(random_bytes, .lower);
         @memcpy(hex_buf[0..], hex[0..]);
 
-        const filename = try std.fmt.allocPrint(allocator, "supersearchr-{s}.torrent", .{hex_buf[0..]});
+        const filename = try allocator.print("supersearchr-{s}.torrent", .{hex_buf[0..]});
         defer allocator.free(filename);
-        const path = try std.fs.path.join(allocator, &.{ temp_dir, filename });
+        const path = try std.Io.Dir.path.join(allocator, &.{ temp_dir, filename });
         errdefer allocator.free(path);
 
         const io = compat.io();
@@ -1113,14 +1113,12 @@ fn searchSingleIndexerStreaming(ctx: *StreamingSearchContext, indexer_id: []cons
     defer ctx.allocator.free(encoded_indexer);
 
     const url = if (ctx.skip_cache)
-        try std.fmt.allocPrint(
-            ctx.allocator,
+        try ctx.allocator.print(
             "{s}/api/v2.0/indexers/{s}/results/torznab/api?apikey={s}&t=search&q={s}&cache=false",
             .{ ctx.base_url, encoded_indexer, ctx.api_key, ctx.encoded_query },
         )
     else
-        try std.fmt.allocPrint(
-            ctx.allocator,
+        try ctx.allocator.print(
             "{s}/api/v2.0/indexers/{s}/results/torznab/api?apikey={s}&t=search&q={s}",
             .{ ctx.base_url, encoded_indexer, ctx.api_key, ctx.encoded_query },
         );
@@ -1147,8 +1145,7 @@ fn fetchConfiguredIndexersOwned(
     api_key: []const u8,
     executor: BodyExecutor,
 ) JackettError![]Indexer {
-    const url = try std.fmt.allocPrint(
-        allocator,
+    const url = try allocator.print(
         "{s}/api/v2.0/indexers/all/results/torznab/api?apikey={s}&t=indexers&configured=true",
         .{ base_url, api_key },
     );
@@ -1161,7 +1158,7 @@ fn fetchConfiguredIndexersOwned(
 }
 
 fn parseIndexers(allocator: std.mem.Allocator, xml: []const u8) ![]Indexer {
-    if (std.mem.indexOf(u8, xml, "<indexers") == null) return error.ParseFailed;
+    if (std.mem.find(u8, xml, "<indexers") == null) return error.ParseFailed;
 
     var indexers: std.ArrayList(Indexer) = .empty;
     errdefer {
@@ -1179,27 +1176,27 @@ fn parseIndexers(allocator: std.mem.Allocator, xml: []const u8) ![]Indexer {
             continue;
         }
 
-        const tag_end = std.mem.indexOfScalarPos(u8, xml, i, '>') orelse break;
+        const tag_end = std.mem.findScalarPos(u8, xml, i, '>') orelse break;
         const tag = xml[i .. tag_end + 1];
-        const id_pos = std.mem.indexOf(u8, tag, xml_tags.indexer_id) orelse {
+        const id_pos = std.mem.find(u8, tag, xml_tags.indexer_id) orelse {
             i = tag_end + 1;
             continue;
         };
         const id_start = i + id_pos + xml_tags.indexer_id.len;
-        const id_end = std.mem.indexOfScalarPos(u8, xml, id_start, '"') orelse {
+        const id_end = std.mem.findScalarPos(u8, xml, id_start, '"') orelse {
             i = tag_end + 1;
             continue;
         };
 
-        const end_pos = std.mem.indexOfPos(u8, xml, tag_end + 1, xml_tags.indexer_end);
+        const end_pos = std.mem.findPos(u8, xml, tag_end + 1, xml_tags.indexer_end);
         const block_end = end_pos orelse xml.len;
 
         const name = name_blk: {
-            const title_pos = std.mem.indexOfPos(u8, xml, tag_end + 1, xml_tags.title) orelse
+            const title_pos = std.mem.findPos(u8, xml, tag_end + 1, xml_tags.title) orelse
                 break :name_blk try allocator.dupe(u8, xml[id_start..id_end]);
             if (title_pos >= block_end) break :name_blk try allocator.dupe(u8, xml[id_start..id_end]);
             const value_start = title_pos + xml_tags.title.len;
-            const value_end = @min(std.mem.indexOfScalarPos(u8, xml, value_start, '<') orelse block_end, block_end);
+            const value_end = @min(std.mem.findScalarPos(u8, xml, value_start, '<') orelse block_end, block_end);
             break :name_blk try normalizeTitle(allocator, xml[value_start..value_end]);
         };
         errdefer allocator.free(name);
@@ -1652,7 +1649,7 @@ const GzipHttpServer = struct {
         _ = reader.interface.readSliceShort(&read_buf) catch 0;
 
         var response_head: [256]u8 = undefined;
-        const head = try std.fmt.bufPrint(
+        const head = try std.mem.print(
             &response_head,
             "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n",
             .{self.body.len},
@@ -1680,7 +1677,7 @@ test "default body executor decompresses gzip indexer discovery response" {
     const handler = GzipHttpServer{ .body = gzipped };
     const thread = try std.Thread.spawn(.{}, GzipHttpServer.serve, .{ &handler, &server });
 
-    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/api/v2.0/indexers/all/results/torznab/api?apikey=test&t=indexers&configured=true", .{server.socket.address.getPort()});
+    const url = try allocator.print("http://127.0.0.1:{d}/api/v2.0/indexers/all/results/torznab/api?apikey=test&t=indexers&configured=true", .{server.socket.address.getPort()});
     defer allocator.free(url);
 
     const body = try defaultBodyExecutor(allocator, url);
@@ -1703,14 +1700,14 @@ test "parse configured indexers rejects non-indexer response" {
 test "streaming search publishes batches as indexers complete" {
     const state = struct {
         fn exec(allocator: std.mem.Allocator, url: []const u8) JackettError![]u8 {
-            if (std.mem.indexOf(u8, url, "t=indexers&configured=true") != null) {
+            if (std.mem.find(u8, url, "t=indexers&configured=true") != null) {
                 return allocator.dupe(u8, "<indexers><indexer id=\"slow\"><title>Slow</title></indexer><indexer id=\"fast\"><title>Fast</title></indexer></indexers>") catch error.OutOfMemory;
             }
-            if (std.mem.indexOf(u8, url, "/indexers/slow/") != null) {
+            if (std.mem.find(u8, url, "/indexers/slow/") != null) {
                 compat.sleepNanos(20 * std.time.ns_per_ms);
                 return allocator.dupe(u8, "<rss><channel><item><title>Slow Result</title><link>magnet:?xt=urn:btih:slow</link><torznab:attr name=\"seeders\" value=\"10\"/></item></channel></rss>") catch error.OutOfMemory;
             }
-            if (std.mem.indexOf(u8, url, "/indexers/fast/") != null) {
+            if (std.mem.find(u8, url, "/indexers/fast/") != null) {
                 return allocator.dupe(u8, "<rss><channel><item><title>Fast Result</title><link>magnet:?xt=urn:btih:fast</link><torznab:attr name=\"seeders\" value=\"50\"/></item></channel></rss>") catch error.OutOfMemory;
             }
             return error.InvalidUrl;
@@ -1762,10 +1759,10 @@ test "streaming search publishes batches as indexers complete" {
 test "streaming search keeps successful results when one indexer fails" {
     const state = struct {
         fn exec(allocator: std.mem.Allocator, url: []const u8) JackettError![]u8 {
-            if (std.mem.indexOf(u8, url, "t=indexers&configured=true") != null) {
+            if (std.mem.find(u8, url, "t=indexers&configured=true") != null) {
                 return allocator.dupe(u8, "<indexers><indexer id=\"ok\"><title>OK</title></indexer><indexer id=\"bad\"><title>Bad</title></indexer></indexers>") catch error.OutOfMemory;
             }
-            if (std.mem.indexOf(u8, url, "/indexers/ok/") != null) {
+            if (std.mem.find(u8, url, "/indexers/ok/") != null) {
                 return allocator.dupe(u8, "<rss><channel><item><title>OK Result</title><link>magnet:?xt=urn:btih:ok</link><torznab:attr name=\"seeders\" value=\"5\"/></item></channel></rss>") catch error.OutOfMemory;
             }
             return error.HttpError;
@@ -1851,7 +1848,7 @@ test "resolve Jackett HTTP link to magnet redirect" {
         fn fetch(allocator: std.mem.Allocator, url: []const u8) LinkResolveError!LinkFetchResponse {
             if (!std.mem.eql(u8, "https://jackett.local/dl/test", url)) return error.UnresolvableLink;
             return .{
-                .status = @enumFromInt(302),
+                .status = @fromBackingInt(@intCast(302)),
                 .location = try allocator.dupe(u8, "magnet:?xt=urn:btih:redirected"),
             };
         }
@@ -1910,7 +1907,7 @@ test "resolve invalid HTTP link returns clear error" {
     const mock = struct {
         fn fetch(_: std.mem.Allocator, _: []const u8) LinkResolveError!LinkFetchResponse {
             return .{
-                .status = @enumFromInt(302),
+                .status = @fromBackingInt(@intCast(302)),
                 .location = null,
             };
         }

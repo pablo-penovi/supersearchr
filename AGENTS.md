@@ -1,12 +1,12 @@
 ## Tooling
 
-This project is compiled using Zig 0.16.0.
-**CRITICAL**: It is essential to only use syntax, objects and functions that are compatible with Zig 0.16.0. It's wise to search in the Zig docs: https://ziglang.org/documentation/0.16.0/
+This project is compiled using Zig 0.17.0.
+**CRITICAL**: It is essential to only use syntax, objects and functions that are compatible with Zig 0.17.0. It's wise to search in the Zig docs: https://ziglang.org/documentation/0.17.0/ or read the std source under `/usr/lib/zig/std/` (deprecated decls carry a `/// Deprecated` doc comment naming the replacement). Do not use deprecated APIs.
 
 ## Coding rules
 
-- Do not use *std.Arraylist({type}).init(allocator)* to initialize ArrayList. This is INVALID in Zig 0.16.0. Instead, use *std.ArrayList({type}) = .{}*
-- When appending an item to an ArrayList, do not use *{array}.append(item)*. This is INVALID in Zig 0.16.0. Instead, use *{array}.append(allocator, item)*
+- Initialize ArrayList with *std.ArrayList({type}) = .empty*. Do not use *.{}* (INVALID in Zig 0.17.0, the fields have no defaults) nor *.init(allocator)*
+- When appending an item to an ArrayList, do not use *{array}.append(item)*. This is INVALID in Zig 0.17.0. Instead, use *{array}.append(allocator, item)*
 - When using this structure:
 ```zig
 // the "list" variable in this example is a std.ArrayList that you receive from another function
@@ -19,7 +19,15 @@ defer {
 ```
 make sure the capture is a var (|*{name}|) and not a const (|{name}|)
 - When adding a new module with tests, add a corresponding test section in build.zig following the pattern of existing tests (config_tests, jackett_tests, superseedr_tests, search_widget_tests, results_widget_tests, app_tests) and dependOn it in the test_step
-- std.io.getStdIn() and std.io.getStdOut() are deprecated in Zig 0.16.0. Use std.fs.File.stdin() and std.fs.File.stdout() instead
+- Use std.Io.File.stdin() and std.Io.File.stdout() (or the `compat` helpers). std.fs.File and std.io.getStdIn()/getStdOut() do not exist in Zig 0.17.0
+- Zig 0.17.0 renames/deprecations to follow:
+  - std.fmt.bufPrint → std.mem.print; std.fmt.allocPrint(allocator, ...) → allocator.print(...)
+  - std.mem.indexOf / indexOfScalar / indexOfScalarPos / indexOfPos / indexOfAny → std.mem.find / findScalar / findScalarPos / findPos / findAny
+  - std.fs.path → std.Io.Dir.path
+  - std.builtin → std.lang; std.builtin.OptimizeMode → std.lang.Optimize; optimize modes are lowercase (.debug, .safe, .fast, .small; CLI `-Doptimize=safe`)
+  - @intFromEnum → @backingInt (`zig fmt` rewrites it automatically)
+  - std.heap.DebugAllocator → std.heap.SafeAllocator (`.init(std.heap.page_allocator, .{})`; `deinit()` returns the leak count)
+  - build.zig: `b.args` → `run_cmd.addPassthruArgs()`; `b.pathFromRoot` → use `b.path(...)` LazyPaths
 - `zig build test` runs test binaries with `--listen=-`, which repurposes the test binary's real stdout as a binary IPC channel back to the build runner. Any code path reachable from a test that writes raw bytes directly to stdout (e.g. `term.hideCursor()`/`showCursor()`, or any other `compat.stdoutWriteAll`/terminal ANSI write) corrupts that protocol's framing and hangs `zig build test` forever — even though the test passes instantly when the compiled test binary is run directly (bypassing `--listen=-`). If a test hangs only under `zig build test` but the standalone binary (found under `.zig-cache/o/.../test-<name>`) runs and passes fine, suspect this. Fix by guarding the stdout-writing call with `if (!builtin.is_test)`, matching the existing pattern already used for `panels.renderNoticePanel` in `runIndexersState`. Also: a hung `zig build test` leaves orphaned `zig build`/`test-<name> --listen=-` processes that hold the `.zig-cache` lock and make every subsequent `zig build test` hang too — `pkill -9 -f "zig build test"` (and kill the matching `test-*` PIDs directly if `pkill -f` doesn't catch them) before retrying.
 
 ## Running Tests
@@ -29,7 +37,7 @@ make sure the capture is a var (|*{name}|) and not a const (|{name}|)
 
 ## Project Overview
 
-Supersearchr is a TUI BitTorrent search tool written in Zig 0.16.0. It searches via Jackett and sends selected magnet or torrent links to Superseedr.
+Supersearchr is a TUI BitTorrent search tool written in Zig 0.17.0. It searches via Jackett and sends selected magnet or torrent links to Superseedr.
 
 ## Commands
 

@@ -45,7 +45,7 @@ pub const StatusStore = struct {
 pub fn defaultStatusPath(allocator: std.mem.Allocator) ![]u8 {
     const config_dir = try config.getConfigDir(allocator);
     defer allocator.free(config_dir);
-    return std.fs.path.join(allocator, &.{ config_dir, "supersearchr", "last_status.json" });
+    return std.Io.Dir.path.join(allocator, &.{ config_dir, "supersearchr", "last_status.json" });
 }
 
 /// Loads the store from disk. A missing file or any parse failure yields an
@@ -85,7 +85,7 @@ pub fn save(allocator: std.mem.Allocator, path: []const u8, store: *const Status
     const json = try std.json.Stringify.valueAlloc(allocator, hashmap, .{ .whitespace = .indent_2 });
     defer allocator.free(json);
 
-    const dir = std.fs.path.dirname(path) orelse ".";
+    const dir = std.Io.Dir.path.dirname(path) orelse ".";
     const io = compat.io();
     try std.Io.Dir.cwd().createDirPath(io, dir);
 
@@ -114,7 +114,7 @@ pub fn updateAfterCommit(
 fn tmpStatusPath(allocator: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
     const dir_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", allocator);
     defer allocator.free(dir_abs);
-    return std.fs.path.join(allocator, &.{ dir_abs, "last_status.json" });
+    return std.Io.Dir.path.join(allocator, &.{ dir_abs, "last_status.json" });
 }
 
 test "set then get returns the latest outcome" {

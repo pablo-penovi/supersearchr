@@ -166,7 +166,7 @@ pub fn applyPlan(
 pub fn defaultProfilesPath(allocator: std.mem.Allocator) ![]u8 {
     const config_dir = try config.getConfigDir(allocator);
     defer allocator.free(config_dir);
-    return std.fs.path.join(allocator, &.{ config_dir, "supersearchr", "profiles.json" });
+    return std.Io.Dir.path.join(allocator, &.{ config_dir, "supersearchr", "profiles.json" });
 }
 
 const ProfilesJson = struct {
@@ -217,7 +217,7 @@ pub fn save(allocator: std.mem.Allocator, path: []const u8, store: *const Profil
     const json = try std.json.Stringify.valueAlloc(allocator, root, .{ .whitespace = .indent_2 });
     defer allocator.free(json);
 
-    const dir = std.fs.path.dirname(path) orelse ".";
+    const dir = std.Io.Dir.path.dirname(path) orelse ".";
     const io = compat.io();
     try std.Io.Dir.cwd().createDirPath(io, dir);
 
@@ -229,7 +229,7 @@ pub fn save(allocator: std.mem.Allocator, path: []const u8, store: *const Profil
 fn tmpProfilesPath(allocator: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
     const dir_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", allocator);
     defer allocator.free(dir_abs);
-    return std.fs.path.join(allocator, &.{ dir_abs, "profiles.json" });
+    return std.Io.Dir.path.join(allocator, &.{ dir_abs, "profiles.json" });
 }
 
 test "upsert creates and overwrites profiles" {

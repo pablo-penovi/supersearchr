@@ -92,7 +92,7 @@ pub const AdminSession = struct {
 };
 
 fn firstCookiePair(raw: []const u8) []const u8 {
-    const semi = std.mem.indexOfScalar(u8, raw, ';') orelse raw.len;
+    const semi = std.mem.findScalar(u8, raw, ';') orelse raw.len;
     return std.mem.trim(u8, raw[0..semi], " ");
 }
 
@@ -121,9 +121,9 @@ fn loginWithPassword(
 ) AdminError!AdminSession {
     const encoded_password = try url_encode.percentEncode(allocator, admin_password);
     defer allocator.free(encoded_password);
-    const body = try std.fmt.allocPrint(allocator, "password={s}", .{encoded_password});
+    const body = try allocator.print("password={s}", .{encoded_password});
     defer allocator.free(body);
-    const url = try std.fmt.allocPrint(allocator, "{s}/UI/Dashboard", .{base_url});
+    const url = try allocator.print("{s}/UI/Dashboard", .{base_url});
     defer allocator.free(url);
 
     const response = try executor(allocator, .{
@@ -136,10 +136,10 @@ fn loginWithPassword(
 
     const raw_cookie = response.set_cookie orelse {
         if (response.status.class() == .server_error) {
-            debug_log.writef(allocator, "jackett-admin", "login: server error status={d} body=\"{s}\"", .{ @intFromEnum(response.status), bodySnippet(response.body) });
+            debug_log.writef(allocator, "jackett-admin", "login: server error status={d} body=\"{s}\"", .{ @backingInt(response.status), bodySnippet(response.body) });
             return error.HttpError;
         }
-        debug_log.writef(allocator, "jackett-admin", "login: rejected (no Set-Cookie) status={d} body=\"{s}\"", .{ @intFromEnum(response.status), bodySnippet(response.body) });
+        debug_log.writef(allocator, "jackett-admin", "login: rejected (no Set-Cookie) status={d} body=\"{s}\"", .{ @backingInt(response.status), bodySnippet(response.body) });
         return error.LoginFailed;
     };
     defer allocator.free(raw_cookie);
@@ -158,20 +158,20 @@ fn loginPasswordless(
     base_url: []const u8,
     executor: AdminExecutor,
 ) AdminError!AdminSession {
-    const login_url = try std.fmt.allocPrint(allocator, "{s}/UI/Login", .{base_url});
+    const login_url = try allocator.print("{s}/UI/Login", .{base_url});
     defer allocator.free(login_url);
 
     const login_response = try executor(allocator, .{ .method = .get, .url = login_url });
     defer allocator.free(login_response.body);
 
     const raw_test_cookie = login_response.set_cookie orelse {
-        debug_log.writef(allocator, "jackett-admin", "login: GET /UI/Login returned no Set-Cookie status={d} body=\"{s}\"", .{ @intFromEnum(login_response.status), bodySnippet(login_response.body) });
+        debug_log.writef(allocator, "jackett-admin", "login: GET /UI/Login returned no Set-Cookie status={d} body=\"{s}\"", .{ @backingInt(login_response.status), bodySnippet(login_response.body) });
         return error.NoSessionCookie;
     };
     defer allocator.free(raw_test_cookie);
     const test_cookie = firstCookiePair(raw_test_cookie);
 
-    const test_cookie_url = try std.fmt.allocPrint(allocator, "{s}/UI/TestCookie", .{base_url});
+    const test_cookie_url = try allocator.print("{s}/UI/TestCookie", .{base_url});
     defer allocator.free(test_cookie_url);
 
     const test_response = try executor(allocator, .{
@@ -183,18 +183,18 @@ fn loginPasswordless(
     defer if (test_response.set_cookie) |c| allocator.free(c);
 
     if (test_response.status.class() != .redirect) {
-        debug_log.writef(allocator, "jackett-admin", "login: GET /UI/TestCookie rejected status={d} body=\"{s}\"", .{ @intFromEnum(test_response.status), bodySnippet(test_response.body) });
+        debug_log.writef(allocator, "jackett-admin", "login: GET /UI/TestCookie rejected status={d} body=\"{s}\"", .{ @backingInt(test_response.status), bodySnippet(test_response.body) });
         return error.NoSessionCookie;
     }
 
-    const confirm_url = try std.fmt.allocPrint(allocator, "{s}/UI/Login?cookiesChecked=1", .{base_url});
+    const confirm_url = try allocator.print("{s}/UI/Login?cookiesChecked=1", .{base_url});
     defer allocator.free(confirm_url);
 
     const confirm_response = try executor(allocator, .{ .method = .get, .url = confirm_url });
     defer allocator.free(confirm_response.body);
 
     const raw_auth_cookie = confirm_response.set_cookie orelse {
-        debug_log.writef(allocator, "jackett-admin", "login: GET /UI/Login?cookiesChecked=1 returned no Set-Cookie status={d} body=\"{s}\"", .{ @intFromEnum(confirm_response.status), bodySnippet(confirm_response.body) });
+        debug_log.writef(allocator, "jackett-admin", "login: GET /UI/Login?cookiesChecked=1 returned no Set-Cookie status={d} body=\"{s}\"", .{ @backingInt(confirm_response.status), bodySnippet(confirm_response.body) });
         return error.NoSessionCookie;
     };
     defer allocator.free(raw_auth_cookie);
@@ -253,7 +253,7 @@ fn deriveCategories(allocator: std.mem.Allocator, caps: []const CapJson) ![]u8 {
         const id_num = std.fmt.parseInt(u32, cap.ID, 10) catch continue;
         if (id_num >= custom_category_id_floor) continue;
 
-        const slash = std.mem.indexOfScalar(u8, cap.Name, '/') orelse cap.Name.len;
+        const slash = std.mem.findScalar(u8, cap.Name, '/') orelse cap.Name.len;
         const top = std.mem.trim(u8, cap.Name[0..slash], " ");
         if (top.len == 0) continue;
 
@@ -307,7 +307,7 @@ pub fn listAllIndexers(
     session: *const AdminSession,
     executor: AdminExecutor,
 ) AdminError![]IndexerInfo {
-    const url = try std.fmt.allocPrint(allocator, "{s}/api/v2.0/indexers", .{base_url});
+    const url = try allocator.print("{s}/api/v2.0/indexers", .{base_url});
     defer allocator.free(url);
 
     const response = try executor(allocator, .{
@@ -319,7 +319,7 @@ pub fn listAllIndexers(
     defer if (response.set_cookie) |c| allocator.free(c);
 
     if (response.status.class() != .success) {
-        debug_log.writef(allocator, "jackett-admin", "listAllIndexers: unexpected status={d} body=\"{s}\"", .{ @intFromEnum(response.status), bodySnippet(response.body) });
+        debug_log.writef(allocator, "jackett-admin", "listAllIndexers: unexpected status={d} body=\"{s}\"", .{ @backingInt(response.status), bodySnippet(response.body) });
         return error.HttpError;
     }
 
@@ -335,7 +335,7 @@ pub fn getIndexerConfig(
 ) AdminError![]u8 {
     const encoded_id = try url_encode.percentEncode(allocator, indexer_id);
     defer allocator.free(encoded_id);
-    const url = try std.fmt.allocPrint(allocator, "{s}/api/v2.0/indexers/{s}/Config", .{ base_url, encoded_id });
+    const url = try allocator.print("{s}/api/v2.0/indexers/{s}/Config", .{ base_url, encoded_id });
     defer allocator.free(url);
 
     const response = try executor(allocator, .{
@@ -346,7 +346,7 @@ pub fn getIndexerConfig(
     defer if (response.set_cookie) |c| allocator.free(c);
 
     if (response.status.class() != .success) {
-        debug_log.writef(allocator, "jackett-admin", "getIndexerConfig: unexpected status={d} body=\"{s}\"", .{ @intFromEnum(response.status), bodySnippet(response.body) });
+        debug_log.writef(allocator, "jackett-admin", "getIndexerConfig: unexpected status={d} body=\"{s}\"", .{ @backingInt(response.status), bodySnippet(response.body) });
         allocator.free(response.body);
         return error.HttpError;
     }
@@ -364,7 +364,7 @@ pub fn setIndexerConfig(
 ) AdminError!void {
     const encoded_id = try url_encode.percentEncode(allocator, indexer_id);
     defer allocator.free(encoded_id);
-    const url = try std.fmt.allocPrint(allocator, "{s}/api/v2.0/indexers/{s}/Config", .{ base_url, encoded_id });
+    const url = try allocator.print("{s}/api/v2.0/indexers/{s}/Config", .{ base_url, encoded_id });
     defer allocator.free(url);
 
     const response = try executor(allocator, .{
@@ -377,7 +377,7 @@ pub fn setIndexerConfig(
     defer if (response.set_cookie) |c| allocator.free(c);
 
     if (response.status.class() != .success) {
-        debug_log.writef(allocator, "jackett-admin", "setIndexerConfig: unexpected status={d} body=\"{s}\"", .{ @intFromEnum(response.status), bodySnippet(response.body) });
+        debug_log.writef(allocator, "jackett-admin", "setIndexerConfig: unexpected status={d} body=\"{s}\"", .{ @backingInt(response.status), bodySnippet(response.body) });
         return error.HttpError;
     }
 }
@@ -391,7 +391,7 @@ pub fn deleteIndexer(
 ) AdminError!void {
     const encoded_id = try url_encode.percentEncode(allocator, indexer_id);
     defer allocator.free(encoded_id);
-    const url = try std.fmt.allocPrint(allocator, "{s}/api/v2.0/indexers/{s}", .{ base_url, encoded_id });
+    const url = try allocator.print("{s}/api/v2.0/indexers/{s}", .{ base_url, encoded_id });
     defer allocator.free(url);
 
     const response = try executor(allocator, .{
@@ -403,7 +403,7 @@ pub fn deleteIndexer(
     defer if (response.set_cookie) |c| allocator.free(c);
 
     if (response.status.class() != .success) {
-        debug_log.writef(allocator, "jackett-admin", "deleteIndexer: unexpected status={d} body=\"{s}\"", .{ @intFromEnum(response.status), bodySnippet(response.body) });
+        debug_log.writef(allocator, "jackett-admin", "deleteIndexer: unexpected status={d} body=\"{s}\"", .{ @backingInt(response.status), bodySnippet(response.body) });
         return error.HttpError;
     }
 }
@@ -415,13 +415,13 @@ pub fn deleteIndexer(
 pub fn defaultIndexerCacheDir(allocator: std.mem.Allocator) ![]u8 {
     const config_dir = try config.getConfigDir(allocator);
     defer allocator.free(config_dir);
-    return std.fs.path.join(allocator, &.{ config_dir, "supersearchr", "indexer_cache" });
+    return std.Io.Dir.path.join(allocator, &.{ config_dir, "supersearchr", "indexer_cache" });
 }
 
 fn indexerCachePath(allocator: std.mem.Allocator, cache_dir: []const u8, indexer_id: []const u8) ![]u8 {
-    const filename = try std.fmt.allocPrint(allocator, "{s}.json", .{indexer_id});
+    const filename = try allocator.print("{s}.json", .{indexer_id});
     defer allocator.free(filename);
-    return std.fs.path.join(allocator, &.{ cache_dir, filename });
+    return std.Io.Dir.path.join(allocator, &.{ cache_dir, filename });
 }
 
 pub fn cacheIndexerConfig(
@@ -668,10 +668,10 @@ test "getIndexerConfig returns body on success and HttpError on non-ok status" {
     const allocator = std.testing.allocator;
     const mock = struct {
         fn exec(alloc: std.mem.Allocator, request: AdminRequest) AdminError!AdminResponse {
-            if (std.mem.indexOf(u8, request.url, "/api/v2.0/indexers/1337x/Config") != null) {
+            if (std.mem.find(u8, request.url, "/api/v2.0/indexers/1337x/Config") != null) {
                 return .{ .status = .ok, .body = try alloc.dupe(u8, "{\"field\":\"value\"}") };
             }
-            if (std.mem.indexOf(u8, request.url, "/api/v2.0/indexers/missing/Config") != null) {
+            if (std.mem.find(u8, request.url, "/api/v2.0/indexers/missing/Config") != null) {
                 return .{ .status = .not_found, .body = try alloc.dupe(u8, "") };
             }
             return error.HttpError;
@@ -700,7 +700,7 @@ test "setIndexerConfig sends POST with Cookie header and body" {
                 if (std.mem.eql(u8, h.name, "Cookie")) found_cookie = true;
             }
             test_observed_set_config_request_ok = request.method == .post and
-                std.mem.indexOf(u8, request.url, "/api/v2.0/indexers/1337x/Config") != null and
+                std.mem.find(u8, request.url, "/api/v2.0/indexers/1337x/Config") != null and
                 std.mem.eql(u8, request.body orelse "", "{\"field\":\"value\"}") and
                 found_cookie;
             return .{ .status = .ok, .body = try alloc.dupe(u8, "") };
@@ -737,7 +737,7 @@ test "deleteIndexer sends DELETE with Cookie header" {
     const mock = struct {
         fn exec(alloc: std.mem.Allocator, request: AdminRequest) AdminError!AdminResponse {
             test_observed_delete_request_ok = request.method == .delete and
-                std.mem.indexOf(u8, request.url, "/api/v2.0/indexers/1337x") != null;
+                std.mem.find(u8, request.url, "/api/v2.0/indexers/1337x") != null;
             return .{ .status = .ok, .body = try alloc.dupe(u8, "") };
         }
     };
@@ -757,7 +757,7 @@ test "indexer config cache writes, reads, and clears" {
 
     const dir_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", allocator);
     defer allocator.free(dir_abs);
-    const cache_dir = try std.fs.path.join(allocator, &.{ dir_abs, "indexer_cache" });
+    const cache_dir = try std.Io.Dir.path.join(allocator, &.{ dir_abs, "indexer_cache" });
     defer allocator.free(cache_dir);
 
     try cacheIndexerConfig(allocator, cache_dir, "1337x", "{\"field\":\"value\"}");
@@ -782,7 +782,7 @@ test "readCachedIndexerConfig returns null when no cache file exists" {
 
     const dir_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", allocator);
     defer allocator.free(dir_abs);
-    const cache_dir = try std.fs.path.join(allocator, &.{ dir_abs, "indexer_cache" });
+    const cache_dir = try std.Io.Dir.path.join(allocator, &.{ dir_abs, "indexer_cache" });
     defer allocator.free(cache_dir);
 
     const result = try readCachedIndexerConfig(allocator, cache_dir, "never-disabled");
@@ -797,7 +797,7 @@ test "cacheIndexerConfig overwrites an existing cache file" {
 
     const dir_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", allocator);
     defer allocator.free(dir_abs);
-    const cache_dir = try std.fs.path.join(allocator, &.{ dir_abs, "indexer_cache" });
+    const cache_dir = try std.Io.Dir.path.join(allocator, &.{ dir_abs, "indexer_cache" });
     defer allocator.free(cache_dir);
 
     try cacheIndexerConfig(allocator, cache_dir, "1337x", "{\"version\":1}");

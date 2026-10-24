@@ -1,13 +1,13 @@
+//! Scrolling key-hints footer.
+//!
+//! The hints row sits on the last terminal line, so a hint string wider than
+//! the terminal wraps and pushes the whole panel up by one row. Instead of
+//! letting that happen, the row shows a window over the hints and slides it
+//! back and forth, exactly like the marquee used for over-long torrent titles.
+
 const std = @import("std");
 const theme = @import("theme");
 const list_nav = @import("list_nav");
-
-/// Scrolling key-hints footer.
-///
-/// The hints row sits on the last terminal line, so a hint string wider than
-/// the terminal wraps and pushes the whole panel up by one row. Instead of
-/// letting that happen, the row shows a window over the hints and slides it
-/// back and forth, exactly like the marquee used for over-long torrent titles.
 
 /// Blank columns kept to the left of the hints text inside the panel layout.
 pub const panel_indent_cols: usize = 2;

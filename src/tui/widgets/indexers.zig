@@ -762,20 +762,20 @@ fn formatStatusText(
     if (commit_progress) |progress| {
         const spinner = theme.spinnerGlyph(progress.spinner_frame);
         if (progress.failed == 0) {
-            return std.fmt.bufPrint(
+            return std.mem.print(
                 buf,
                 "Showing {d}-{d} of {d} | Committing {d}/{d} {s}",
                 .{ scroll_offset + 1, end_idx, total_count, progress.completed, progress.total, spinner },
             ) catch "Committing";
         }
-        return std.fmt.bufPrint(
+        return std.mem.print(
             buf,
             "Showing {d}-{d} of {d} | Committing {d}/{d}, {d} failed {s}",
             .{ scroll_offset + 1, end_idx, total_count, progress.completed, progress.total, progress.failed, spinner },
         ) catch "Committing";
     }
     if (total_count == 0) return "No indexers found";
-    return std.fmt.bufPrint(buf, "Showing {d}-{d} of {d}", .{ scroll_offset + 1, end_idx, total_count }) catch "Showing";
+    return std.mem.print(buf, "Showing {d}-{d} of {d}", .{ scroll_offset + 1, end_idx, total_count }) catch "Showing";
 }
 
 fn drawCompact(
@@ -931,15 +931,15 @@ test "formatStatusText folds commit progress into the showing row" {
     var buf: [128]u8 = undefined;
 
     const idle = formatStatusText(&buf, 0, 12, 80, null);
-    try std.testing.expect(std.mem.indexOf(u8, idle, "Showing 1-12 of 80") != null);
-    try std.testing.expect(std.mem.indexOf(u8, idle, "Committing") == null);
+    try std.testing.expect(std.mem.find(u8, idle, "Showing 1-12 of 80") != null);
+    try std.testing.expect(std.mem.find(u8, idle, "Committing") == null);
 
     const without_failed = formatStatusText(&buf, 0, 12, 80, .{ .completed = 2, .total = 4, .failed = 0, .spinner_frame = 0 });
-    try std.testing.expect(std.mem.indexOf(u8, without_failed, "Showing 1-12 of 80 | Committing 2/4") != null);
-    try std.testing.expect(std.mem.indexOf(u8, without_failed, "failed") == null);
+    try std.testing.expect(std.mem.find(u8, without_failed, "Showing 1-12 of 80 | Committing 2/4") != null);
+    try std.testing.expect(std.mem.find(u8, without_failed, "failed") == null);
 
     const with_failed = formatStatusText(&buf, 0, 12, 80, .{ .completed = 3, .total = 4, .failed = 1, .spinner_frame = 0 });
-    try std.testing.expect(std.mem.indexOf(u8, with_failed, "Committing 3/4, 1 failed") != null);
+    try std.testing.expect(std.mem.find(u8, with_failed, "Committing 3/4, 1 failed") != null);
 }
 
 test "setCommitProgress only forces a redraw when the value changes" {

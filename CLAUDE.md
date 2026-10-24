@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Supersearchr is a TUI (terminal user interface) BitTorrent search tool written in Zig 0.16.0. It searches for torrents via **Jackett** (a torrent indexer API) and sends selected magnets/torrents to **Superseedr** (a companion TUI torrent client).
+Supersearchr is a TUI (terminal user interface) BitTorrent search tool written in Zig 0.17.0. It searches for torrents via **Jackett** (a torrent indexer API) and sends selected magnets/torrents to **Superseedr** (a companion TUI torrent client).
 
 ## Commands
 
@@ -40,14 +40,21 @@ Modules use **dependency injection** (function pointer `executor` fields) for te
 
 Each module has its own test section in `build.zig`. When adding a new module with tests, follow the existing pattern (`config_tests`, `jackett_tests`, etc.) and add it to `test_step`.
 
-## Zig 0.16.0 Critical Rules
+## Zig 0.17.0 Critical Rules
 
-**Only use syntax and APIs compatible with Zig 0.16.0.** When in doubt, check: https://ziglang.org/documentation/0.16.0/
+**Only use syntax and APIs compatible with Zig 0.17.0.** When in doubt, check: https://ziglang.org/documentation/0.17.0/ or read the std source directly under `/usr/lib/zig/std/` (deprecated decls are marked with a `/// Deprecated` doc comment naming the replacement).
 
-- **ArrayList init:** Use `std.ArrayList(T) = .{}` — **NOT** `.init(allocator)` (invalid in 0.16.0)
+- **ArrayList init:** Use `std.ArrayList(T) = .empty` — **NOT** `.{}` (no default field values in 0.17.0) and **NOT** `.init(allocator)` (that is the managed `std.array_list.Managed`)
 - **ArrayList append:** Use `list.append(allocator, item)` — **NOT** `list.append(item)`
 - **Defer captures:** Use `|*inner|` (var capture), not `|inner|` (const capture) when mutating in defer blocks
-- **Stdin/stdout:** Use `std.fs.File.stdin()` / `std.fs.File.stdout()` — **NOT** `std.io.getStdIn()` / `std.io.getStdOut()` (deprecated)
+- **Stdin/stdout:** Use `std.Io.File.stdin()` / `std.Io.File.stdout()` (or the `compat` helpers) — `std.fs.File` and `std.io.getStdIn()` / `getStdOut()` no longer exist
+- **Formatting into buffers:** Use `std.mem.print(buf, fmt, args)` and `allocator.print(fmt, args)` — **NOT** the deprecated `std.fmt.bufPrint` / `std.fmt.allocPrint`
+- **Searching slices:** Use `std.mem.find`, `findScalar`, `findScalarPos`, `findPos`, `findAny` — **NOT** the deprecated `std.mem.indexOf*` aliases
+- **Paths:** Use `std.Io.Dir.path` — **NOT** the deprecated `std.fs.path`
+- **Builtin module:** Use `std.lang` (e.g. `std.lang.Optimize`) — **NOT** the deprecated `std.builtin` / `OptimizeMode`. Optimize modes are lowercase: `.debug`, `.safe`, `.fast`, `.small` (CLI: `-Doptimize=safe`)
+- **Enum → int:** Use `@backingInt(e)` — **NOT** `@intFromEnum(e)` (`zig fmt` rewrites it automatically)
+- **General-purpose allocator:** Use `std.heap.SafeAllocator` (`.init(std.heap.page_allocator, .{})`; `deinit()` returns the leak count) — **NOT** the deprecated `std.heap.DebugAllocator`
+- **build.zig:** Forward `zig build run -- args` with `run_cmd.addPassthruArgs()` (`b.args` is gone); refer to project paths with `b.path(...)` LazyPaths (`b.pathFromRoot` is gone)
 - Do not use `std.debug.print` in tests or production code unless explicitly requested
 
 ## Workflows

@@ -74,7 +74,7 @@ pub fn execute(
     var request = http_client.request(spec.method, uri, .{
         .extra_headers = spec.extra_headers,
         .headers = if (spec.body != null) .{ .content_type = .{ .override = spec.content_type } } else .{},
-        .redirect_behavior = if (spec.follow_redirects) @enumFromInt(3) else .unhandled,
+        .redirect_behavior = if (spec.follow_redirects) @fromBackingInt(@intCast(3)) else .unhandled,
     }) catch |err| {
         debug_log.writef(
             allocator,
@@ -266,7 +266,7 @@ test "execute sends GET with no body and returns status/body" {
         allocator.destroy(started.server);
     }
 
-    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/path", .{started.port});
+    const url = try allocator.print("http://127.0.0.1:{d}/path", .{started.port});
     defer allocator.free(url);
 
     const raw = try execute(allocator, url, .{}, "test");
@@ -291,7 +291,7 @@ test "execute attaches extra_headers to the outgoing request" {
         allocator.destroy(started.server);
     }
 
-    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/path", .{started.port});
+    const url = try allocator.print("http://127.0.0.1:{d}/path", .{started.port});
     defer allocator.free(url);
 
     const raw = try execute(allocator, url, .{
@@ -302,7 +302,7 @@ test "execute attaches extra_headers to the outgoing request" {
     started.thread.join();
     allocator.destroy(started.handler);
 
-    try std.testing.expect(std.mem.indexOf(u8, capture.head.items, "Cookie: Jackett=abc123") != null);
+    try std.testing.expect(std.mem.find(u8, capture.head.items, "Cookie: Jackett=abc123") != null);
 }
 
 test "execute sends POST with body and Content-Type header" {
@@ -316,7 +316,7 @@ test "execute sends POST with body and Content-Type header" {
         allocator.destroy(started.server);
     }
 
-    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/path", .{started.port});
+    const url = try allocator.print("http://127.0.0.1:{d}/path", .{started.port});
     defer allocator.free(url);
 
     const raw = try execute(allocator, url, .{
@@ -329,7 +329,7 @@ test "execute sends POST with body and Content-Type header" {
     allocator.destroy(started.handler);
 
     try std.testing.expect(std.mem.startsWith(u8, capture.head.items, "POST /path HTTP/1.1"));
-    try std.testing.expect(std.mem.indexOf(u8, capture.head.items, "content-type: application/json") != null);
+    try std.testing.expect(std.mem.find(u8, capture.head.items, "content-type: application/json") != null);
     try std.testing.expectEqualStrings("{\"enabled\":true}", capture.body.items);
 }
 
@@ -344,7 +344,7 @@ test "execute captures Set-Cookie from the response" {
         allocator.destroy(started.server);
     }
 
-    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/path", .{started.port});
+    const url = try allocator.print("http://127.0.0.1:{d}/path", .{started.port});
     defer allocator.free(url);
 
     const raw = try execute(allocator, url, .{}, "test");
@@ -374,7 +374,7 @@ test "execute does not throw on non-OK status" {
         allocator.destroy(started.server);
     }
 
-    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/path", .{started.port});
+    const url = try allocator.print("http://127.0.0.1:{d}/path", .{started.port});
     defer allocator.free(url);
 
     const raw = try execute(allocator, url, .{}, "test");
@@ -430,8 +430,7 @@ test "execute decompresses gzip response body" {
     var capture: TestRequestCapture = .{};
     defer capture.deinit(allocator);
 
-    const response = try std.fmt.allocPrint(
-        allocator,
+    const response = try allocator.print(
         "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}",
         .{ gzipped.len, gzipped },
     );
@@ -443,7 +442,7 @@ test "execute decompresses gzip response body" {
         allocator.destroy(started.server);
     }
 
-    const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/path", .{started.port});
+    const url = try allocator.print("http://127.0.0.1:{d}/path", .{started.port});
     defer allocator.free(url);
 
     const raw = try execute(allocator, url, .{}, "test");

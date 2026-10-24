@@ -26,7 +26,7 @@ fn createTargetedModule(
     b: *std.Build,
     root_source_file: []const u8,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     strip: bool,
 ) *std.Build.Module {
     return b.createModule(.{
@@ -42,7 +42,7 @@ fn addModuleTest(
     name: []const u8,
     root_source_file: []const u8,
     target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
+    optimize: std.lang.Optimize,
     strip: bool,
 ) ModuleTest {
     const artifact = b.addTest(.{
@@ -61,7 +61,7 @@ pub fn build(b: *std.Build) void {
 
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const strip = b.option(bool, "strip", "Omit debug symbols from build artifacts") orelse (optimize != .Debug);
+    const strip = b.option(bool, "strip", "Omit debug symbols from build artifacts") orelse (optimize != .debug);
 
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", app_version);
@@ -223,9 +223,7 @@ pub fn build(b: *std.Build) void {
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     run_step.dependOn(&run_cmd.step);
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
 
     const config_tests = addModuleTest(b, "test-config", "src/config.zig", target, optimize, strip);
     addImports(config_tests.artifact.root_module, &.{
@@ -473,7 +471,6 @@ pub fn build(b: *std.Build) void {
     }
     mkdir_coverage.addArg("coverage/merged");
 
-    const project_root = b.pathFromRoot(".");
     const kcov_merge = b.addSystemCommand(&.{ "kcov", "--clean", "--merge", "coverage/merged" });
     kcov_merge.step.dependOn(&mkdir_coverage.step);
 
@@ -482,9 +479,9 @@ pub fn build(b: *std.Build) void {
         const kcov_run = b.addSystemCommand(&.{
             "kcov",
             "--clean",
-            b.fmt("--include-path={s}/src", .{project_root}),
-            "--exclude-pattern=debug/,/.zig/,/lib/zig/",
         });
+        kcov_run.addPrefixedDirectoryArg("--include-path=", b.path("src"));
+        kcov_run.addArg("--exclude-pattern=debug/,/.zig/,/lib/zig/");
         kcov_run.addArg(output_dir);
         kcov_run.addArtifactArg(coverage_test.artifact);
         kcov_run.step.dependOn(&mkdir_coverage.step);

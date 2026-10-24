@@ -159,7 +159,7 @@ pub fn readKey() !Event {
             if (b == 0x08) return Event{ .key = .backspace, .value = 0 };
             return Event{ .key = .shift_backspace, .value = 0 };
         } else {
-            const erase_char = original_termios.cc[@intFromEnum(std.posix.V.ERASE)];
+            const erase_char = original_termios.cc[@backingInt(std.posix.V.ERASE)];
             const is_backspace = if (erase_char != 0) b == erase_char else b == 0x7f;
             if (is_backspace) {
                 return Event{ .key = .backspace, .value = 0 };
@@ -354,19 +354,19 @@ pub fn setCursorBlinkingDefault() void {
 pub fn moveCursor(row: u16, col: u16) void {
     const stdout = std.Io.File.stdout();
     var buf: [32]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "\x1b[{};{}H", .{ row, col }) catch return;
+    const msg = std.mem.print(&buf, "\x1b[{};{}H", .{ row, col }) catch return;
     compat.writeFileAll(stdout, msg) catch {};
 }
 
 pub fn setFg256(code: u8) void {
     var buf: [24]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "\x1b[38;5;{}m", .{code}) catch return;
+    const msg = std.mem.print(&buf, "\x1b[38;5;{}m", .{code}) catch return;
     compat.stdoutWriteAll(msg);
 }
 
 pub fn setBg256(code: u8) void {
     var buf: [24]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "\x1b[48;5;{}m", .{code}) catch return;
+    const msg = std.mem.print(&buf, "\x1b[48;5;{}m", .{code}) catch return;
     compat.stdoutWriteAll(msg);
 }
 
@@ -534,7 +534,7 @@ test "color escape codes" {
     const Testing = @import("std").testing;
     var buf: [16]u8 = undefined;
 
-    const result = std.fmt.bufPrint(&buf, "\x1b[{}m", .{30}) catch unreachable;
+    const result = std.mem.print(&buf, "\x1b[{}m", .{30}) catch unreachable;
     try Testing.expectEqualStrings("\x1b[30m", result);
 }
 
@@ -542,7 +542,7 @@ test "cursor position escape code" {
     const Testing = @import("std").testing;
     var buf: [32]u8 = undefined;
 
-    const result = std.fmt.bufPrint(&buf, "\x1b[{};{}H", .{ 5, 10 }) catch unreachable;
+    const result = std.mem.print(&buf, "\x1b[{};{}H", .{ 5, 10 }) catch unreachable;
     try Testing.expectEqualStrings("\x1b[5;10H", result);
 }
 
@@ -582,14 +582,14 @@ test "classifyEscapeSequence distinguishes Delete from shift+backspace" {
 test "256 color fg escape code" {
     const Testing = @import("std").testing;
     var buf: [24]u8 = undefined;
-    const result = std.fmt.bufPrint(&buf, "\x1b[38;5;{}m", .{33}) catch unreachable;
+    const result = std.mem.print(&buf, "\x1b[38;5;{}m", .{33}) catch unreachable;
     try Testing.expectEqualStrings("\x1b[38;5;33m", result);
 }
 
 test "256 color bg escape code" {
     const Testing = @import("std").testing;
     var buf: [24]u8 = undefined;
-    const result = std.fmt.bufPrint(&buf, "\x1b[48;5;{}m", .{236}) catch unreachable;
+    const result = std.mem.print(&buf, "\x1b[48;5;{}m", .{236}) catch unreachable;
     try Testing.expectEqualStrings("\x1b[48;5;236m", result);
 }
 

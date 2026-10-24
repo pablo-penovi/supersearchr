@@ -10,7 +10,7 @@ pub fn percentEncode(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
             },
             else => {
                 var buf: [3]u8 = undefined;
-                const encoded = std.fmt.bufPrint(&buf, "%{X:0>2}", .{c}) catch unreachable;
+                const encoded = std.mem.print(&buf, "%{X:0>2}", .{c}) catch unreachable;
                 try result.appendSlice(allocator, encoded);
             },
         }

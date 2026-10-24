@@ -3,12 +3,12 @@ const config = @import("config");
 const app = @import("tui/app");
 
 pub fn main() !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
+    var gpa: std.heap.SafeAllocator = .init(std.heap.page_allocator, .{});
     if (std.Options.debug_threaded_io) |threaded| {
         threaded.allocator = gpa.allocator();
     }
     defer {
-        if (gpa.deinit() == .leak) {
+        if (gpa.deinit() != 0) {
             std.debug.print("Memory leak detected\n", .{});
         }
     }

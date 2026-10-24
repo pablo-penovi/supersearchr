@@ -2,7 +2,7 @@
 
 [![coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fpablo-penovi.github.io%2Fsupersearchr%2Fcoverage-badge.json%3Fv%3D1&cacheSeconds=300)](https://pablo-penovi.github.io/supersearchr/coverage/)
 
-Terminal-first BitTorrent search for [Jackett](https://github.com/Jackett/Jackett) + [Superseedr](https://github.com/Jagalite/superseedr), written in Zig 0.16.0.
+Terminal-first BitTorrent search for [Jackett](https://github.com/Jackett/Jackett) + [Superseedr](https://github.com/Jagalite/superseedr), written in Zig 0.17.0.
 
 `supersearchr` lets you search Jackett from a TUI, browse sorted results, manage active Jackett indexers, and send a selected magnet/torrent link to `superseedr add`. Searches query configured Jackett indexers in parallel, stream result batches as each indexer finishes, and keep the displayed list sorted by seeders while the search continues.
 Current project version: `v0.5.0`.
@@ -10,7 +10,7 @@ Current project version: `v0.5.0`.
 ## Requirements
 
 - Linux, macOS, or Windows (Windows Terminal recommended on Windows)
-- Zig `0.16.0`
+- Zig `0.17.0`
 - `kcov` for coverage reports
 - A running Jackett instance with API key
 - `superseedr` CLI in your `PATH`
@@ -40,7 +40,7 @@ zig build
 zig build run
 
 # Build optimized for your current machine
-zig build -Doptimize=ReleaseSafe -Dtarget=native-native
+zig build -Doptimize=safe -Dtarget=native-native
 
 # Cross-compile examples
 zig build -Dtarget=x86_64-linux

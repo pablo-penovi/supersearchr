@@ -41,7 +41,7 @@ pub fn formatCompactNoticeLine(
     compact_buf: []u8,
     trunc_buf: []u8,
 ) []const u8 {
-    const compact_line = std.fmt.bufPrint(compact_buf, "{s}: {s}", .{ title, message }) catch title;
+    const compact_line = std.mem.print(compact_buf, "{s}: {s}", .{ title, message }) catch title;
     return theme.truncateWithEllipsis(compact_line, @max(@as(usize, 1), max_cols), trunc_buf);
 }
 
@@ -88,13 +88,13 @@ pub fn renderResultErrorOverlay(
     message: []const u8,
 ) void {
     var buf: [256]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "Error: {s}", .{message}) catch "Error";
+    const msg = std.mem.print(&buf, "Error: {s}", .{message}) catch "Error";
     renderResultNoticeOverlay(term_rows, term_cols, refresh_terminal_size, widget, "Error", msg, theme.superseedr_like.err);
 }
 
 pub fn renderError(message: []const u8) void {
     var buf: [256]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "Error: {s}", .{message}) catch "Error";
+    const msg = std.mem.print(&buf, "Error: {s}", .{message}) catch "Error";
     renderNoticePanel("Error", msg, theme.superseedr_like.err, true);
 }
 
@@ -148,7 +148,7 @@ pub fn renderNoticePanel(title: []const u8, message: []const u8, title_color: u8
     term.setFg256(title_color);
     term.setBold(true);
     var title_buf: [64]u8 = undefined;
-    const title_line = std.fmt.bufPrint(&title_buf, " {s} ", .{title}) catch title;
+    const title_line = std.mem.print(&title_buf, " {s} ", .{title}) catch title;
     theme.writePadded(stdout, title_line, layout.panel_width - 2) catch {};
     term.setBold(false);
     term.setFg256(colors.panel_border);
@@ -158,7 +158,7 @@ pub fn renderNoticePanel(title: []const u8, message: []const u8, title_color: u8
 
     term.moveCursor(layout.top_row + 2, layout.panel_col);
     var msg_buf: [352]u8 = undefined;
-    const message_line = std.fmt.bufPrint(&msg_buf, " {s}", .{shown}) catch shown;
+    const message_line = std.mem.print(&msg_buf, " {s}", .{shown}) catch shown;
     theme.drawPanelRow(stdout, layout.panel_width, message_line, border, colors) catch {};
 
     term.moveCursor(layout.top_row + 3, layout.panel_col);
@@ -238,16 +238,16 @@ fn drawLinesModal(
         term.setFg256(title_color);
         term.setBold(true);
         var title_buf: [64]u8 = undefined;
-        const title_line = std.fmt.bufPrint(&title_buf, "{s}:\r\n", .{title}) catch "List:\r\n";
+        const title_line = std.mem.print(&title_buf, "{s}:\r\n", .{title}) catch "List:\r\n";
         stdout.writeAll(title_line) catch {};
         term.setBold(false);
         for (lines) |line| {
             term.setFg256(colors.text);
             var item_buf: [160]u8 = undefined;
             const item_line = if (bullet)
-                std.fmt.bufPrint(&item_buf, " • {s}\r\n", .{line}) catch line
+                std.mem.print(&item_buf, " • {s}\r\n", .{line}) catch line
             else
-                std.fmt.bufPrint(&item_buf, "{s}\r\n", .{line}) catch line;
+                std.mem.print(&item_buf, "{s}\r\n", .{line}) catch line;
             stdout.writeAll(item_line) catch {};
         }
         term.setFg256(colors.accent);
@@ -274,7 +274,7 @@ fn drawLinesModal(
     term.setFg256(title_color);
     term.setBold(true);
     var title_buf: [64]u8 = undefined;
-    const title_line = std.fmt.bufPrint(&title_buf, " {s} ", .{title}) catch title;
+    const title_line = std.mem.print(&title_buf, " {s} ", .{title}) catch title;
     theme.writePadded(stdout, title_line, panel_width - 2) catch {};
     term.setBold(false);
     term.setFg256(colors.panel_border);
@@ -287,9 +287,9 @@ fn drawLinesModal(
         term.moveCursor(top_row + 2 + @as(u16, @intCast(idx)), panel_col);
         var item_buf: [160]u8 = undefined;
         const item_line = if (bullet)
-            std.fmt.bufPrint(&item_buf, " • {s}", .{line}) catch line
+            std.mem.print(&item_buf, " • {s}", .{line}) catch line
         else
-            std.fmt.bufPrint(&item_buf, " {s}", .{line}) catch line;
+            std.mem.print(&item_buf, " {s}", .{line}) catch line;
         theme.drawPanelRow(stdout, panel_width, item_line, border, colors) catch {};
     }
 
@@ -300,7 +300,7 @@ fn drawLinesModal(
     stdout.writeAll(border.vertical) catch {};
     term.setFg256(colors.accent); // Call-to-action color
     var footer_buf: [80]u8 = undefined;
-    const footer_line = std.fmt.bufPrint(&footer_buf, " {s} ", .{footer_text}) catch footer_text;
+    const footer_line = std.mem.print(&footer_buf, " {s} ", .{footer_text}) catch footer_text;
     theme.writePadded(stdout, footer_line, panel_width - 2) catch {};
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
@@ -553,7 +553,7 @@ fn drawNamePromptModal(query: []const u8, armed_overwrite: bool) void {
         term.setBold(false);
         term.setFg256(colors.text);
         var input_buf: [128]u8 = undefined;
-        const input_line = std.fmt.bufPrint(&input_buf, "> {s}\r\n", .{query}) catch "> ";
+        const input_line = std.mem.print(&input_buf, "> {s}\r\n", .{query}) catch "> ";
         stdout.writeAll(input_line) catch {};
         term.setFg256(colors.muted);
         if (armed_overwrite) {
@@ -598,7 +598,7 @@ fn drawNamePromptModal(query: []const u8, armed_overwrite: bool) void {
     stdout.writeAll(border.vertical) catch {};
     term.setFg256(colors.text);
     var input_buf: [256]u8 = undefined;
-    const input_text = std.fmt.bufPrint(&input_buf, " Name: {s}", .{query}) catch " Name: ";
+    const input_text = std.mem.print(&input_buf, " Name: {s}", .{query}) catch " Name: ";
     const disp_w = theme.displayWidthOfText(input_text);
     stdout.writeAll(input_text) catch {};
     if (disp_w < panel_width - 2) {
@@ -652,7 +652,7 @@ pub fn renderProfileDeleteConfirmOverlay(
         if (needs_render) {
             renderDimmedBackdrop(backdrop, term_rows.*, term_cols.*);
             var line_buf: [160]u8 = undefined;
-            const line = std.fmt.bufPrint(&line_buf, "Delete profile \"{s}\"?", .{profile_name}) catch "Delete this profile?";
+            const line = std.mem.print(&line_buf, "Delete profile \"{s}\"?", .{profile_name}) catch "Delete this profile?";
             const lines = [_][]const u8{line};
             drawLinesModal("Confirm Delete", theme.superseedr_like.err, &lines, "ENTER delete | ESC cancel", false);
             needs_render = false;
@@ -838,7 +838,7 @@ fn drawExitConfirmationModal() void {
     term.setFg256(colors.err);
     term.setBold(true);
     var title_buf: [64]u8 = undefined;
-    const title_line = std.fmt.bufPrint(&title_buf, " Exit Confirmation ", .{}) catch " Exit Confirmation ";
+    const title_line = std.mem.print(&title_buf, " Exit Confirmation ", .{}) catch " Exit Confirmation ";
     theme.writePadded(stdout, title_line, panel_width - 2) catch {};
     term.setBold(false);
     term.setFg256(colors.panel_border);
@@ -1013,7 +1013,7 @@ fn drawListSearchModal(query: []const u8) void {
         term.setBold(false);
         term.setFg256(colors.text);
         var input_buf: [128]u8 = undefined;
-        const input_line = std.fmt.bufPrint(&input_buf, "> {s}\r\n", .{query}) catch "> ";
+        const input_line = std.mem.print(&input_buf, "> {s}\r\n", .{query}) catch "> ";
         stdout.writeAll(input_line) catch {};
         term.setFg256(colors.muted);
         if (unlocked) {
@@ -1047,7 +1047,7 @@ fn drawListSearchModal(query: []const u8) void {
     term.setFg256(colors.panel_title);
     term.setBold(true);
     var title_buf: [64]u8 = undefined;
-    const title_line = std.fmt.bufPrint(&title_buf, " Search in results ", .{}) catch " Search in results ";
+    const title_line = std.mem.print(&title_buf, " Search in results ", .{}) catch " Search in results ";
     theme.writePadded(stdout, title_line, panel_width - 2) catch {};
     term.setBold(false);
     term.setFg256(colors.panel_border);
@@ -1062,7 +1062,7 @@ fn drawListSearchModal(query: []const u8) void {
 
     term.setFg256(colors.text);
     var input_buf: [256]u8 = undefined;
-    const input_text = std.fmt.bufPrint(&input_buf, " Search: {s}", .{query}) catch " Search: ";
+    const input_text = std.mem.print(&input_buf, " Search: {s}", .{query}) catch " Search: ";
 
     const disp_w = theme.displayWidthOfText(input_text);
     stdout.writeAll(input_text) catch {};

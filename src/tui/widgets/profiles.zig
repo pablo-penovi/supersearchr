@@ -409,7 +409,7 @@ fn buildDataCells(
     var name_buf: [512]u8 = undefined;
     var label_buf: [544]u8 = undefined;
     const label = if (active)
-        std.fmt.bufPrint(&label_buf, "{s} *", .{name}) catch name
+        std.mem.print(&label_buf, "{s} *", .{name}) catch name
     else
         name;
     const truncated_name = theme.truncateWithEllipsis(label, layout.name_col_width, &name_buf);
@@ -417,7 +417,7 @@ fn buildDataCells(
     writeSpaces(&writer, layout.column_gap) catch return "";
 
     var count_buf: [32]u8 = undefined;
-    const count_text = std.fmt.bufPrint(&count_buf, "{d}", .{trackers}) catch "?";
+    const count_text = std.mem.print(&count_buf, "{d}", .{trackers}) catch "?";
     theme.writePadded(&writer, count_text, layout.count_col_width) catch return "";
     writer.writeAll(" ") catch return "";
 
@@ -452,7 +452,7 @@ fn drawStatusRow(
 
 fn formatStatusText(buf: []u8, scroll_offset: usize, end_idx: usize, total_count: usize) []const u8 {
     if (total_count == 0) return "No profiles saved";
-    return std.fmt.bufPrint(buf, "Showing {d}-{d} of {d}", .{ scroll_offset + 1, end_idx, total_count }) catch "Showing";
+    return std.mem.print(buf, "Showing {d}-{d} of {d}", .{ scroll_offset + 1, end_idx, total_count }) catch "Showing";
 }
 
 fn drawCompact(
@@ -480,7 +480,7 @@ fn drawCompact(
         const shown = theme.truncateWithEllipsis(row.name, compactNameWidth(max_cols), trunc_buf[0..]);
         stdout.writeAll(shown) catch {};
         var count_buf: [48]u8 = undefined;
-        const count_line = std.fmt.bufPrint(&count_buf, " ({d} trackers)\r\n", .{row.count}) catch "\r\n";
+        const count_line = std.mem.print(&count_buf, " ({d} trackers)\r\n", .{row.count}) catch "\r\n";
         stdout.writeAll(count_line) catch {};
         term.setFg256(colors.panel_title);
         var status_buf: [128]u8 = undefined;

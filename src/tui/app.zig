@@ -101,7 +101,7 @@ pub fn runWithDeps(allocator: std.mem.Allocator, cfg: config.Config, deps: AppDe
 
     const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
 
-    const base_url = try std.fmt.allocPrint(allocator, "{s}:{d}", .{ cfg.api_url, cfg.api_port });
+    const base_url = try allocator.print("{s}:{d}", .{ cfg.api_url, cfg.api_port });
     defer allocator.free(base_url);
 
     var client = jackett.Client.init(allocator, base_url, cfg.api_key);
@@ -1562,11 +1562,11 @@ fn refreshTerminalSizeValues(term_rows: *u16, term_cols: *u16) bool {
 test "state transitions smoke path search -> streaming results with injected deps" {
     const mock = struct {
         fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]u8 {
-            if (std.mem.indexOf(u8, url, "t=indexers&configured=true") != null) {
+            if (std.mem.find(u8, url, "t=indexers&configured=true") != null) {
                 return allocator.dupe(u8, "<indexers><indexer id=\"linuxtracker\"><title>LinuxTracker</title></indexer></indexers>") catch error.OutOfMemory;
             }
-            if (std.mem.indexOf(u8, url, "/indexers/linuxtracker/") == null) return error.ParseFailed;
-            if (std.mem.indexOf(u8, url, "q=ubuntu") == null) return error.ParseFailed;
+            if (std.mem.find(u8, url, "/indexers/linuxtracker/") == null) return error.ParseFailed;
+            if (std.mem.find(u8, url, "q=ubuntu") == null) return error.ParseFailed;
             return allocator.dupe(u8, "<rss><channel><item><title>Ubuntu ISO</title><link>magnet:?xt=urn:btih:abc</link><torznab:attr name=\"seeders\" value=\"120\"/><torznab:attr name=\"peers\" value=\"4\"/></item></channel></rss>") catch error.OutOfMemory;
         }
     };
@@ -1648,7 +1648,7 @@ test "completed streaming search persists per-indexer outcomes to record.json" {
     defer tmp.cleanup();
     const tmp_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", std.testing.allocator);
     defer std.testing.allocator.free(tmp_abs);
-    const record_path = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "record.json" });
+    const record_path = try std.Io.Dir.path.join(std.testing.allocator, &.{ tmp_abs, "record.json" });
     defer std.testing.allocator.free(record_path);
 
     const state = struct {
@@ -1658,10 +1658,10 @@ test "completed streaming search persists per-indexer outcomes to record.json" {
 
     const mock = struct {
         fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]u8 {
-            if (std.mem.indexOf(u8, url, "t=indexers&configured=true") != null) {
+            if (std.mem.find(u8, url, "t=indexers&configured=true") != null) {
                 return allocator.dupe(u8, "<indexers><indexer id=\"ok\"><title>OK</title></indexer><indexer id=\"bad\"><title>Bad</title></indexer></indexers>") catch error.OutOfMemory;
             }
-            if (std.mem.indexOf(u8, url, "/indexers/ok/") != null) {
+            if (std.mem.find(u8, url, "/indexers/ok/") != null) {
                 return allocator.dupe(u8, "<rss><channel><item><title>OK Result</title><link>magnet:?xt=urn:btih:ok</link><torznab:attr name=\"seeders\" value=\"5\"/></item></channel></rss>") catch error.OutOfMemory;
             }
             return error.HttpError;
@@ -1824,12 +1824,12 @@ test "startSearchWithAppDeps uses injected jackett body executor" {
 
     const mock = struct {
         fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]u8 {
-            if (std.mem.indexOf(u8, url, "/api/v2.0/indexers/all/results/torznab/api?apikey=test-key&t=indexers&configured=true") != null) {
+            if (std.mem.find(u8, url, "/api/v2.0/indexers/all/results/torznab/api?apikey=test-key&t=indexers&configured=true") != null) {
                 state.indexers_called = true;
                 return allocator.dupe(u8, "<indexers><indexer id=\"linuxtracker\"><title>LinuxTracker</title></indexer></indexers>") catch error.OutOfMemory;
             }
             state.search_called = true;
-            if (std.mem.indexOf(u8, url, "/api/v2.0/indexers/linuxtracker/results/torznab/api?apikey=test-key&t=search&q=ubuntu") == null) {
+            if (std.mem.find(u8, url, "/api/v2.0/indexers/linuxtracker/results/torznab/api?apikey=test-key&t=search&q=ubuntu") == null) {
                 return error.ParseFailed;
             }
             return allocator.dupe(u8, "<rss><channel></channel></rss>") catch error.OutOfMemory;
@@ -1923,8 +1923,7 @@ test "checkLatestVersionOnStartup stores latest version from injected executor" 
     const mock = struct {
         fn exec(allocator: std.mem.Allocator, _: []const u8) update_checker.UpdateError![]u8 {
             state.called_count += 1;
-            return std.fmt.allocPrint(
-                allocator,
+            return allocator.print(
                 "{{\"tag_name\":\"{s}\"}}",
                 .{mocked_latest_tag},
             ) catch return error.OutOfMemory;
@@ -2012,7 +2011,7 @@ test "configureSearchWidgetForApp forwards latest version to search widget" {
 test "transitionSearchToStreamingResults preserves sort fields" {
     const mock = struct {
         fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]u8 {
-            if (std.mem.indexOf(u8, url, "t=indexers&configured=true") != null) {
+            if (std.mem.find(u8, url, "t=indexers&configured=true") != null) {
                 return allocator.dupe(u8, "<indexers></indexers>") catch error.OutOfMemory;
             }
             return error.ParseFailed;
@@ -2191,9 +2190,9 @@ test "commit core marks rows saved/failed and persists Last Status" {
     defer tmp.cleanup();
     const tmp_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", std.testing.allocator);
     defer std.testing.allocator.free(tmp_abs);
-    const cache_dir = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "indexer_cache" });
+    const cache_dir = try std.Io.Dir.path.join(std.testing.allocator, &.{ tmp_abs, "indexer_cache" });
     defer std.testing.allocator.free(cache_dir);
-    const status_path = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "last_status.json" });
+    const status_path = try std.Io.Dir.path.join(std.testing.allocator, &.{ tmp_abs, "last_status.json" });
     defer std.testing.allocator.free(status_path);
 
     const state = struct {
@@ -2206,13 +2205,13 @@ test "commit core marks rows saved/failed and persists Last Status" {
     const mock = struct {
         fn exec(alloc: std.mem.Allocator, request: jackett_admin.AdminRequest) jackett_admin.AdminError!jackett_admin.AdminResponse {
             // "good"'s GET-Config and DELETE URLs both contain this substring -> both succeed.
-            if (std.mem.indexOf(u8, request.url, "/indexers/good") != null) {
+            if (std.mem.find(u8, request.url, "/indexers/good") != null) {
                 return .{ .status = .ok, .body = try alloc.dupe(u8, "{}") };
             }
             // "bad"'s GET-Config succeeds (so it gets cached), but its DELETE
             // URL (no /Config suffix) falls through to the HttpError below,
             // so the disable operation fails partway through.
-            if (std.mem.indexOf(u8, request.url, "/indexers/bad/Config") != null) {
+            if (std.mem.find(u8, request.url, "/indexers/bad/Config") != null) {
                 return .{ .status = .ok, .body = try alloc.dupe(u8, "{}") };
             }
             return error.HttpError;
@@ -2293,13 +2292,13 @@ test "commitItems runs on a worker thread, recording outcomes and progress" {
     defer tmp.cleanup();
     const tmp_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", std.testing.allocator);
     defer std.testing.allocator.free(tmp_abs);
-    const cache_dir = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "indexer_cache" });
+    const cache_dir = try std.Io.Dir.path.join(std.testing.allocator, &.{ tmp_abs, "indexer_cache" });
     defer std.testing.allocator.free(cache_dir);
 
     const mock = struct {
         // Everything under /indexers/ok succeeds; /indexers/bad fails.
         fn exec(alloc: std.mem.Allocator, request: jackett_admin.AdminRequest) jackett_admin.AdminError!jackett_admin.AdminResponse {
-            if (std.mem.indexOf(u8, request.url, "/indexers/ok") != null) {
+            if (std.mem.find(u8, request.url, "/indexers/ok") != null) {
                 return .{ .status = .ok, .body = try alloc.dupe(u8, "{}") };
             }
             return error.HttpError;
@@ -2347,7 +2346,7 @@ test "commitItems stops early when cancel is set, leaving later items unattempte
     defer tmp.cleanup();
     const tmp_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", std.testing.allocator);
     defer std.testing.allocator.free(tmp_abs);
-    const cache_dir = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "indexer_cache" });
+    const cache_dir = try std.Io.Dir.path.join(std.testing.allocator, &.{ tmp_abs, "indexer_cache" });
     defer std.testing.allocator.free(cache_dir);
 
     const mock = struct {
@@ -2392,7 +2391,7 @@ test "applyCommitOutcomes leaves unattempted rows pending" {
     defer tmp.cleanup();
     const tmp_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", std.testing.allocator);
     defer std.testing.allocator.free(tmp_abs);
-    const status_path = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "last_status.json" });
+    const status_path = try std.Io.Dir.path.join(std.testing.allocator, &.{ tmp_abs, "last_status.json" });
     defer std.testing.allocator.free(status_path);
 
     const state = struct {
@@ -2455,9 +2454,9 @@ test "applyProfileChanges enables/disables to match profile and reports failures
     defer tmp.cleanup();
     const tmp_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", std.testing.allocator);
     defer std.testing.allocator.free(tmp_abs);
-    const cache_dir = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "indexer_cache" });
+    const cache_dir = try std.Io.Dir.path.join(std.testing.allocator, &.{ tmp_abs, "indexer_cache" });
     defer std.testing.allocator.free(cache_dir);
-    const status_path = try std.fs.path.join(std.testing.allocator, &.{ tmp_abs, "last_status.json" });
+    const status_path = try std.Io.Dir.path.join(std.testing.allocator, &.{ tmp_abs, "last_status.json" });
     defer std.testing.allocator.free(status_path);
 
     const state = struct {
@@ -2471,7 +2470,7 @@ test "applyProfileChanges enables/disables to match profile and reports failures
         // Every request touching "add" succeeds; everything else (i.e. "drop")
         // fails, so enabling "add" works and disabling "drop" fails.
         fn exec(alloc: std.mem.Allocator, request: jackett_admin.AdminRequest) jackett_admin.AdminError!jackett_admin.AdminResponse {
-            if (std.mem.indexOf(u8, request.url, "/indexers/add") != null) {
+            if (std.mem.find(u8, request.url, "/indexers/add") != null) {
                 return .{ .status = .ok, .body = try alloc.dupe(u8, "{}") };
             }
             return error.HttpError;

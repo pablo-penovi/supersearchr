@@ -191,11 +191,11 @@ fn nthColumnByteOffset(text: []const u8, n: usize) usize {
     var byte_pos: usize = 0;
     var cols: usize = 0;
     while (cols < n) {
-        const slice = iter.nextCodepointSlice() orelse break;
-        const cp = std.unicode.utf8Decode(slice) catch break;
+        const start = iter.i;
+        const cp = iter.nextCodepoint() orelse break;
         const w = displayWidth(cp);
         if (cols + w > n) break;
-        byte_pos += slice.len;
+        byte_pos += iter.i - start;
         cols += w;
     }
     return byte_pos;

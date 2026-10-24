@@ -5,7 +5,7 @@ Current project version: `v0.5.0`.
 
 ## Root
 
-- `AGENTS.md`: Agent rules, Zig 0.16.0 constraints, feature/release workflows, and project overview.
+- `AGENTS.md`: Agent rules, Zig 0.17.0 constraints, feature/release workflows, and project overview.
 - `CHANGELOG.md`: Project changelog for released and unreleased changes.
 - `CLAUDE.md`: Project summary, architecture notes, and developer guidance.
 - `README.md`: User-facing guide (requirements, setup, usage, troubleshooting).
