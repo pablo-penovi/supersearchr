@@ -83,9 +83,25 @@ const App = struct {
     jackett_admin_password: []const u8 = "",
     latest_version: ?[]u8 = null,
     /// Whether the live (Jackett-enabled) indexer set differs from the active
-    /// profile, as of the last time the indexers screen or the profiles screen
-    /// read it. `null` until either has been visited this session.
+    /// profile, as of the last time the startup check, the indexers screen or
+    /// the profiles screen read it. `null` while unknown.
     active_profile_modified: ?bool = null,
+    startup_modified_check: StartupModifiedCheck = .{},
+};
+
+const StartupModifiedResult = enum(u8) { pending, unmodified, modified, unknown };
+
+/// One-shot background check run at launch so the search screen can flag a
+/// drifted active profile without waiting for a visit to F1/F2. It runs as a
+/// concurrent `Io` task so exit can cancel it rather than wait on a slow or
+/// wedged Jackett. The task only reads `store` and writes `result`; the main
+/// thread touches `store` again only after the task has been stopped.
+const StartupModifiedCheck = struct {
+    future: ?std.Io.Future(void) = null,
+    store: ?profiles.ProfileStore = null,
+    result: std.atomic.Value(StartupModifiedResult) = .init(.pending),
+    /// Set once the result has been published, or superseded by F1/F2.
+    consumed: bool = false,
 };
 
 pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
@@ -122,6 +138,9 @@ pub fn runWithDeps(allocator: std.mem.Allocator, cfg: config.Config, deps: AppDe
 
     defer client.deinit();
     defer if (app.latest_version != null) app.allocator.free(app.latest_version.?);
+
+    startStartupModifiedCheck(&app);
+    defer stopStartupModifiedCheck(&app);
 
     checkLatestVersionOnStartup(&app);
 
@@ -162,6 +181,7 @@ fn runSearchState(app: *App) !void {
     // whether there is anything to load.
     var profile_store = loadProfileStore(app);
     defer profile_store.deinit();
+    _ = pollStartupModifiedCheck(app);
     widget.setActiveProfile(profile_store.active, app.active_profile_modified orelse false);
 
     var needs_render = true;
@@ -189,6 +209,10 @@ fn runSearchState(app: *App) !void {
             return;
         };
         const event = maybe_event orelse {
+            if (pollStartupModifiedCheck(app)) {
+                widget.setActiveProfile(profile_store.active, app.active_profile_modified orelse false);
+                needs_render = true;
+            }
             if (consumeMarqueeTick(&marquee_budget_ms, marquee_step_interval_ms)) {
                 if (widget.advanceHintsMarquee()) needs_render = true;
             }
@@ -916,6 +940,105 @@ fn activeProfileModified(store: *const profiles.ProfileStore, live_ids: []const 
     return !profiles.setsEqual(active_profile.indexers.items, live_ids);
 }
 
+/// Records a value read by F1/F2. It is fresher than anything the startup
+/// check could still report, so that result is dropped.
+fn setActiveProfileModified(app: *App, value: ?bool) void {
+    app.active_profile_modified = value;
+    app.startup_modified_check.consumed = true;
+}
+
+/// Starts the startup check as a concurrent `Io` task when `profiles.json`
+/// has an active profile. Any failure (including an `Io` without concurrency)
+/// just leaves the marker unknown.
+fn startStartupModifiedCheck(app: *App) void {
+    const check = &app.startup_modified_check;
+    var store = loadProfileStore(app);
+    // `null` regardless of the live set means there is no active profile.
+    if (activeProfileModified(&store, &.{}) == null) {
+        store.deinit();
+        check.consumed = true;
+        return;
+    }
+    check.store = store;
+    check.future = compat.io().concurrent(startupModifiedWorker, .{
+        app.allocator,
+        app.client.base_url,
+        app.jackett_admin_password,
+        app.deps.jackett_admin_executor,
+        check,
+    }) catch {
+        check.store.?.deinit();
+        check.store = null;
+        check.consumed = true;
+        return;
+    };
+}
+
+fn startupModifiedWorker(
+    allocator: std.mem.Allocator,
+    base_url: []const u8,
+    admin_password: []const u8,
+    executor: jackett_admin.AdminExecutor,
+    check: *StartupModifiedCheck,
+) void {
+    const result = computeStartupModified(allocator, base_url, admin_password, executor, &check.store.?);
+    check.result.store(result, .release);
+}
+
+/// Logs in, lists the indexers and compares the configured ones with the
+/// store's active profile. Every failure maps to `.unknown`.
+fn computeStartupModified(
+    allocator: std.mem.Allocator,
+    base_url: []const u8,
+    admin_password: []const u8,
+    executor: jackett_admin.AdminExecutor,
+    store: *const profiles.ProfileStore,
+) StartupModifiedResult {
+    var session = jackett_admin.login(allocator, base_url, admin_password, executor) catch return .unknown;
+    defer session.deinit(allocator);
+    const remote_indexers = jackett_admin.listAllIndexers(allocator, base_url, &session, executor) catch return .unknown;
+    defer jackett_admin.freeIndexerInfos(allocator, remote_indexers);
+
+    var enabled: std.ArrayList([]const u8) = .empty;
+    defer enabled.deinit(allocator);
+    for (remote_indexers) |info| {
+        if (info.configured) enabled.append(allocator, info.id) catch return .unknown;
+    }
+    const modified = activeProfileModified(store, enabled.items) orelse return .unknown;
+    return if (modified) .modified else .unmodified;
+}
+
+/// Publishes a finished startup check into `app.active_profile_modified`,
+/// at most once. Returns whether the value changed (so the label needs a
+/// refresh). Never blocks.
+fn pollStartupModifiedCheck(app: *App) bool {
+    const check = &app.startup_modified_check;
+    if (check.consumed) return false;
+    const value: bool = switch (check.result.load(.acquire)) {
+        .pending => return false,
+        .unknown => {
+            check.consumed = true;
+            return false;
+        },
+        .modified => true,
+        .unmodified => false,
+    };
+    check.consumed = true;
+    app.active_profile_modified = value;
+    return true;
+}
+
+/// Stops the startup check and frees its store. A still-running check is
+/// canceled: its in-flight Jackett call fails with `error.Canceled`, so exit
+/// never waits on Jackett. `cancel` returns once the task has finished.
+fn stopStartupModifiedCheck(app: *App) void {
+    const check = &app.startup_modified_check;
+    if (check.future) |*future| future.cancel(compat.io());
+    check.future = null;
+    if (check.store) |*store| store.deinit();
+    check.store = null;
+}
+
 /// Recomputes `app.active_profile_modified` from the Indexers screen's
 /// committed rows, so the search screen can flag a drifted profile.
 fn refreshActiveProfileModified(app: *App, widget: *const indexers_widget.IndexersWidget) void {
@@ -927,7 +1050,7 @@ fn refreshActiveProfileModified(app: *App, widget: *const indexers_widget.Indexe
     for (widget.rows) |row| {
         if (row.saved_active) enabled.append(app.allocator, row.id) catch return;
     }
-    app.active_profile_modified = activeProfileModified(&store, enabled.items);
+    setActiveProfileModified(app, activeProfileModified(&store, enabled.items));
 }
 
 fn refreshProfilesWidget(
@@ -1229,7 +1352,7 @@ fn runProfilesState(app: *App, profiles_state: *ProfilesState) !void {
     try refreshProfilesWidget(app, &widget, &store, remote_indexers);
 
     // Modified-warning step: live set differs from the active profile.
-    app.active_profile_modified = activeProfileModified(&store, enabled.items);
+    setActiveProfileModified(app, activeProfileModified(&store, enabled.items));
     if (app.active_profile_modified orelse false) {
         const active_name = store.active.?;
         const choice = panels.renderProfileModifiedOverlay(
@@ -1242,13 +1365,13 @@ fn runProfilesState(app: *App, profiles_state: *ProfilesState) !void {
         switch (choice) {
             .save_existing => {
                 if (saveProfileAs(app, &widget, &store, active_name, enabled.items, false)) {
-                    app.active_profile_modified = false;
+                    setActiveProfileModified(app, false);
                 }
                 try refreshProfilesWidget(app, &widget, &store, remote_indexers);
             },
             .new_profile => {
                 if (try promptAndSaveNewProfile(app, &widget, &store, enabled.items)) {
-                    app.active_profile_modified = false;
+                    setActiveProfileModified(app, false);
                 }
                 try refreshProfilesWidget(app, &widget, &store, remote_indexers);
             },
@@ -1320,7 +1443,7 @@ fn runProfilesState(app: *App, profiles_state: *ProfilesState) !void {
                 };
                 // The profile becomes active even when only partly applied:
                 // the search screen then flags it as modified.
-                app.active_profile_modified = !fully_applied;
+                setActiveProfileModified(app, !fully_applied);
                 if (store.setActive(profile.name)) |_| {
                     _ = persistProfileStore(app, &widget, &store);
                 } else |_| {
@@ -1694,15 +1817,7 @@ fn updateStreamingResults(app: *App, results_state: *ResultsState, widget: ?*res
     results_state.live_status = liveStatusFromSnapshot(session.snapshot());
     if (!std.meta.eql(previous_status, results_state.live_status)) changed = true;
 
-    // Extract failed indexers from search session queue
-    if (widget) |w| {
-        const io = compat.io();
-        session.queue.mutex.lockUncancelable(io);
-        for (session.queue.failed_indexers.items) |name| {
-            w.addFailedIndexer(name) catch {};
-        }
-        session.queue.mutex.unlock(io);
-    }
+    if (widget) |w| syncFailedIndexers(session, w);
 
     if (session.fatalError()) |err| {
         return err;
@@ -1711,6 +1826,8 @@ fn updateStreamingResults(app: *App, results_state: *ResultsState, widget: ?*res
     if (session.isDone()) {
         _ = try session.drainInto(app.allocator, &results_state.torrents);
         results_state.live_status = liveStatusFromSnapshot(session.snapshot());
+        // A failure may have landed between the sync above and `isDone`.
+        if (widget) |w| syncFailedIndexers(session, w);
         persistSearchOutcomes(app, session);
         session.deinit();
         results_state.search_session = null;
@@ -1718,6 +1835,17 @@ fn updateStreamingResults(app: *App, results_state: *ResultsState, widget: ?*res
     }
 
     return changed;
+}
+
+/// Copies the session's failed indexers into the widget's 'e' overlay, by
+/// display name (the widget ignores names it already has).
+fn syncFailedIndexers(session: *jackett.SearchSession, widget: *results_widget.ResultsWidget) void {
+    const io = compat.io();
+    session.queue.mutex.lockUncancelable(io);
+    defer session.queue.mutex.unlock(io);
+    for (session.queue.failed_indexer_names.items) |name| {
+        widget.addFailedIndexer(name) catch {};
+    }
 }
 
 // Persist per-indexer success/failure outcomes after a search completes.
@@ -1843,9 +1971,13 @@ fn consumeMarqueeTick(budget_ms: *i64, interval_ms: i64) bool {
 }
 
 fn drainUntilDone(app: *App, results_state: *ResultsState) !void {
+    return drainUntilDoneWithWidget(app, results_state, null);
+}
+
+fn drainUntilDoneWithWidget(app: *App, results_state: *ResultsState, widget: ?*results_widget.ResultsWidget) !void {
     var attempts: usize = 0;
     while (attempts < 200) : (attempts += 1) {
-        _ = try updateStreamingResults(app, results_state, null);
+        _ = try updateStreamingResults(app, results_state, widget);
         if (results_state.search_session == null) return;
         compat.sleepNanos(std.time.ns_per_ms);
     }
@@ -2015,6 +2147,71 @@ test "completed streaming search persists per-indexer outcomes to record.json" {
     defer store.deinit();
     try std.testing.expectEqualSlices(u8, &.{1}, store.get("ok"));
     try std.testing.expectEqualSlices(u8, &.{0}, store.get("bad"));
+}
+
+test "failed indexers overlay gets display names while record.json stays keyed by ID" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", std.testing.allocator);
+    defer std.testing.allocator.free(tmp_abs);
+    const record_path = try std.Io.Dir.path.join(std.testing.allocator, &.{ tmp_abs, "record.json" });
+    defer std.testing.allocator.free(record_path);
+
+    const state = struct {
+        var test_record_path: []const u8 = &.{};
+    };
+    state.test_record_path = record_path;
+
+    const mock = struct {
+        fn exec(allocator: std.mem.Allocator, url: []const u8) jackett.JackettError![]u8 {
+            if (std.mem.find(u8, url, "t=indexers&configured=true") != null) {
+                return allocator.dupe(u8, "<indexers><indexer id=\"ok\"><title>OK</title></indexer><indexer id=\"thepiratebay\"><title>The Pirate Bay</title></indexer></indexers>") catch error.OutOfMemory;
+            }
+            if (std.mem.find(u8, url, "/indexers/ok/") != null) {
+                return allocator.dupe(u8, "<rss><channel><item><title>OK Result</title><link>magnet:?xt=urn:btih:ok</link></item></channel></rss>") catch error.OutOfMemory;
+            }
+            return error.HttpError;
+        }
+
+        fn recordPath(alloc: std.mem.Allocator) anyerror![]u8 {
+            return alloc.dupe(u8, state.test_record_path);
+        }
+    };
+
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
+        .deps = .{
+            .jackett_body_executor = mock.exec,
+            .record_path_resolver = mock.recordPath,
+        },
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "xterm",
+    };
+
+    var widget = results_widget.ResultsWidget.init(std.testing.allocator);
+    defer widget.deinit();
+
+    const query = try std.testing.allocator.dupe(u8, "ubuntu");
+    transitionSearchToStreamingResults(&app, query, false, null, null, null);
+
+    switch (app.state) {
+        .results => |*results_state| {
+            defer deinitResultsState(std.testing.allocator, results_state);
+            try drainUntilDoneWithWidget(&app, results_state, &widget);
+        },
+        else => return error.UnexpectedState,
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), widget.failed_indexers.items.len);
+    try std.testing.expectEqualStrings("The Pirate Bay", widget.failed_indexers.items[0]);
+
+    var store = try record.load(std.testing.allocator, record_path);
+    defer store.deinit();
+    try std.testing.expectEqualSlices(u8, &.{0}, store.get("thepiratebay"));
 }
 
 test "scaledMarqueeIntervalMs slows base interval by percent" {
@@ -2908,6 +3105,186 @@ test "activeProfileModified compares the live set with the active profile" {
     try store.setActive("Movies");
     try std.testing.expectEqual(@as(?bool, false), activeProfileModified(&store, &.{ "b", "a" }));
     try std.testing.expectEqual(@as(?bool, true), activeProfileModified(&store, &.{"a"}));
+}
+
+/// Admin executor for the startup-check tests: password login always
+/// succeeds; the indexer list has "a" and "b" configured and "c" not.
+const startup_check_mock = struct {
+    fn exec(alloc: std.mem.Allocator, request: jackett_admin.AdminRequest) jackett_admin.AdminError!jackett_admin.AdminResponse {
+        if (std.mem.endsWith(u8, request.url, "/UI/Dashboard")) {
+            return .{ .status = .found, .set_cookie = try alloc.dupe(u8, "Jackett=abc; Path=/") };
+        }
+        if (std.mem.endsWith(u8, request.url, "/api/v2.0/indexers")) {
+            return .{ .status = .ok, .body = try alloc.dupe(u8,
+                \\[{"id":"a","name":"A","configured":true},
+                \\ {"id":"b","name":"B","configured":true},
+                \\ {"id":"c","name":"C","configured":false}]
+            ) };
+        }
+        return error.HttpError;
+    }
+
+    fn refused(_: std.mem.Allocator, _: jackett_admin.AdminRequest) jackett_admin.AdminError!jackett_admin.AdminResponse {
+        return error.ConnectionRefused;
+    }
+};
+
+fn testAppForStartupCheck(executor: jackett_admin.AdminExecutor) App {
+    return .{
+        .allocator = std.testing.allocator,
+        .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
+        .deps = .{ .jackett_admin_executor = executor },
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "xterm",
+        .jackett_admin_password = "secret",
+    };
+}
+
+test "computeStartupModified compares Jackett's configured indexers with the active profile" {
+    const allocator = std.testing.allocator;
+    var store = profiles.ProfileStore.init(allocator);
+    defer store.deinit();
+    try store.upsert("Same", &.{ "b", "a" });
+    try store.upsert("Other", &.{"a"});
+
+    try store.setActive("Same");
+    try std.testing.expectEqual(StartupModifiedResult.unmodified, computeStartupModified(allocator, "http://x", "secret", startup_check_mock.exec, &store));
+    try store.setActive("Other");
+    try std.testing.expectEqual(StartupModifiedResult.modified, computeStartupModified(allocator, "http://x", "secret", startup_check_mock.exec, &store));
+}
+
+test "computeStartupModified maps Jackett failures to unknown" {
+    const allocator = std.testing.allocator;
+    var store = profiles.ProfileStore.init(allocator);
+    defer store.deinit();
+    try store.upsert("Movies", &.{"a"});
+    try store.setActive("Movies");
+
+    try std.testing.expectEqual(StartupModifiedResult.unknown, computeStartupModified(allocator, "http://x", "secret", startup_check_mock.refused, &store));
+}
+
+test "pollStartupModifiedCheck publishes a finished result once" {
+    var app = testAppForStartupCheck(startup_check_mock.refused);
+
+    try std.testing.expect(!pollStartupModifiedCheck(&app));
+    try std.testing.expectEqual(@as(?bool, null), app.active_profile_modified);
+
+    app.startup_modified_check.result.store(.modified, .release);
+    try std.testing.expect(pollStartupModifiedCheck(&app));
+    try std.testing.expectEqual(@as(?bool, true), app.active_profile_modified);
+    try std.testing.expect(!pollStartupModifiedCheck(&app));
+}
+
+test "pollStartupModifiedCheck leaves the marker unknown when the check failed" {
+    var app = testAppForStartupCheck(startup_check_mock.refused);
+    app.startup_modified_check.result.store(.unknown, .release);
+
+    try std.testing.expect(!pollStartupModifiedCheck(&app));
+    try std.testing.expectEqual(@as(?bool, null), app.active_profile_modified);
+}
+
+test "pollStartupModifiedCheck does not clobber a value read by F1/F2" {
+    var app = testAppForStartupCheck(startup_check_mock.refused);
+    setActiveProfileModified(&app, false);
+    app.startup_modified_check.result.store(.modified, .release);
+
+    try std.testing.expect(!pollStartupModifiedCheck(&app));
+    try std.testing.expectEqual(@as(?bool, false), app.active_profile_modified);
+}
+
+test "startup check runs as a concurrent task and reports its result" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", std.testing.allocator);
+    defer std.testing.allocator.free(tmp_abs);
+    const profiles_path = try std.Io.Dir.path.join(std.testing.allocator, &.{ tmp_abs, "profiles.json" });
+    defer std.testing.allocator.free(profiles_path);
+
+    var seed = profiles.ProfileStore.init(std.testing.allocator);
+    defer seed.deinit();
+    try seed.upsert("Movies", &.{"a"});
+    try seed.setActive("Movies");
+    try profiles.save(std.testing.allocator, profiles_path, &seed);
+
+    const state = struct {
+        var path: []const u8 = &.{};
+        fn profilesPath(alloc: std.mem.Allocator) anyerror![]u8 {
+            return alloc.dupe(u8, path);
+        }
+    };
+    state.path = profiles_path;
+
+    var app = testAppForStartupCheck(startup_check_mock.exec);
+    app.deps.profiles_path_resolver = state.profilesPath;
+
+    startStartupModifiedCheck(&app);
+    try std.testing.expect(app.startup_modified_check.future != null);
+    // Wait for the task to finish on its own rather than canceling it.
+    while (app.startup_modified_check.result.load(.acquire) == .pending) compat.sleepMillis(5);
+    stopStartupModifiedCheck(&app);
+
+    try std.testing.expect(pollStartupModifiedCheck(&app));
+    try std.testing.expectEqual(@as(?bool, true), app.active_profile_modified);
+}
+
+test "stopping the startup check cancels a Jackett call that never answers" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", std.testing.allocator);
+    defer std.testing.allocator.free(tmp_abs);
+    const profiles_path = try std.Io.Dir.path.join(std.testing.allocator, &.{ tmp_abs, "profiles.json" });
+    defer std.testing.allocator.free(profiles_path);
+
+    var seed = profiles.ProfileStore.init(std.testing.allocator);
+    defer seed.deinit();
+    try seed.upsert("Movies", &.{"a"});
+    try seed.setActive("Movies");
+    try profiles.save(std.testing.allocator, profiles_path, &seed);
+
+    const state = struct {
+        var path: []const u8 = &.{};
+        fn profilesPath(alloc: std.mem.Allocator) anyerror![]u8 {
+            return alloc.dupe(u8, path);
+        }
+        // Stands in for a Jackett that accepts the connection and then goes
+        // silent: blocks far longer than the test allows, until canceled.
+        fn hang(_: std.mem.Allocator, _: jackett_admin.AdminRequest) jackett_admin.AdminError!jackett_admin.AdminResponse {
+            std.Io.sleep(compat.io(), .fromSeconds(30), .awake) catch return error.RequestSendFailed;
+            return error.HttpError;
+        }
+    };
+    state.path = profiles_path;
+
+    var app = testAppForStartupCheck(state.hang);
+    app.deps.profiles_path_resolver = state.profilesPath;
+
+    startStartupModifiedCheck(&app);
+    try std.testing.expect(app.startup_modified_check.future != null);
+    const started_ms = compat.milliTimestamp();
+    stopStartupModifiedCheck(&app);
+    try std.testing.expect(compat.milliTimestamp() - started_ms < 5_000);
+
+    try std.testing.expectEqual(StartupModifiedResult.unknown, app.startup_modified_check.result.load(.acquire));
+    try std.testing.expect(!pollStartupModifiedCheck(&app));
+    try std.testing.expectEqual(@as(?bool, null), app.active_profile_modified);
+}
+
+test "startup check is skipped without an active profile" {
+    var app = testAppForStartupCheck(startup_check_mock.exec);
+    app.deps.profiles_path_resolver = struct {
+        fn f(alloc: std.mem.Allocator) anyerror![]u8 {
+            return alloc.dupe(u8, "/nonexistent/supersearchr/profiles.json");
+        }
+    }.f;
+
+    startStartupModifiedCheck(&app);
+    defer stopStartupModifiedCheck(&app);
+    try std.testing.expect(app.startup_modified_check.future == null);
+    try std.testing.expect(!pollStartupModifiedCheck(&app));
+    try std.testing.expectEqual(@as(?bool, null), app.active_profile_modified);
 }
 
 test "saveProfileStore reports a write failure instead of swallowing it" {

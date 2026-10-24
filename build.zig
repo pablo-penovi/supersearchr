@@ -206,6 +206,7 @@ pub fn build(b: *std.Build) void {
         .root_module = createTargetedModule(b, "src/main.zig", target, optimize, strip),
     });
     addImports(exe.root_module, &.{
+        .{ .name = "compat", .module = compat_mod },
         .{ .name = "config", .module = config_mod },
         .{ .name = "jackett", .module = jackett_mod },
         .{ .name = "superseedr", .module = superseedr_mod },
@@ -394,6 +395,7 @@ pub fn build(b: *std.Build) void {
         .root_module = createTargetedModule(b, "src/main.zig", target, optimize, false),
     });
     addImports(exe_tests.root_module, &.{
+        .{ .name = "compat", .module = compat_mod },
         .{ .name = "config", .module = config_mod },
         .{ .name = "jackett", .module = jackett_mod },
         .{ .name = "superseedr", .module = superseedr_mod },

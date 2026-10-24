@@ -37,7 +37,7 @@ make sure the capture is a var (|*{name}|) and not a const (|{name}|)
 
 ## Project Overview
 
-Supersearchr is a TUI BitTorrent search tool written in Zig 0.17.0. It searches via Jackett and sends selected magnet or torrent links to Superseedr.
+Supersearchr is a TUI BitTorrent search tool written in Zig 0.17.0. It searches via Jackett and sends selected magnet or torrent links to Superseedr. It can also enable/disable Jackett indexers through Jackett's admin API and save enabled sets as named profiles.
 
 ## Commands
 
@@ -49,21 +49,40 @@ zig build test --summary all       # Run all tests with detailed output
 
 ## Architecture
 
-The app is a state machine: SEARCH → LOADING → RESULTS → ERROR, with ESC exiting from any state.
+The app is a state machine over `State` in `src/tui/app.zig`: `search`, `results`, `indexers`, `profiles`, `err`.
 
-Modules use dependency injection (function pointer executors/checkers/spawners) for testability in `jackett/client.zig` and `superseedr/client.zig`.
+- `search` → `results` on submit (searches stream in per indexer); `results` → `search` with `s`.
+- F1 (`indexers`) and F2 (`profiles`) are reachable only from `search`; F1/F2 switch between the two screens, and ESC returns to `search` (on F1, ESC first reverts pending toggles).
+- ESC on `search` or `results` asks to confirm exit. `err` shows a message and returns to `search` on any key.
+
+Modules use dependency injection (function pointer executors/resolvers/checkers/spawners, gathered in `AppDeps` in `src/tui/app.zig`) for testability, e.g. in `jackett/client.zig`, `jackett/admin_client.zig`, and `superseedr/client.zig`; file paths (`profiles.json`, `record.json`, ...) come from injectable resolvers.
 
 ## Key Modules
 
-- `src/main.zig`: Entry point; loads config and starts the TUI app.
+- `src/main.zig`: Entry point; initializes the allocator and the app's `std.Io.Threaded` (cancel-capable), loads config, and starts the TUI app.
 - `src/config.zig`: Loads `~/.config/supersearchr/config.json`, validates required fields, and patches optional defaults like `terminal`.
-- `src/structs/torrent.zig`: Torrent struct (title, seeders, leechers, link).
-- `src/jackett/client.zig`: Jackett Torznab HTTP client; parses XML and sorts results.
+- `src/compat.zig`: `std.Io` helpers (the installed io instance, stdout, file I/O, timestamps, env vars).
+- `src/update_checker.zig`: Latest-release checker (GitHub API fetch + semantic version comparison).
+- `src/profiles.zig`: Indexer profiles store, apply-plan diffing, and `profiles.json` persistence.
+- `src/record.zig`: Per-indexer search outcome history persisted to `record.json` (keyed by indexer ID).
+- `src/last_status.zig`: Per-indexer latest enable/disable outcome persisted to `last_status.json`.
+- `src/debug/log.zig`: Optional debug logging controlled by environment variables.
+- `src/structs/torrent.zig`: Torrent struct (title, stats, optional size and pub date, link).
+- `src/jackett/client.zig`: Jackett Torznab client; configured-indexer discovery, streaming parallel per-indexer searches, XML parsing, and sorting.
+- `src/jackett/admin_client.zig`: Jackett admin REST client for login, indexer listing, config get/set/delete, and the disabled-indexer config cache.
+- `src/jackett/http_exec.zig`: Shared low-level HTTP request executor.
+- `src/jackett/url_encode.zig`: Percent-encoding helper for URL path and query components.
 - `src/superseedr/client.zig`: Spawns or talks to `superseedr add <link>`, validates link format.
 - `src/tui/term.zig`: Raw terminal mode, input, ANSI helpers, size detection.
-- `src/tui/app.zig`: Main event loop and state machine.
-- `src/tui/widgets/search.zig`: Search input widget.
-- `src/tui/widgets/results.zig`: Results list widget with navigation and selection.
+- `src/tui/theme.zig`: Color palette, border styles, and rendering helpers.
+- `src/tui/panels.zig`: Shared panel/overlay rendering for notices, errors, and profile prompts.
+- `src/tui/app.zig`: Main event loop and state machine, worker-thread indexer commits, search sessions, and Superseedr handoff.
+- `src/tui/widgets/search.zig`: Search input widget with the active-profile label.
+- `src/tui/widgets/results.zig`: Results list widget with live search status, sorting, navigation, and selection.
+- `src/tui/widgets/indexers.zig`: F1 indexers table with toggles, Record/Last Status columns, and commit progress.
+- `src/tui/widgets/profiles.zig`: F2 profiles list with a details panel, load/rename/delete, and apply progress.
+- `src/tui/widgets/list_nav.zig`: Shared cursor/scroll/page navigation and the commit-progress type.
+- `src/tui/widgets/hints.zig`: Key-hints footer marquee.
 
 ## Repository Map
 

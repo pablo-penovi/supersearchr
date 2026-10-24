@@ -807,7 +807,10 @@ const SearchBatchQueue = struct {
     allocator: std.mem.Allocator,
     mutex: std.Io.Mutex = std.Io.Mutex.init,
     batches: std.ArrayList(SearchBatch) = .empty,
+    /// Indexer IDs (what `record.json` is keyed by).
     failed_indexers: std.ArrayList([]const u8) = .empty,
+    /// Display names of `failed_indexers`, index-aligned, for the UI.
+    failed_indexer_names: std.ArrayList([]const u8) = .empty,
     succeeded_indexers: std.ArrayList([]const u8) = .empty,
     first_error: ?JackettError = null,
     failures: usize = 0,
@@ -827,17 +830,24 @@ const SearchBatchQueue = struct {
         return self.batches.orderedRemove(0);
     }
 
-    fn recordFailure(self: *SearchBatchQueue, err: JackettError, indexer_id: []const u8) void {
+    fn recordFailure(self: *SearchBatchQueue, err: JackettError, indexer: Indexer) void {
         const io = compat.io();
         self.mutex.lockUncancelable(io);
         defer self.mutex.unlock(io);
         if (self.first_error == null) self.first_error = err;
         self.failures += 1;
 
-        const id_copy = self.allocator.dupe(u8, indexer_id) catch return;
-        self.failed_indexers.append(self.allocator, id_copy) catch {
+        // Both lists grow together (or not at all) so they stay index-aligned.
+        self.failed_indexers.ensureUnusedCapacity(self.allocator, 1) catch return;
+        self.failed_indexer_names.ensureUnusedCapacity(self.allocator, 1) catch return;
+        const id_copy = self.allocator.dupe(u8, indexer.id) catch return;
+        const name = if (indexer.name.len > 0) indexer.name else indexer.id;
+        const name_copy = self.allocator.dupe(u8, name) catch {
             self.allocator.free(id_copy);
+            return;
         };
+        self.failed_indexers.appendAssumeCapacity(id_copy);
+        self.failed_indexer_names.appendAssumeCapacity(name_copy);
     }
 
     fn recordSuccess(self: *SearchBatchQueue, indexer_id: []const u8) void {
@@ -873,6 +883,10 @@ const SearchBatchQueue = struct {
             self.allocator.free(name);
         }
         self.failed_indexers.deinit(self.allocator);
+        for (self.failed_indexer_names.items) |name| {
+            self.allocator.free(name);
+        }
+        self.failed_indexer_names.deinit(self.allocator);
         for (self.succeeded_indexers.items) |name| {
             self.allocator.free(name);
         }
@@ -1096,9 +1110,10 @@ fn streamingSearchWorker(ctx: *StreamingSearchContext) void {
         const idx = ctx.next_index.fetchAdd(1, .monotonic);
         if (idx >= ctx.indexers.len) return;
 
-        const id = ctx.indexers[idx].id;
+        const indexer = ctx.indexers[idx];
+        const id = indexer.id;
         searchSingleIndexerStreaming(ctx, id) catch |err| {
-            ctx.queue.recordFailure(err, id);
+            ctx.queue.recordFailure(err, indexer);
             ctx.progress.recordFailed();
             ctx.progress.recordCompleted();
             continue;
@@ -1800,6 +1815,8 @@ test "streaming search keeps successful results when one indexer fails" {
     try std.testing.expectEqualStrings("ok", session.queue.succeeded_indexers.items[0]);
     try std.testing.expectEqual(@as(usize, 1), session.queue.failed_indexers.items.len);
     try std.testing.expectEqualStrings("bad", session.queue.failed_indexers.items[0]);
+    try std.testing.expectEqual(@as(usize, 1), session.queue.failed_indexer_names.items.len);
+    try std.testing.expectEqualStrings("Bad", session.queue.failed_indexer_names.items[0]);
 }
 
 test "streaming search reports discovery failure as fatal" {

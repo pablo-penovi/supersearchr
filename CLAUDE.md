@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Supersearchr is a TUI (terminal user interface) BitTorrent search tool written in Zig 0.17.0. It searches for torrents via **Jackett** (a torrent indexer API) and sends selected magnets/torrents to **Superseedr** (a companion TUI torrent client).
+Supersearchr is a TUI (terminal user interface) BitTorrent search tool written in Zig 0.17.0. It searches for torrents via **Jackett** (a torrent indexer API) and sends selected magnets/torrents to **Superseedr** (a companion TUI torrent client). It can also enable/disable Jackett indexers through Jackett's admin API and save enabled sets as named **profiles**.
 
 ## Commands
 
@@ -19,24 +19,46 @@ Always use `--summary all` when running tests to see test names and pass/fail st
 
 ## Architecture
 
-The app is a state machine: **SEARCH → LOADING → RESULTS**, with ESC exiting from any state.
+The app is a state machine over `State` in `tui/app.zig`: `search`, `results`, `indexers`, `profiles`, `err`.
+
+- `search` → `results` on submit (searches stream in per indexer); `results` → `search` with `s`.
+- F1 (`indexers`) and F2 (`profiles`) are reachable only from `search`; F1/F2 switch between the two screens, and ESC returns to `search` (on F1, ESC first reverts pending toggles).
+- ESC on `search` or `results` asks to confirm exit. `err` shows a message and returns to `search` on any key.
 
 ```
 src/
-├── main.zig              # Entry point; loads config, launches app
-├── config.zig            # Loads ~/.config/supersearchr/config.json; validates apiKey, apiUrl, apiPort
-├── structs/torrent.zig   # Data struct: title, seeders, leechers, link
-├── jackett/client.zig    # HTTP client for Jackett Torznab API; parses XML manually; sorts by seeders
-├── superseedr/client.zig # Spawns `superseedr add <link>` subprocess; validates magnet/torrent links
+├── main.zig                  # Entry point; allocator, std.Io.Threaded, loads config, launches app
+├── config.zig                # Loads ~/.config/supersearchr/config.json; validates and patches defaults
+├── compat.zig                # std.Io helpers (installed io(), stdout, file I/O, timestamps, env vars)
+├── update_checker.zig        # Latest-release check (GitHub API + semver compare)
+├── profiles.zig              # Indexer profiles store, apply-plan diffing, profiles.json persistence
+├── record.zig                # Per-indexer search outcome history (record.json, keyed by indexer ID)
+├── last_status.zig           # Per-indexer latest enable/disable outcome (last_status.json)
+├── debug/log.zig             # Optional debug logging controlled by env vars
+├── structs/torrent.zig       # Torrent struct: title, stats, size, pub date, link
+├── jackett/
+│   ├── client.zig            # Torznab client: configured-indexer discovery, streaming parallel searches, XML parsing
+│   ├── admin_client.zig      # Admin REST client: login, list indexers, config get/set/delete, disabled-config cache
+│   ├── http_exec.zig         # Shared low-level HTTP executor
+│   └── url_encode.zig        # Percent-encoding for URL path/query components
+├── superseedr/client.zig     # Spawns `superseedr add <link>`; validates magnet/torrent links
 └── tui/
-    ├── term.zig          # Raw terminal mode, key reading, ANSI colors, terminal size
-    ├── app.zig           # Main event loop and state machine; wires all modules together
+    ├── term.zig              # Raw terminal mode, key reading, ANSI helpers, terminal size
+    ├── theme.zig             # Color palette, border styles, rendering helpers
+    ├── panels.zig            # Shared panels/overlays: notices, errors, profile save/apply/delete prompts
+    ├── app.zig               # Event loop and state machine; worker-thread commits, search sessions, Superseedr handoff
     └── widgets/
-        ├── search.zig    # Search input widget
-        └── results.zig   # Results list widget (numbered, digit input to select)
+        ├── search.zig        # Search input with the active-profile label
+        ├── results.zig       # Results table with live search status, sorting, selection
+        ├── indexers.zig      # F1 indexers table: toggles, Record/Last Status columns, commit progress
+        ├── profiles.zig      # F2 profiles list with details panel: load/rename/delete, apply progress
+        ├── list_nav.zig      # Shared cursor/scroll/page navigation and commit-progress type
+        └── hints.zig         # Key-hints footer marquee
 ```
 
-Modules use **dependency injection** (function pointer `executor` fields) for testability — both `jackett/client.zig` and `superseedr/client.zig` accept an executor that can be swapped in tests.
+`STRUCTURE.md` has a one-line description of every tracked file.
+
+Modules use **dependency injection** (function pointer executor/resolver fields, gathered in `AppDeps` in `tui/app.zig`) for testability — e.g. `jackett/client.zig`, `jackett/admin_client.zig` and `superseedr/client.zig` accept executors that tests swap out, and file paths (`profiles.json`, `record.json`, …) come from injectable resolvers.
 
 Each module has its own test section in `build.zig`. When adding a new module with tests, follow the existing pattern (`config_tests`, `jackett_tests`, etc.) and add it to `test_step`.
 

@@ -106,7 +106,7 @@ Search screen:
 - `F2`: load an indexer profile
 - `Esc`: exit app
 
-The search panel shows the active indexer profile next to its title, marked `(modified)` when the indexers enabled on Jackett no longer match it.
+The search panel shows the active indexer profile next to its title, marked `(modified)` when the indexers enabled on Jackett no longer match it. This is checked in the background at launch and refreshed after visiting `F1` or `F2`.
 
 Results screen:
 

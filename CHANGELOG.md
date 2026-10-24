@@ -15,6 +15,7 @@ All notable changes to this project are documented in this file.
 - `F2` on the indexers screen switches straight to the profiles screen, and `F1` on the profiles screen switches back. Uncommitted indexer toggles must be committed or discarded first.
 
 ### Changed
+- `main` now runs the app on its own `std.Io.Threaded` (installed through `compat.installIo`) instead of the global single-threaded `Io`, which supports neither concurrent tasks nor cancelation. The startup profile check relies on both.
 - The indexers (`F1`) and profiles (`F2`) screens are now only reachable from the search screen; the results screen no longer handles either shortcut.
 - The search screen's key hints now list `F1` and `F2` in both layouts, the compact indexers footer lists `F3`, and the results footer lists `/` instead of `F2`.
 - User-facing text now consistently says "indexer", Jackett's own term, instead of mixing in "tracker".
@@ -27,6 +28,9 @@ All notable changes to this project are documented in this file.
 - Fixed the results panel becoming garbled when an indexer returns a title containing control characters. Some indexers (e.g. `catorrent`) scrape a multi-line page block into `<title>`, and the raw newlines moved the terminal cursor mid-row, shifting every row below it. Torrent titles and indexer names are now normalized in `src/jackett/client.zig` — trimmed, XML entities decoded (titles previously rendered a literal `&amp;`), control characters collapsed to single spaces, and invalid UTF-8 bytes replaced — so the renderer only ever receives measurable text.
 - Fixed `displayWidth` in `src/tui/theme.zig` counting combining marks, zero-width joiners and variation selectors as one column each instead of zero, and counting `Emoji_Presentation` symbols such as ✅, ⚡ and ⭐ as one column instead of two. Both cases desynchronized the title column from what the terminal actually drew.
 - Fixed a potential buffer overrun in `truncateWithEllipsis` in `src/tui/theme.zig`, whose scratch-buffer bounds check compared display columns against buffer bytes; a title of multi-byte characters could write past the buffer on a wide terminal.
+- Fixed the search screen's `(modified)` marker staying unknown until `F1` or `F2` had been visited. When `profiles.json` has an active profile, a background check now compares it with the indexers enabled on Jackett at launch and updates the label once it finishes, without blocking the UI. If Jackett can't be reached the marker just stays off, and quitting cancels a check that is still waiting on Jackett instead of waiting for it.
+- Fixed the results screen's failed-indexers overlay (`e`) listing indexer IDs such as `thepiratebay` instead of their display names. `record.json` is still keyed by ID.
+- Fixed the compact indexers footer showing the normal key hints while changes were being committed. It now shows `ESC stop after current`, then `Finishing current indexer…` after `Esc`, like the compact profiles footer.
 
 ## 0.5.0
 

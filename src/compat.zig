@@ -1,8 +1,19 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// The application's `Io`, installed by `main`: a `std.Io.Threaded` that
+/// supports concurrent tasks and cancelation. Until one is installed, the
+/// statically initialized single-threaded instance is used, which supports
+/// neither.
+var installed_io: ?std.Io = null;
+
+pub fn installIo(app_io: ?std.Io) void {
+    installed_io = app_io;
+}
+
 pub fn io() std.Io {
     if (builtin.is_test) return std.testing.io;
+    if (installed_io) |app_io| return app_io;
     if (std.Options.debug_threaded_io) |threaded| return threaded.io();
     return std.Io.Threaded.global_single_threaded.io();
 }
