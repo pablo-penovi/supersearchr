@@ -341,7 +341,7 @@ fn matchModifiedKey(event: term.Event) ?ProfileModifiedAction {
     };
 }
 
-/// F2 warning shown when the live tracker set differs from the active profile.
+/// F2 warning shown when the live indexer set differs from the active profile.
 pub fn renderProfileModifiedOverlay(
     term_rows: *u16,
     term_cols: *u16,
@@ -352,7 +352,7 @@ pub fn renderProfileModifiedOverlay(
     var needs_render = true;
     const input_poll_ms: i32 = 80;
     const lines = [_][]const u8{
-        "Live trackers differ from the active profile.",
+        "Live indexers differ from the active profile.",
         "(s) save changes to active profile",
         "(n) save as a new profile",
         "(d) discard and continue",
@@ -362,7 +362,7 @@ pub fn renderProfileModifiedOverlay(
         if (refresh_terminal_size(term_rows, term_cols)) needs_render = true;
         if (needs_render) {
             renderDimmedBackdrop(backdrop, term_rows.*, term_cols.*);
-            drawLinesModal("Trackers Modified", theme.superseedr_like.warn, &lines, "Esc cancel", false);
+            drawLinesModal("Indexers Modified", theme.superseedr_like.warn, &lines, "Esc cancel", false);
             needs_render = false;
         }
         const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return .cancel;
@@ -694,14 +694,28 @@ pub fn renderInfoNoticeOverlay(
     }
 }
 
-/// Dismissable modal listing profile-apply failures.
+pub const ApplyFailuresAction = enum { retry, keep };
+
+fn matchApplyFailuresKey(event: term.Event) ?ApplyFailuresAction {
+    return switch (event.key) {
+        .escape => .keep,
+        .char => switch (event.value) {
+            'r', 'R' => .retry,
+            else => null,
+        },
+        else => null,
+    };
+}
+
+/// Modal listing indexers whose toggle failed while applying a profile. The
+/// user can retry just the failed ones, or keep the partially-applied set.
 pub fn renderProfileApplyFailuresOverlay(
     term_rows: *u16,
     term_cols: *u16,
     refresh_terminal_size: RefreshTerminalSizeFn,
     backdrop: anytype,
     failed_names: []const []const u8,
-) void {
+) ApplyFailuresAction {
     term.discardPendingInput();
     var needs_render = true;
     const input_poll_ms: i32 = 80;
@@ -710,13 +724,15 @@ pub fn renderProfileApplyFailuresOverlay(
         if (refresh_terminal_size(term_rows, term_cols)) needs_render = true;
         if (needs_render) {
             renderDimmedBackdrop(backdrop, term_rows.*, term_cols.*);
-            drawNamedListModal("Failed to Apply", theme.superseedr_like.err, failed_names, "Press any key to close");
+            drawNamedListModal("Failed to Apply", theme.superseedr_like.err, failed_names, "r retry failed | ESC keep partial");
             needs_render = false;
         }
-        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return;
-        if (maybe_event != null) {
-            term.discardPendingInput();
-            return;
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return .keep;
+        if (maybe_event) |event| {
+            if (matchApplyFailuresKey(event)) |action| {
+                term.discardPendingInput();
+                return action;
+            }
         }
     }
 }
@@ -1141,6 +1157,13 @@ test "matchUncommittedKey maps i/d and escape" {
     try std.testing.expectEqual(ProfileUncommittedAction.discard, matchUncommittedKey(.{ .key = .char, .value = 'd' }).?);
     try std.testing.expectEqual(ProfileUncommittedAction.cancel, matchUncommittedKey(.{ .key = .escape, .value = 0 }).?);
     try std.testing.expect(matchUncommittedKey(.{ .key = .char, .value = 'z' }) == null);
+}
+
+test "matchApplyFailuresKey maps r and escape, ignores others" {
+    try std.testing.expectEqual(ApplyFailuresAction.retry, matchApplyFailuresKey(.{ .key = .char, .value = 'r' }).?);
+    try std.testing.expectEqual(ApplyFailuresAction.retry, matchApplyFailuresKey(.{ .key = .char, .value = 'R' }).?);
+    try std.testing.expectEqual(ApplyFailuresAction.keep, matchApplyFailuresKey(.{ .key = .escape, .value = 0 }).?);
+    try std.testing.expect(matchApplyFailuresKey(.{ .key = .enter, .value = 0 }) == null);
 }
 
 test "nameExists matches case-sensitively" {

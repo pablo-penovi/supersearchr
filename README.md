@@ -103,7 +103,10 @@ Search screen:
 - Type query text
 - `Enter`: search
 - `F1`: open indexers management
+- `F2`: load an indexer profile
 - `Esc`: exit app
+
+The search panel shows the active indexer profile next to its title, marked `(modified)` when the indexers enabled on Jackett no longer match it.
 
 Results screen:
 
@@ -116,7 +119,6 @@ Results screen:
 - `r` or `R`: refresh completed results
 - `/`: search within the current results list
 - `e` or `E`: review failed indexers when failures are present
-- `F1`: open indexers management
 - `Esc`: exit app
 
 Indexers screen:
@@ -124,14 +126,29 @@ Indexers screen:
 - `Up` / `Down`: move one indexer
 - `Shift+Up` / `Shift+Down`: move one page
 - `Space`: toggle selected indexer active/inactive
-- `Enter`: save pending changes
-- `Esc`: revert pending changes, or return to the previous screen when there are none
+- `Enter`: save pending changes (`Esc` while saving stops after the indexer in flight)
+- `F3`: save the enabled indexers as a profile (new, or overwriting the active one)
+- `Esc`: revert pending changes, or return to the search screen when there are none
+
+The indexers table shows each indexer's categories, a **Record** of its last five search outcomes, and a **Last Status** column with the outcome of the most recent attempt to enable or disable it.
+
+Profiles screen (`F2`):
+
+- `Up` / `Down`: move one profile
+- `Shift+Up` / `Shift+Down`: move one page
+- `Enter`: load the selected profile, enabling and disabling indexers on Jackett to match it, with live progress (`Esc` stops after the indexer in flight). Indexers that fail to toggle can be retried or kept as-is.
+- `Del`: delete the selected profile
+- `Esc`: return to the search screen
+
+A profile is a named set of enabled indexers. If the live indexers differ from the active profile when you open the screen, you are offered to save the changes into it, save them as a new profile, or discard them.
 
 Results show publication age, seeders, leechers, and torrent size when Jackett provides size metadata. New results appear incrementally while configured indexers are still searching, and the bottom status row shows discovery/search progress plus per-indexer failures.
 
 Disabling an indexer deletes it through Jackett's admin API after caching its config locally under the app config directory. Re-enabling restores the cached config.
 
-State flow: `SEARCH -> RESULTS -> INDEXERS -> ERROR`
+Besides `config.json`, the app config directory holds `profiles.json` (saved profiles and the active one), `record.json` (per-indexer search outcomes) and `last_status.json` (per-indexer enable/disable outcomes).
+
+State flow: `SEARCH -> RESULTS`, with `SEARCH -> INDEXERS` (`F1`) and `SEARCH -> PROFILES` (`F2`) returning to search; any state can fall into `ERROR`.
 
 ## Debug Logging
 

@@ -4,7 +4,21 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+### Added
+- Added indexer profiles: a profile is a named set of enabled indexers. `F3` on the indexers screen saves the enabled indexers as a new profile or overwrites the active one, and `F2` on the search screen opens a profiles list to load or delete them. Loading a profile enables and disables indexers on Jackett to match it. Profiles live in `profiles.json` in the app config directory.
+- Loading a profile runs on a worker thread with live "Applying c/t" progress in the profiles panel, like committing on the indexers screen. `Esc` stops after the indexer in flight, and indexers that fail to toggle can be retried or kept as-is.
+- The search panel now shows the active profile next to its title, marked `(modified)` when the indexers enabled on Jackett no longer match it.
+- Added a **Record** column to the indexers screen with each indexer's last five search outcomes (`record.json`), and a **Last Status** column with the outcome of its most recent enable/disable (`last_status.json`).
+- Pressing `F2` with no saved profiles now explains how to create one instead of doing nothing.
+
+### Changed
+- The indexers (`F1`) and profiles (`F2`) screens are now only reachable from the search screen; the results screen no longer handles either shortcut.
+- The search screen's key hints now list `F1` and `F2` in both layouts, the compact indexers footer lists `F3`, and the results footer lists `/` instead of `F2`.
+- User-facing text now consistently says "indexer", Jackett's own term, instead of mixing in "tracker".
+
 ### Fixed
+- Fixed profile saves silently failing: a profiles file that could not be written still showed "Saved". Write failures now show an error notice.
+- Fixed the "Indexers Modified" prompt leaving a ghost of itself over the profiles list after choosing to discard.
 - Fixed the key-hints footer wrapping onto the next line when it was wider than the terminal, which pushed the panel out of place. The hints now scroll back and forth with the same marquee used for over-long torrent titles (new `src/tui/widgets/hints.zig`), on the search, results, indexers and profiles screens, in both the panel and compact layouts.
 - Fixed the results panel becoming garbled when an indexer returns a title containing control characters. Some indexers (e.g. `catorrent`) scrape a multi-line page block into `<title>`, and the raw newlines moved the terminal cursor mid-row, shifting every row below it. Torrent titles and indexer names are now normalized in `src/jackett/client.zig` — trimmed, XML entities decoded (titles previously rendered a literal `&amp;`), control characters collapsed to single spaces, and invalid UTF-8 bytes replaced — so the renderer only ever receives measurable text.
 - Fixed `displayWidth` in `src/tui/theme.zig` counting combining marks, zero-width joiners and variation selectors as one column each instead of zero, and counting `Emoji_Presentation` symbols such as ✅, ⚡ and ⭐ as one column instead of two. Both cases desynchronized the title column from what the terminal actually drew.

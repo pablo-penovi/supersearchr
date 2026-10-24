@@ -369,9 +369,9 @@ pub const ResultsWidget = struct {
                 "ENTER select | s search | ESC exit | \xe2\x86\x91\xe2\x86\x93 line";
         }
         return if (self.live_status.phase == .done)
-            "ENTER select | s search | r refresh | ESC exit | \xe2\x86\x91\xe2\x86\x93 line | shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort | F2 load profile"
+            "ENTER select | s search | r refresh | / find | ESC exit | \xe2\x86\x91\xe2\x86\x93 line | shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort"
         else
-            "ENTER select | s search | ESC exit | \xe2\x86\x91\xe2\x86\x93 line | shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort | F2 load profile";
+            "ENTER select | s search | / find | ESC exit | \xe2\x86\x91\xe2\x86\x93 line | shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort";
     }
 
     pub fn renderStatusOnly(self: *ResultsWidget, max_rows: u16, max_cols: u16) bool {

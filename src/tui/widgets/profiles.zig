@@ -5,7 +5,7 @@ const compat = @import("compat");
 const list_nav = @import("list_nav");
 const hints = @import("hints");
 
-/// Scrollable list of saved tracker profiles. Used by the F2 "Load Tracker
+/// Scrollable list of saved indexer profiles. Used by the F2 "Load Indexer
 /// Profile" screen. Mirrors the structure of `indexers.zig` (panel frame +
 /// header + content rows + status + footer) but without toggles or a column
 /// marquee; only the footer hints scroll when they outgrow the terminal.
@@ -19,6 +19,11 @@ pub const ProfilesWidget = struct {
     force_full_redraw: bool,
     last_snapshot: ?RenderSnapshot,
     hints_marquee: hints.HintsMarquee,
+    apply_progress: ?CommitProgress,
+
+    /// Live progress of an in-flight profile apply, shown in the status row.
+    /// `null` when no apply is running.
+    pub const CommitProgress = list_nav.CommitProgress;
 
     pub const SourceRow = struct {
         name: []const u8,
@@ -55,7 +60,31 @@ pub const ProfilesWidget = struct {
             .force_full_redraw = true,
             .last_snapshot = null,
             .hints_marquee = .{},
+            .apply_progress = null,
         };
+    }
+
+    /// Sets (or clears) the in-flight apply progress shown in the status row.
+    /// Forces a full redraw when the displayed value changes so the spinner
+    /// and counts animate.
+    pub fn setCommitProgress(self: *ProfilesWidget, progress: ?CommitProgress) void {
+        if (std.meta.eql(self.apply_progress, progress)) return;
+        self.apply_progress = progress;
+        self.force_full_redraw = true;
+    }
+
+    /// Navigation-only handling for use while a profile is being applied:
+    /// arrow keys move the cursor, everything else (load/delete/close) is
+    /// ignored. Returns true when the view changed and should be re-rendered.
+    pub fn handleNavigationOnly(self: *ProfilesWidget, event: term.Event) bool {
+        switch (event.key) {
+            .arrow_down, .arrow_up, .shift_arrow_down, .shift_arrow_up => {
+                const before = self.cursor;
+                _ = self.handleEvent(event);
+                return self.cursor != before;
+            },
+            else => return false,
+        }
     }
 
     pub fn deinit(self: *ProfilesWidget) void {
@@ -175,7 +204,7 @@ pub const ProfilesWidget = struct {
                     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 
                     term.setFg256(colors.muted);
-                    self.hints_marquee.draw(stdout, hintsText(false), max_cols, hints.panel_indent_cols);
+                    self.hints_marquee.draw(stdout, self.hintsText(false), max_cols, hints.panel_indent_cols);
                     term.resetColor();
                     term.clearBelow();
                 }
@@ -220,23 +249,31 @@ pub const ProfilesWidget = struct {
     /// Scrolls the key-hints footer when it is wider than the terminal. In the
     /// compact layout the whole screen is repainted, so a step forces a full
     /// redraw; the panel layout repaints the footer row on its own.
-    pub fn advanceHintsMarquee(self: *ProfilesWidget, max_rows: u16, max_cols: u16) bool {
+    pub fn advanceMarquee(self: *ProfilesWidget, max_rows: u16, max_cols: u16) bool {
         const compact = theme.isCompactViewport(max_rows, max_cols);
         const indent = if (compact) hints.compact_indent_cols else hints.panel_indent_cols;
-        if (!self.hints_marquee.advance(hintsText(compact), max_cols, indent)) return false;
+        if (!self.hints_marquee.advance(self.hintsText(compact), max_cols, indent)) return false;
         if (compact) self.force_full_redraw = true;
         return true;
     }
-};
 
-/// Key hints shown in the footer. The compact layout drops the navigation
-/// hints that do not fit alongside the shorter list.
-fn hintsText(compact: bool) []const u8 {
-    return if (compact)
-        "ENTER load | Del delete | ESC back"
-    else
-        "\xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | ENTER load | Del delete | ESC back";
-}
+    /// Key hints for the current state, shown in the footer. The compact
+    /// layout drops the navigation hints that do not fit alongside the
+    /// shorter list.
+    fn hintsText(self: *const ProfilesWidget, compact: bool) []const u8 {
+        if (self.apply_progress) |progress| {
+            if (progress.canceling) return "Finishing current indexer\xe2\x80\xa6";
+            return if (compact)
+                "ESC stop after current"
+            else
+                "\xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | ESC stop after current";
+        }
+        return if (compact)
+            "ENTER load | Del delete | ESC back"
+        else
+            "\xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | ENTER load | Del delete | ESC back";
+    }
+};
 
 /// Repaints just the hints footer, for marquee steps that leave the rest of the
 /// screen untouched.
@@ -249,7 +286,7 @@ fn drawHintsRow(
 ) void {
     term.moveCursor(hints.rowFromDisplayCount(widget.display_count, max_rows), 1);
     term.setFg256(colors.muted);
-    widget.hints_marquee.draw(stdout, hintsText(false), max_cols, hints.panel_indent_cols);
+    widget.hints_marquee.draw(stdout, widget.hintsText(false), max_cols, hints.panel_indent_cols);
     term.resetColor();
     term.clearBelow();
 }
@@ -325,7 +362,7 @@ fn writeHeaderCells(
     term.setFg256(colors.muted);
     try theme.writePadded(stdout, "Profile", layout.name_col_width);
     try writeSpaces(stdout, layout.column_gap);
-    try theme.writePadded(stdout, "Trackers", layout.count_col_width);
+    try theme.writePadded(stdout, "Indexers", layout.count_col_width);
     try stdout.writeAll(" ");
 
     const used = 1 + layout.name_col_width + layout.column_gap + layout.count_col_width + 1;
@@ -399,7 +436,7 @@ fn buildDataCells(
     inner_width: usize,
     layout: TableLayout,
     name: []const u8,
-    trackers: usize,
+    indexer_count: usize,
     active: bool,
 ) []const u8 {
     var writer: std.Io.Writer = .fixed(buf);
@@ -417,7 +454,7 @@ fn buildDataCells(
     writeSpaces(&writer, layout.column_gap) catch return "";
 
     var count_buf: [32]u8 = undefined;
-    const count_text = std.mem.print(&count_buf, "{d}", .{trackers}) catch "?";
+    const count_text = std.mem.print(&count_buf, "{d}", .{indexer_count}) catch "?";
     theme.writePadded(&writer, count_text, layout.count_col_width) catch return "";
     writer.writeAll(" ") catch return "";
 
@@ -437,7 +474,7 @@ fn drawStatusRow(
     end_idx: usize,
 ) !void {
     var status_buf: [128]u8 = undefined;
-    const status = formatStatusText(&status_buf, self.scroll_offset, end_idx, self.rows.len);
+    const status = formatStatusText(&status_buf, self.scroll_offset, end_idx, self.rows.len, self.apply_progress);
     try writeSpaces(stdout, 1);
     const inner_width = panel_width - 2;
     term.setFg256(colors.panel_border);
@@ -450,7 +487,31 @@ fn drawStatusRow(
     try stdout.writeAll("\r\n");
 }
 
-fn formatStatusText(buf: []u8, scroll_offset: usize, end_idx: usize, total_count: usize) []const u8 {
+/// Status row text. While a profile is being applied, mirrors the Indexers
+/// screen's commit row ("Showing 1-3 of 3 | Applying 2/4 ⣏⡆", plus a failed
+/// tally).
+fn formatStatusText(
+    buf: []u8,
+    scroll_offset: usize,
+    end_idx: usize,
+    total_count: usize,
+    apply_progress: ?ProfilesWidget.CommitProgress,
+) []const u8 {
+    if (apply_progress) |progress| {
+        const spinner = theme.spinnerGlyph(progress.spinner_frame);
+        if (progress.failed == 0) {
+            return std.mem.print(
+                buf,
+                "Showing {d}-{d} of {d} | Applying {d}/{d} {s}",
+                .{ scroll_offset + 1, end_idx, total_count, progress.completed, progress.total, spinner },
+            ) catch "Applying";
+        }
+        return std.mem.print(
+            buf,
+            "Showing {d}-{d} of {d} | Applying {d}/{d}, {d} failed {s}",
+            .{ scroll_offset + 1, end_idx, total_count, progress.completed, progress.total, progress.failed, spinner },
+        ) catch "Applying";
+    }
     if (total_count == 0) return "No profiles saved";
     return std.mem.print(buf, "Showing {d}-{d} of {d}", .{ scroll_offset + 1, end_idx, total_count }) catch "Showing";
 }
@@ -465,7 +526,7 @@ fn drawCompact(
     term.moveCursor(1, 1);
     term.setFg256(colors.panel_title);
     term.setBold(true);
-    stdout.writeAll("Load Tracker Profile\r\n") catch {};
+    stdout.writeAll("Load Indexer Profile\r\n") catch {};
     term.setBold(false);
     drawCompactDivider(stdout, colors, border, max_cols);
 
@@ -480,18 +541,18 @@ fn drawCompact(
         const shown = theme.truncateWithEllipsis(row.name, compactNameWidth(max_cols), trunc_buf[0..]);
         stdout.writeAll(shown) catch {};
         var count_buf: [48]u8 = undefined;
-        const count_line = std.mem.print(&count_buf, " ({d} trackers)\r\n", .{row.count}) catch "\r\n";
+        const count_line = std.mem.print(&count_buf, " ({d} indexers)\r\n", .{row.count}) catch "\r\n";
         stdout.writeAll(count_line) catch {};
         term.setFg256(colors.panel_title);
         var status_buf: [128]u8 = undefined;
-        const status = formatStatusText(&status_buf, self.scroll_offset, @min(self.scroll_offset + self.display_count, self.rows.len), self.rows.len);
+        const status = formatStatusText(&status_buf, self.scroll_offset, @min(self.scroll_offset + self.display_count, self.rows.len), self.rows.len, self.apply_progress);
         stdout.writeAll(status) catch {};
         stdout.writeAll("\r\n") catch {};
     }
 
     drawCompactDivider(stdout, colors, border, max_cols);
     term.setFg256(colors.muted);
-    self.hints_marquee.draw(stdout, hintsText(true), max_cols, hints.compact_indent_cols);
+    self.hints_marquee.draw(stdout, self.hintsText(true), max_cols, hints.compact_indent_cols);
     term.resetColor();
     term.clearBelow();
 }
@@ -601,7 +662,7 @@ test "the hints footer scrolls when it outgrows the terminal" {
 
     var moved = false;
     for (0..8) |_| {
-        if (widget.advanceHintsMarquee(24, 60)) moved = true;
+        if (widget.advanceMarquee(24, 60)) moved = true;
     }
     try std.testing.expect(moved);
     try std.testing.expect(widget.hints_marquee.offset_cols > 0);
@@ -615,7 +676,57 @@ test "the hints footer stays inside the terminal width" {
     for ([_]u16{ 56, 80, 120 }) |cols| {
         var writer: std.Io.Writer = .fixed(&buf);
         widget.hints_marquee.reset();
-        widget.hints_marquee.draw(&writer, hintsText(false), cols, hints.panel_indent_cols);
+        widget.hints_marquee.draw(&writer, widget.hintsText(false), cols, hints.panel_indent_cols);
         try std.testing.expect(theme.displayWidthOfText(writer.buffered()) < cols);
     }
+}
+
+test "setCommitProgress only forces a redraw when the value changes" {
+    var widget = ProfilesWidget.init(std.testing.allocator);
+    defer widget.deinit();
+    widget.force_full_redraw = false;
+
+    widget.setCommitProgress(.{ .completed = 1, .total = 3, .failed = 0, .spinner_frame = 0 });
+    try std.testing.expect(widget.force_full_redraw);
+    widget.force_full_redraw = false;
+    widget.setCommitProgress(.{ .completed = 1, .total = 3, .failed = 0, .spinner_frame = 0 });
+    try std.testing.expect(!widget.force_full_redraw);
+    widget.setCommitProgress(null);
+    try std.testing.expect(widget.force_full_redraw);
+    try std.testing.expect(widget.apply_progress == null);
+}
+
+test "status row reports apply progress and failures" {
+    var buf: [128]u8 = undefined;
+    const running = formatStatusText(&buf, 0, 3, 3, .{ .completed = 2, .total = 4, .failed = 0, .spinner_frame = 0 });
+    try std.testing.expect(std.mem.find(u8, running, "Applying 2/4") != null);
+    const failing = formatStatusText(&buf, 0, 3, 3, .{ .completed = 3, .total = 4, .failed = 1, .spinner_frame = 0 });
+    try std.testing.expect(std.mem.find(u8, failing, "Applying 3/4, 1 failed") != null);
+    try std.testing.expectEqualStrings("Showing 1-3 of 3", formatStatusText(&buf, 0, 3, 3, null));
+}
+
+test "handleNavigationOnly moves the cursor but never loads, deletes or closes" {
+    var widget = ProfilesWidget.init(std.testing.allocator);
+    defer widget.deinit();
+    try widget.setProfiles(testSources());
+    widget.display_count = 3;
+
+    try std.testing.expect(widget.handleNavigationOnly(.{ .key = .arrow_down, .value = 0 }));
+    try std.testing.expectEqual(@as(usize, 1), widget.cursor);
+    try std.testing.expect(!widget.handleNavigationOnly(.{ .key = .enter, .value = 0 }));
+    try std.testing.expect(!widget.handleNavigationOnly(.{ .key = .delete, .value = 0 }));
+    try std.testing.expect(!widget.handleNavigationOnly(.{ .key = .escape, .value = 0 }));
+    try std.testing.expectEqual(@as(usize, 1), widget.cursor);
+}
+
+test "hints switch to the stop hint while a profile is being applied" {
+    var widget = ProfilesWidget.init(std.testing.allocator);
+    defer widget.deinit();
+
+    try std.testing.expect(std.mem.find(u8, widget.hintsText(false), "ENTER load") != null);
+    widget.setCommitProgress(.{ .completed = 0, .total = 2, .failed = 0, .spinner_frame = 0 });
+    try std.testing.expect(std.mem.find(u8, widget.hintsText(false), "ESC stop after current") != null);
+    try std.testing.expect(std.mem.find(u8, widget.hintsText(true), "ENTER load") == null);
+    widget.setCommitProgress(.{ .completed = 0, .total = 2, .failed = 0, .spinner_frame = 0, .canceling = true });
+    try std.testing.expect(std.mem.find(u8, widget.hintsText(false), "Finishing current indexer") != null);
 }

@@ -60,6 +60,19 @@ pub const BaseSnapshot = struct {
     item_count: usize,
 };
 
+/// Live progress of an in-flight batch of indexer enable/disable calls, shown
+/// in a list's status row. Shared by the Indexers commit and the Profiles
+/// apply flows so both are driven by the same worker loop.
+pub const CommitProgress = struct {
+    completed: usize,
+    total: usize,
+    failed: usize,
+    spinner_frame: usize,
+    /// True once ESC has been pressed: the worker finishes the in-flight
+    /// indexer then stops. Drives the "Finishing current…" footer hint.
+    canceling: bool = false,
+};
+
 /// Bounces a marquee offset between 0 and max_offset, pausing for
 /// `hold_ticks` calls at each end before reversing direction. Returns true
 /// when the offset changed (caller should redraw).

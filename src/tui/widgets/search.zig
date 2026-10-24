@@ -7,13 +7,17 @@ const hints = @import("hints");
 
 /// Key hints shown under the query. Both are wider than the narrowest
 /// supported terminal, so they scroll rather than wrap onto the next row.
-const panel_hints_text = " ENTER submit | ESC quit | Ctrl-BS clear | F2 load profile ";
-const compact_hints_text = "ENTER search | ESC exit | Ctrl-BS clear";
+const panel_hints_text = " ENTER submit | ESC quit | Ctrl-BS clear | F1 indexers | F2 profiles ";
+const compact_hints_text = "ENTER search | ESC exit | Ctrl-BS clear | F1 indexers | F2 profiles";
 
 pub const SearchWidget = struct {
     allocator: std.mem.Allocator,
     query: std.ArrayList(u8),
     latest_version: ?[]const u8,
+    /// Name of the active indexer profile (borrowed), shown next to the title.
+    active_profile: ?[]const u8,
+    /// True when the live indexer set is known to differ from the active profile.
+    active_profile_modified: bool,
     has_drawn_once: bool,
     last_size: ?term.TerminalSize,
     hints_marquee: hints.HintsMarquee,
@@ -23,6 +27,8 @@ pub const SearchWidget = struct {
             .allocator = allocator,
             .query = .empty,
             .latest_version = null,
+            .active_profile = null,
+            .active_profile_modified = false,
             .has_drawn_once = false,
             .last_size = null,
             .hints_marquee = .{},
@@ -43,7 +49,7 @@ pub const SearchWidget = struct {
 
         if (theme.isCompactViewport(size.rows, size.cols)) {
             switch (redraw_mode) {
-                .full => drawCompactFull(stdout, colors, self.query.items, self.latest_version, &self.hints_marquee, size),
+                .full => drawCompactFull(stdout, colors, self, size),
                 .partial => {
                     drawCompactInputLine(stdout, size, colors, self.query.items);
                     if (self.hints_marquee.dirty) drawCompactHintsRow(stdout, size, colors, &self.hints_marquee);
@@ -52,7 +58,7 @@ pub const SearchWidget = struct {
         } else {
             const layout = computePanelLayout(size);
             switch (redraw_mode) {
-                .full => drawPanelFrame(stdout, colors, border, layout, self.latest_version, &self.hints_marquee),
+                .full => drawPanelFrame(stdout, colors, border, layout, self),
                 .partial => {
                     if (self.hints_marquee.dirty) drawPanelHintsRow(stdout, size, colors, border, layout, &self.hints_marquee);
                 },
@@ -124,7 +130,28 @@ pub const SearchWidget = struct {
     pub fn setLatestVersion(self: *SearchWidget, latest_version: ?[]const u8) void {
         self.latest_version = latest_version;
     }
+
+    /// Sets the active profile shown beside the title (`null` hides it). The
+    /// name is borrowed and must outlive the widget's renders.
+    pub fn setActiveProfile(self: *SearchWidget, name: ?[]const u8, modified: bool) void {
+        self.active_profile = name;
+        self.active_profile_modified = modified;
+        self.has_drawn_once = false;
+    }
 };
+
+/// Formats the "Profile: <name>" label to fit within `max_cols`, truncating
+/// the name (never the prefix or the "(modified)" marker). Returns an empty
+/// slice when even a one-column name would not fit.
+fn formatProfileLabel(buf: []u8, name: []const u8, modified: bool, max_cols: usize) []const u8 {
+    const prefix = "Profile: ";
+    const suffix = if (modified) " (modified)" else "";
+    const fixed = prefix.len + suffix.len;
+    if (max_cols <= fixed) return "";
+    var trunc_buf: [256]u8 = undefined;
+    const shown = theme.truncateWithEllipsis(name, @min(max_cols - fixed, trunc_buf.len), &trunc_buf);
+    return std.mem.print(buf, "{s}{s}{s}", .{ prefix, shown, suffix }) catch "";
+}
 
 const CursorPosition = struct {
     row: u16,
@@ -159,25 +186,38 @@ fn computePanelLayout(size: term.TerminalSize) PanelLayout {
 fn drawCompactFull(
     stdout: compat.FileWriter,
     colors: theme.Theme,
-    query: []const u8,
-    latest_version: ?[]const u8,
-    hints_marquee: *hints.HintsMarquee,
+    widget: *SearchWidget,
     size: term.TerminalSize,
 ) void {
+    const title = "supersearchr";
+    const separator = "  ";
     term.moveCursor(1, 1);
     term.clearScreen();
     term.setFg256(colors.panel_title);
     term.setBold(true);
-    stdout.writeAll("supersearchr\r\n") catch {};
+    stdout.writeAll(title) catch {};
     term.setBold(false);
+    if (widget.active_profile) |name| {
+        const cols: usize = size.cols;
+        if (cols > title.len + separator.len) {
+            var label_buf: [320]u8 = undefined;
+            const label = formatProfileLabel(&label_buf, name, widget.active_profile_modified, cols - title.len - separator.len);
+            if (label.len > 0) {
+                term.setFg256(colors.muted);
+                stdout.writeAll(separator) catch {};
+                stdout.writeAll(label) catch {};
+            }
+        }
+    }
+    stdout.writeAll("\r\n") catch {};
     term.setFg256(colors.text);
     stdout.writeAll("> ") catch {};
-    stdout.writeAll(query) catch {};
+    stdout.writeAll(widget.query.items) catch {};
     stdout.writeAll("\r\n") catch {};
     term.setFg256(colors.muted);
-    hints_marquee.draw(stdout, compact_hints_text, size.cols, hints.compact_indent_cols);
+    widget.hints_marquee.draw(stdout, compact_hints_text, size.cols, hints.compact_indent_cols);
     stdout.writeAll("\r\n") catch {};
-    writeVersionLine(stdout, colors, latest_version);
+    writeVersionLine(stdout, colors, widget.latest_version);
 }
 
 fn drawCompactInputLine(stdout: compat.FileWriter, size: term.TerminalSize, colors: theme.Theme, query: []const u8) void {
@@ -200,9 +240,10 @@ fn drawPanelFrame(
     colors: theme.Theme,
     border: theme.BorderChars,
     layout: PanelLayout,
-    latest_version: ?[]const u8,
-    hints_marquee: *hints.HintsMarquee,
+    widget: *SearchWidget,
 ) void {
+    const latest_version = widget.latest_version;
+    const hints_marquee = &widget.hints_marquee;
     term.moveCursor(1, 1);
     term.clearScreen();
     term.moveCursor(@as(u16, @intCast(layout.top_pad)), 1);
@@ -212,10 +253,7 @@ fn drawPanelFrame(
     writeSpaces(stdout, layout.left_pad) catch {};
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
-    term.setFg256(colors.panel_title);
-    term.setBold(true);
-    theme.writePadded(stdout, " Search ", layout.panel_width - 2) catch {};
-    term.setBold(false);
+    drawPanelTitleCells(stdout, colors, layout.panel_width - 2, widget.active_profile, widget.active_profile_modified);
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.resetColor();
@@ -241,6 +279,35 @@ fn drawPanelFrame(
 
     term.moveCursor(@as(u16, @intCast(layout.top_pad + 6)), @as(u16, @intCast(layout.left_pad + 2)));
     writeVersionLine(stdout, colors, latest_version);
+}
+
+/// Title row contents: " Search" on the left and, when a profile is active,
+/// "Profile: <name> " right-aligned in the muted color.
+fn drawPanelTitleCells(
+    stdout: compat.FileWriter,
+    colors: theme.Theme,
+    inner_width: usize,
+    active_profile: ?[]const u8,
+    modified: bool,
+) void {
+    const title = " Search ";
+    var label_buf: [320]u8 = undefined;
+    const label = if (active_profile) |name|
+        (if (inner_width > title.len + 1) formatProfileLabel(&label_buf, name, modified, inner_width - title.len - 1) else "")
+    else
+        "";
+    const label_cols = theme.displayWidthOfText(label);
+    const trailing_gap: usize = if (label_cols > 0) 1 else 0;
+
+    term.setFg256(colors.panel_title);
+    term.setBold(true);
+    theme.writePadded(stdout, title, inner_width - label_cols - trailing_gap) catch {};
+    term.setBold(false);
+    if (label_cols > 0) {
+        term.setFg256(if (modified) colors.warn else colors.muted);
+        stdout.writeAll(label) catch {};
+        stdout.writeAll(" ") catch {};
+    }
 }
 
 fn writeVersionLine(stdout: compat.FileWriter, colors: theme.Theme, latest_version: ?[]const u8) void {
@@ -546,4 +613,42 @@ test "SearchWidget setQuery populates query" {
 
     try widget.setQuery("test query");
     try std.testing.expectEqualStrings("test query", widget.query.items);
+}
+
+test "SearchWidget setActiveProfile stores the name and forces a full redraw" {
+    const allocator = std.testing.allocator;
+    var widget = SearchWidget.init(allocator);
+    defer widget.deinit();
+    widget.has_drawn_once = true;
+
+    widget.setActiveProfile("Movies", true);
+    try std.testing.expectEqualStrings("Movies", widget.active_profile.?);
+    try std.testing.expect(widget.active_profile_modified);
+    try std.testing.expect(!widget.has_drawn_once);
+}
+
+test "formatProfileLabel includes the name and modified marker" {
+    var buf: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("Profile: Movies", formatProfileLabel(&buf, "Movies", false, 40));
+    try std.testing.expectEqualStrings("Profile: Movies (modified)", formatProfileLabel(&buf, "Movies", true, 40));
+}
+
+test "formatProfileLabel truncates the name to fit and keeps the marker" {
+    var buf: [128]u8 = undefined;
+    const label = formatProfileLabel(&buf, "A very long profile name indeed", true, 30);
+    try std.testing.expect(theme.displayWidthOfText(label) <= 30);
+    try std.testing.expect(std.mem.startsWith(u8, label, "Profile: "));
+    try std.testing.expect(std.mem.endsWith(u8, label, " (modified)"));
+}
+
+test "formatProfileLabel is empty when there is no room for the name" {
+    var buf: [128]u8 = undefined;
+    try std.testing.expectEqualStrings("", formatProfileLabel(&buf, "Movies", false, 9));
+}
+
+test "search hints advertise both F1 and F2 in every layout" {
+    for ([_][]const u8{ panel_hints_text, compact_hints_text }) |text| {
+        try std.testing.expect(std.mem.find(u8, text, "F1 indexers") != null);
+        try std.testing.expect(std.mem.find(u8, text, "F2 ") != null);
+    }
 }

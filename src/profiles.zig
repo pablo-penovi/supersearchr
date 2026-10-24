@@ -15,7 +15,7 @@ pub const Profile = struct {
     }
 };
 
-/// In-memory store of tracker profiles plus the currently-active profile name.
+/// In-memory store of indexer profiles plus the currently-active profile name.
 /// Insertion order of profiles is preserved.
 pub const ProfileStore = struct {
     allocator: std.mem.Allocator,

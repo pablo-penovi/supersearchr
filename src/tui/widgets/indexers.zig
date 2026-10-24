@@ -28,15 +28,7 @@ pub const IndexersWidget = struct {
 
     /// Live progress of an in-flight commit, shown in the footer in place of
     /// the key hints. `null` when no commit is running.
-    pub const CommitProgress = struct {
-        completed: usize,
-        total: usize,
-        failed: usize,
-        spinner_frame: usize,
-        /// True once ESC has been pressed: the worker finishes the in-flight
-        /// tracker then stops. Drives the "Finishing current…" footer hint.
-        canceling: bool = false,
-    };
+    pub const CommitProgress = list_nav.CommitProgress;
 
     pub const SourceRow = struct {
         id: []const u8,
@@ -331,13 +323,13 @@ pub const IndexersWidget = struct {
     fn hintsText(self: *IndexersWidget, compact: bool) []const u8 {
         if (compact) {
             return if (self.hasPendingChanges())
-                "SPACE toggle | ENTER save | ESC revert"
+                "SPACE toggle | ENTER save | ESC revert | F3 save profile"
             else
-                "SPACE toggle | ESC back";
+                "SPACE toggle | ESC back | F3 save profile";
         }
         if (self.commit_progress) |progress| {
             return if (progress.canceling)
-                "Finishing current tracker\xe2\x80\xa6"
+                "Finishing current indexer\xe2\x80\xa6"
             else
                 "\xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | ESC stop after current";
         }

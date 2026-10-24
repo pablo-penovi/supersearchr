@@ -42,15 +42,13 @@ const ResultsState = struct {
     header_cursor: ?results_widget.SortColumn = null,
 };
 
+/// The indexers and profiles screens are only reachable from the search
+/// screen, so they just carry the query to restore when returning to it.
 const IndexersState = struct {
-    return_to: enum { search, results },
-    pending_results: ?ResultsState,
     pending_search_query: []u8,
 };
 
 const ProfilesState = struct {
-    return_to: enum { search, results },
-    pending_results: ?ResultsState,
     pending_search_query: []u8,
 };
 
@@ -84,6 +82,10 @@ const App = struct {
     terminal: []const u8,
     jackett_admin_password: []const u8 = "",
     latest_version: ?[]u8 = null,
+    /// Whether the live (Jackett-enabled) indexer set differs from the active
+    /// profile, as of the last time the indexers screen or the profiles screen
+    /// read it. `null` until either has been visited this session.
+    active_profile_modified: ?bool = null,
 };
 
 pub fn run(allocator: std.mem.Allocator, cfg: config.Config) !void {
@@ -155,6 +157,13 @@ fn runSearchState(app: *App) !void {
     }
 
     configureSearchWidgetForApp(&widget, app);
+
+    // Borrowed by the widget for the active-profile label; also tells F2
+    // whether there is anything to load.
+    var profile_store = loadProfileStore(app);
+    defer profile_store.deinit();
+    widget.setActiveProfile(profile_store.active, app.active_profile_modified orelse false);
+
     var needs_render = true;
     const input_poll_ms: i32 = 80;
     const marquee_step_interval_ms: i64 = scaledMarqueeIntervalMs(input_poll_ms, 30);
@@ -187,20 +196,26 @@ fn runSearchState(app: *App) !void {
         };
         if (event.key == .f1) {
             const query = try app.allocator.dupe(u8, widget.getQuery());
-            app.state = .{ .indexers = .{
-                .return_to = .search,
-                .pending_results = null,
-                .pending_search_query = query,
-            } };
+            app.state = .{ .indexers = .{ .pending_search_query = query } };
             return;
         }
         if (event.key == .f2) {
+            if (profile_store.count() == 0) {
+                panels.renderInfoNoticeOverlay(
+                    &app.term_rows,
+                    &app.term_cols,
+                    refreshTerminalSizeValues,
+                    &widget,
+                    "Profiles",
+                    no_profiles_message,
+                    theme.superseedr_like.accent,
+                );
+                widget.has_drawn_once = false;
+                needs_render = true;
+                continue;
+            }
             const query = try app.allocator.dupe(u8, widget.getQuery());
-            app.state = .{ .profiles = .{
-                .return_to = .search,
-                .pending_results = null,
-                .pending_search_query = query,
-            } };
+            app.state = .{ .profiles = .{ .pending_search_query = query } };
             return;
         }
         const action = widget.handleEvent(event);
@@ -224,6 +239,8 @@ fn runSearchState(app: *App) !void {
         }
     }
 }
+
+const no_profiles_message = "No profiles yet: press F1, pick indexers, then F3 to save one";
 
 fn checkLatestVersionOnStartup(app: *App) void {
     app.latest_version = update_checker.checkLatestVersion(
@@ -341,24 +358,6 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
             return;
         };
         if (maybe_event) |event| {
-            if (event.key == .f1) {
-                app.state = .{ .indexers = .{
-                    .return_to = .results,
-                    .pending_results = results_state.*,
-                    .pending_search_query = &.{},
-                } };
-                cleaned_up = true;
-                return;
-            }
-            if (event.key == .f2) {
-                app.state = .{ .profiles = .{
-                    .return_to = .results,
-                    .pending_results = results_state.*,
-                    .pending_search_query = &.{},
-                } };
-                cleaned_up = true;
-                return;
-            }
             const action = widget.handleEvent(event, app.term_rows);
             needs_render = true;
 
@@ -473,29 +472,16 @@ fn runResultsState(app: *App, results_state: *ResultsState) !void {
 }
 
 fn deinitIndexersState(app: *App, indexers_state: *IndexersState) void {
-    switch (indexers_state.return_to) {
-        .search => app.allocator.free(indexers_state.pending_search_query),
-        .results => if (indexers_state.pending_results) |*rs| deinitResultsState(app.allocator, rs),
-    }
+    app.allocator.free(indexers_state.pending_search_query);
 }
 
 fn deinitProfilesState(app: *App, profiles_state: *ProfilesState) void {
-    switch (profiles_state.return_to) {
-        .search => app.allocator.free(profiles_state.pending_search_query),
-        .results => if (profiles_state.pending_results) |*rs| deinitResultsState(app.allocator, rs),
-    }
+    app.allocator.free(profiles_state.pending_search_query);
 }
 
+/// Returns to the search screen, handing the pending query back to it.
 fn returnFromProfiles(app: *App, profiles_state: *ProfilesState) void {
-    switch (profiles_state.return_to) {
-        .search => {
-            app.state = .{ .search = .{ .query = profiles_state.pending_search_query } };
-        },
-        .results => {
-            app.state = .{ .results = profiles_state.pending_results.? };
-            profiles_state.pending_results = null;
-        },
-    }
+    app.state = .{ .search = .{ .query = profiles_state.pending_search_query } };
 }
 
 fn runIndexersState(app: *App, indexers_state: *IndexersState) !void {
@@ -617,15 +603,8 @@ fn runIndexersState(app: *App, indexers_state: *IndexersState) !void {
                 widget.revertPending();
             },
             .exit_to_previous => {
-                switch (indexers_state.return_to) {
-                    .search => {
-                        app.state = .{ .search = .{ .query = indexers_state.pending_search_query } };
-                    },
-                    .results => {
-                        app.state = .{ .results = indexers_state.pending_results.? };
-                        indexers_state.pending_results = null;
-                    },
-                }
+                refreshActiveProfileModified(app, &widget);
+                app.state = .{ .search = .{ .query = indexers_state.pending_search_query } };
                 return;
             },
         }
@@ -671,7 +650,7 @@ fn commitIndexerChanges(
 }
 
 /// F3 on the Indexers screen: snapshots the committed (actually-enabled)
-/// indexer set into a tracker profile. Handles the uncommitted-changes,
+/// indexer set into a profile. Handles the uncommitted-changes,
 /// first-time-save, and save-choice flows per the profiles spec.
 fn handleProfileSaveFromIndexers(
     app: *App,
@@ -734,9 +713,9 @@ fn handleProfileSaveFromIndexers(
             );
             switch (choice) {
                 .overwrite => {
-                    store.upsert(active_name, enabled.items) catch {};
-                    saveProfileStore(app, &store);
-                    showSavedNotice(app, widget);
+                    if (saveProfileAs(app, widget, &store, active_name, enabled.items, false)) {
+                        showSavedNotice(app, widget);
+                    }
                 },
                 .new_profile => {
                     if (try promptAndSaveNewProfile(app, widget, &store, enabled.items)) {
@@ -795,13 +774,56 @@ fn promptAndSaveNewProfile(
     switch (result) {
         .name => |name| {
             defer app.allocator.free(name);
-            store.upsert(name, ids) catch return false;
-            store.setActive(name) catch {};
-            saveProfileStore(app, store);
-            return true;
+            return saveProfileAs(app, backdrop, store, name, ids, true);
         },
         .cancel => return false,
     }
+}
+
+/// Stores `ids` under `name` (optionally making it the active profile) and
+/// writes the store to disk. On any failure an error notice is shown over
+/// `backdrop` and false is returned, so callers never report a phantom save.
+fn saveProfileAs(
+    app: *App,
+    backdrop: anytype,
+    store: *profiles.ProfileStore,
+    name: []const u8,
+    ids: []const []const u8,
+    make_active: bool,
+) bool {
+    store.upsert(name, ids) catch {
+        showProfileSaveError(app, backdrop);
+        return false;
+    };
+    if (make_active) {
+        store.setActive(name) catch {
+            showProfileSaveError(app, backdrop);
+            return false;
+        };
+    }
+    return persistProfileStore(app, backdrop, store);
+}
+
+/// Writes the store to disk, showing an error notice over `backdrop` if that
+/// fails. Returns true on success.
+fn persistProfileStore(app: *App, backdrop: anytype, store: *const profiles.ProfileStore) bool {
+    saveProfileStore(app, store) catch {
+        showProfileSaveError(app, backdrop);
+        return false;
+    };
+    return true;
+}
+
+fn showProfileSaveError(app: *App, backdrop: anytype) void {
+    panels.renderInfoNoticeOverlay(
+        &app.term_rows,
+        &app.term_cols,
+        refreshTerminalSizeValues,
+        backdrop,
+        "Profiles",
+        "Could not write the profiles file; changes were not saved",
+        theme.superseedr_like.err,
+    );
 }
 
 fn loadProfileStore(app: *App) profiles.ProfileStore {
@@ -810,10 +832,32 @@ fn loadProfileStore(app: *App) profiles.ProfileStore {
     return profiles.load(app.allocator, path) catch profiles.ProfileStore.init(app.allocator);
 }
 
-fn saveProfileStore(app: *App, store: *const profiles.ProfileStore) void {
-    const path = app.deps.profiles_path_resolver(app.allocator) catch return;
+fn saveProfileStore(app: *App, store: *const profiles.ProfileStore) !void {
+    const path = try app.deps.profiles_path_resolver(app.allocator);
     defer app.allocator.free(path);
-    profiles.save(app.allocator, path, store) catch {};
+    try profiles.save(app.allocator, path, store);
+}
+
+/// Whether `live_ids` (the indexers enabled on Jackett) differ from the
+/// store's active profile. `null` when there is no active profile.
+fn activeProfileModified(store: *const profiles.ProfileStore, live_ids: []const []const u8) ?bool {
+    const active_name = store.active orelse return null;
+    const active_profile = store.get(active_name) orelse return null;
+    return !profiles.setsEqual(active_profile.indexers.items, live_ids);
+}
+
+/// Recomputes `app.active_profile_modified` from the Indexers screen's
+/// committed rows, so the search screen can flag a drifted profile.
+fn refreshActiveProfileModified(app: *App, widget: *const indexers_widget.IndexersWidget) void {
+    var store = loadProfileStore(app);
+    defer store.deinit();
+
+    var enabled: std.ArrayList([]const u8) = .empty;
+    defer enabled.deinit(app.allocator);
+    for (widget.rows) |row| {
+        if (row.saved_active) enabled.append(app.allocator, row.id) catch return;
+    }
+    app.active_profile_modified = activeProfileModified(&store, enabled.items);
 }
 
 fn refreshProfilesWidget(
@@ -841,53 +885,118 @@ fn nameForId(remote: []const jackett_admin.IndexerInfo, id: []const u8) []const 
     return id;
 }
 
-/// Applies a profile by enabling/disabling indexers so Jackett's enabled set
-/// matches `profile_ids`. Returns the names of indexers whose toggle failed
-/// (caller owns and must `.deinit()`). Borrowed name slices reference
-/// `remote`, which must outlive the returned list.
-fn applyProfileChanges(
+/// Builds the enable/disable work list that makes Jackett's enabled set match
+/// `profile_ids` (caller owns the slice). Item ids borrow from the inputs,
+/// which must outlive it; `idx` is just the item's position.
+fn buildProfileApplyItems(
     app: *App,
-    session: *const jackett_admin.AdminSession,
     profile_ids: []const []const u8,
     enabled_ids: []const []const u8,
-    remote: []const jackett_admin.IndexerInfo,
-) !std.ArrayList([]const u8) {
-    var failed: std.ArrayList([]const u8) = .empty;
-    errdefer failed.deinit(app.allocator);
-
-    const cache_dir = try app.deps.jackett_indexer_cache_dir_resolver(app.allocator);
-    defer app.allocator.free(cache_dir);
-
+) ![]CommitItem {
     var plan = try profiles.applyPlan(app.allocator, profile_ids, enabled_ids);
     defer plan.deinit(app.allocator);
 
-    // Commit outcomes for the Last Status column. Ids borrow from the plan,
-    // valid until return.
+    var list: std.ArrayList(CommitItem) = .empty;
+    errdefer list.deinit(app.allocator);
+    for (plan.to_enable) |id| try list.append(app.allocator, .{ .idx = list.items.len, .enable = true, .id = id });
+    for (plan.to_disable) |id| try list.append(app.allocator, .{ .idx = list.items.len, .enable = false, .id = id });
+    return list.toOwnedSlice(app.allocator);
+}
+
+/// Outcome of one profile-apply pass. `failed_items` are the attempted items
+/// whose toggle failed (retry candidates); `failed_names` are their display
+/// names, borrowed from `remote`.
+const ProfileApplyOutcome = struct {
+    failed_items: []CommitItem,
+    failed_names: std.ArrayList([]const u8),
+
+    fn deinit(self: *ProfileApplyOutcome, allocator: std.mem.Allocator) void {
+        allocator.free(self.failed_items);
+        self.failed_names.deinit(allocator);
+    }
+};
+
+/// Collects the worker outcomes of a profile-apply pass and persists the Last
+/// Status column. Only the first `completed` items were attempted; the rest
+/// (skipped by an ESC cancel) are neither succeeded nor failed.
+fn collectProfileApplyOutcome(
+    app: *App,
+    items: []const CommitItem,
+    outcomes: []const bool,
+    completed: usize,
+    remote: []const jackett_admin.IndexerInfo,
+) !ProfileApplyOutcome {
+    var failed_items: std.ArrayList(CommitItem) = .empty;
+    errdefer failed_items.deinit(app.allocator);
+    var failed_names: std.ArrayList([]const u8) = .empty;
+    errdefer failed_names.deinit(app.allocator);
     var succeeded_ids: std.ArrayList([]const u8) = .empty;
     defer succeeded_ids.deinit(app.allocator);
     var failed_ids: std.ArrayList([]const u8) = .empty;
     defer failed_ids.deinit(app.allocator);
 
-    for (plan.to_enable) |id| {
-        enableIndexer(app, session, cache_dir, id) catch {
-            try failed.append(app.allocator, nameForId(remote, id));
-            try failed_ids.append(app.allocator, id);
-            continue;
-        };
-        try succeeded_ids.append(app.allocator, id);
-    }
-    for (plan.to_disable) |id| {
-        disableIndexer(app, session, cache_dir, id) catch {
-            try failed.append(app.allocator, nameForId(remote, id));
-            try failed_ids.append(app.allocator, id);
-            continue;
-        };
-        try succeeded_ids.append(app.allocator, id);
+    const attempted = @min(completed, items.len);
+    for (items[0..attempted], outcomes[0..attempted]) |item, ok| {
+        if (ok) {
+            try succeeded_ids.append(app.allocator, item.id);
+        } else {
+            try failed_items.append(app.allocator, item);
+            try failed_names.append(app.allocator, nameForId(remote, item.id));
+            try failed_ids.append(app.allocator, item.id);
+        }
     }
 
     persistLastStatus(app, succeeded_ids.items, failed_ids.items);
+    return .{ .failed_items = try failed_items.toOwnedSlice(app.allocator), .failed_names = failed_names };
+}
 
-    return failed;
+/// Applies a profile on a worker thread with live progress on the profiles
+/// widget, offering to retry failed indexers. Returns true when Jackett's
+/// enabled set now matches the profile, false when the user stopped early
+/// (ESC) or kept a partial result.
+fn applyProfileWithProgress(
+    app: *App,
+    widget: *profiles_widget.ProfilesWidget,
+    session: *const jackett_admin.AdminSession,
+    remote: []const jackett_admin.IndexerInfo,
+    profile_ids: []const []const u8,
+    enabled_ids: []const []const u8,
+) !bool {
+    const cache_dir = try app.deps.jackett_indexer_cache_dir_resolver(app.allocator);
+    defer app.allocator.free(cache_dir);
+
+    var items = try buildProfileApplyItems(app, profile_ids, enabled_ids);
+    defer app.allocator.free(items);
+
+    while (items.len > 0) {
+        const outcomes = try app.allocator.alloc(bool, items.len);
+        defer app.allocator.free(outcomes);
+
+        const completed = runToggleWorker(app, widget, session, cache_dir, items, outcomes);
+        var outcome = try collectProfileApplyOutcome(app, items, outcomes, completed, remote);
+        defer outcome.deinit(app.allocator);
+
+        if (completed < items.len) return false;
+        if (outcome.failed_items.len == 0) return true;
+
+        const choice = panels.renderProfileApplyFailuresOverlay(
+            &app.term_rows,
+            &app.term_cols,
+            refreshTerminalSizeValues,
+            widget,
+            outcome.failed_names.items,
+        );
+        widget.force_full_redraw = true;
+        switch (choice) {
+            .keep => return false,
+            .retry => {
+                app.allocator.free(items);
+                items = outcome.failed_items;
+                outcome.failed_items = &.{};
+            },
+        }
+    }
+    return true;
 }
 
 fn runProfilesState(app: *App, profiles_state: *ProfilesState) !void {
@@ -897,7 +1006,8 @@ fn runProfilesState(app: *App, profiles_state: *ProfilesState) !void {
     var store = loadProfileStore(app);
     defer store.deinit();
 
-    // No saved profiles: do nothing, even if trackers changed.
+    // No saved profiles: nothing to load. The search screen normally catches
+    // this first and explains how to create one.
     if (store.count() == 0) {
         returnFromProfiles(app, profiles_state);
         return;
@@ -943,32 +1053,34 @@ fn runProfilesState(app: *App, profiles_state: *ProfilesState) !void {
     try refreshProfilesWidget(app, &widget, &store);
 
     // Modified-warning step: live set differs from the active profile.
-    if (store.active) |active_name| {
-        if (store.get(active_name)) |active_profile| {
-            if (!profiles.setsEqual(active_profile.indexers.items, enabled.items)) {
-                const choice = panels.renderProfileModifiedOverlay(
-                    &app.term_rows,
-                    &app.term_cols,
-                    refreshTerminalSizeValues,
-                    &widget,
-                );
-                switch (choice) {
-                    .save_existing => {
-                        store.upsert(active_name, enabled.items) catch {};
-                        saveProfileStore(app, &store);
-                        try refreshProfilesWidget(app, &widget, &store);
-                    },
-                    .new_profile => {
-                        _ = try promptAndSaveNewProfile(app, &widget, &store, enabled.items);
-                        try refreshProfilesWidget(app, &widget, &store);
-                    },
-                    .discard => {},
-                    .cancel => {
-                        returnFromProfiles(app, profiles_state);
-                        return;
-                    },
+    app.active_profile_modified = activeProfileModified(&store, enabled.items);
+    if (app.active_profile_modified orelse false) {
+        const active_name = store.active.?;
+        const choice = panels.renderProfileModifiedOverlay(
+            &app.term_rows,
+            &app.term_cols,
+            refreshTerminalSizeValues,
+            &widget,
+        );
+        widget.force_full_redraw = true;
+        switch (choice) {
+            .save_existing => {
+                if (saveProfileAs(app, &widget, &store, active_name, enabled.items, false)) {
+                    app.active_profile_modified = false;
                 }
-            }
+                try refreshProfilesWidget(app, &widget, &store);
+            },
+            .new_profile => {
+                if (try promptAndSaveNewProfile(app, &widget, &store, enabled.items)) {
+                    app.active_profile_modified = false;
+                }
+                try refreshProfilesWidget(app, &widget, &store);
+            },
+            .discard => {},
+            .cancel => {
+                returnFromProfiles(app, profiles_state);
+                return;
+            },
         }
     }
 
@@ -1000,7 +1112,7 @@ fn runProfilesState(app: *App, profiles_state: *ProfilesState) !void {
         };
         const event = maybe_event orelse {
             if (consumeMarqueeTick(&marquee_budget_ms, marquee_step_interval_ms)) {
-                if (widget.advanceHintsMarquee(app.term_rows, app.term_cols)) {
+                if (widget.advanceMarquee(app.term_rows, app.term_cols)) {
                     needs_render = true;
                 }
             }
@@ -1014,22 +1126,25 @@ fn runProfilesState(app: *App, profiles_state: *ProfilesState) !void {
             .load => |idx| {
                 if (idx >= store.list.items.len) continue;
                 const profile = &store.list.items[idx];
-                var failed = applyProfileChanges(app, &session, profile.indexers.items, enabled.items, remote_indexers) catch {
+                const fully_applied = applyProfileWithProgress(
+                    app,
+                    &widget,
+                    &session,
+                    remote_indexers,
+                    profile.indexers.items,
+                    enabled.items,
+                ) catch {
                     deinitProfilesState(app, profiles_state);
                     app.state = .{ .err = .{ .message = "Failed to apply profile" } };
                     return;
                 };
-                defer failed.deinit(app.allocator);
-                store.setActive(profile.name) catch {};
-                saveProfileStore(app, &store);
-                if (failed.items.len > 0) {
-                    panels.renderProfileApplyFailuresOverlay(
-                        &app.term_rows,
-                        &app.term_cols,
-                        refreshTerminalSizeValues,
-                        &widget,
-                        failed.items,
-                    );
+                // The profile becomes active even when only partly applied:
+                // the search screen then flags it as modified.
+                app.active_profile_modified = !fully_applied;
+                if (store.setActive(profile.name)) |_| {
+                    _ = persistProfileStore(app, &widget, &store);
+                } else |_| {
+                    showProfileSaveError(app, &widget);
                 }
                 returnFromProfiles(app, profiles_state);
                 return;
@@ -1048,7 +1163,7 @@ fn runProfilesState(app: *App, profiles_state: *ProfilesState) !void {
                     const name_copy = app.allocator.dupe(u8, store.list.items[idx].name) catch continue;
                     defer app.allocator.free(name_copy);
                     store.remove(name_copy);
-                    saveProfileStore(app, &store);
+                    _ = persistProfileStore(app, &widget, &store);
                     if (store.count() == 0) {
                         returnFromProfiles(app, profiles_state);
                         return;
@@ -1149,11 +1264,8 @@ fn applyCommitOutcomes(
     return failed_names;
 }
 
-/// Commits pending toggles on a worker thread, animating an in-panel
-/// "Committing c/t" status row (mirroring the results screen) until the worker
-/// finishes, then applies the outcomes. During the wait the list stays
-/// scrollable (arrow keys move the cursor) but toggles/save/exit are ignored;
-/// ESC requests a graceful stop after the in-flight tracker.
+/// Commits pending toggles on a worker thread with live progress (see
+/// `runToggleWorker`), then applies the outcomes to the widget.
 fn runCommitWithProgress(
     app: *App,
     widget: *indexers_widget.IndexersWidget,
@@ -1166,6 +1278,23 @@ fn runCommitWithProgress(
     const cache_dir = try app.deps.jackett_indexer_cache_dir_resolver(app.allocator);
     defer app.allocator.free(cache_dir);
 
+    const completed = runToggleWorker(app, widget, session, cache_dir, items, outcomes);
+    return applyCommitOutcomes(app, widget, items, outcomes, completed);
+}
+
+/// Runs `commitItems` on a worker thread, animating an in-panel progress
+/// status row on `widget` (the Indexers or Profiles list) until the worker
+/// finishes. During the wait the list stays scrollable (arrow keys move the
+/// cursor) but every other action is ignored; ESC requests a graceful stop
+/// after the in-flight indexer. Returns how many items were attempted.
+fn runToggleWorker(
+    app: *App,
+    widget: anytype,
+    session: *const jackett_admin.AdminSession,
+    cache_dir: []const u8,
+    items: []const CommitItem,
+    outcomes: []bool,
+) usize {
     var progress = jackett.Progress.init();
     progress.setTotal(items.len);
     progress.setPhase(.querying);
@@ -1175,7 +1304,7 @@ fn runCommitWithProgress(
         // No worker thread available: commit synchronously (UI stays blocked).
         commitItems(app, session, cache_dir, items, outcomes, &progress, &cancel);
         widget.setCommitProgress(null);
-        return applyCommitOutcomes(app, widget, items, outcomes, progress.snapshot().completed);
+        return progress.snapshot().completed;
     };
 
     const input_poll_ms: i32 = 80;
@@ -1200,7 +1329,7 @@ fn runCommitWithProgress(
         if (snap.phase == .done) break;
 
         // ~80ms tick. ESC requests a graceful stop; arrows scroll the list;
-        // everything else (toggle/save/exit) is ignored mid-commit.
+        // everything else is ignored mid-commit.
         const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch null;
         if (maybe_event) |event| {
             if (event.key == .escape) {
@@ -1217,7 +1346,7 @@ fn runCommitWithProgress(
     thread.join();
     widget.setCommitProgress(null);
     widget.force_full_redraw = true;
-    return applyCommitOutcomes(app, widget, items, outcomes, progress.snapshot().completed);
+    return progress.snapshot().completed;
 }
 
 /// Best-effort persistence of the latest commit outcomes to last_status.json.
@@ -2114,35 +2243,7 @@ test "deinitIndexersState frees pending_search_query when returning to search" {
     };
 
     var indexers_state = IndexersState{
-        .return_to = .search,
-        .pending_results = null,
         .pending_search_query = try std.testing.allocator.dupe(u8, "ubuntu"),
-    };
-
-    deinitIndexersState(&app, &indexers_state);
-}
-
-test "deinitIndexersState frees pending_results when returning to results" {
-    var app = App{
-        .allocator = std.testing.allocator,
-        .client = undefined,
-        .deps = .{},
-        .state = .{ .search = .{ .query = "" } },
-        .running = true,
-        .term_rows = 24,
-        .term_cols = 80,
-        .terminal = "xterm",
-    };
-
-    var indexers_state = IndexersState{
-        .return_to = .results,
-        .pending_results = .{
-            .query = try std.testing.allocator.dupe(u8, "ubuntu"),
-            .torrents = .empty,
-            .search_session = null,
-            .live_status = .{},
-        },
-        .pending_search_query = &.{},
     };
 
     deinitIndexersState(&app, &indexers_state);
@@ -2169,8 +2270,6 @@ test "runIndexersState login failure surfaces as ErrorState and cleans up pendin
     };
 
     var indexers_state = IndexersState{
-        .return_to = .search,
-        .pending_results = null,
         .pending_search_query = try std.testing.allocator.dupe(u8, "ubuntu"),
     };
 
@@ -2449,7 +2548,7 @@ test "decideProfileSave maps active/match combinations" {
     try std.testing.expectEqual(SaveDecision.choose, decideProfileSave(true, false));
 }
 
-test "applyProfileChanges enables/disables to match profile and reports failures" {
+test "profile apply enables/disables to match profile and reports failures for retry" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const tmp_abs = try tmp.dir.realPathFileAlloc(compat.io(), ".", std.testing.allocator);
@@ -2505,41 +2604,64 @@ test "applyProfileChanges enables/disables to match profile and reports failures
 
     // Enabled now: keep, drop. Profile wants: keep, add.
     // Plan: enable "add" (succeeds), disable "drop" (fails -> reported).
-    var failed = try applyProfileChanges(
-        &app,
-        &session,
-        &.{ "keep", "add" },
-        &.{ "keep", "drop" },
-        &.{},
-    );
-    defer failed.deinit(std.testing.allocator);
+    const items = try buildProfileApplyItems(&app, &.{ "keep", "add" }, &.{ "keep", "drop" });
+    defer std.testing.allocator.free(items);
+    try std.testing.expectEqual(@as(usize, 2), items.len);
 
-    try std.testing.expectEqual(@as(usize, 1), failed.items.len);
-    try std.testing.expectEqualStrings("drop", failed.items[0]);
+    var outcomes: [2]bool = undefined;
+    var progress = jackett.Progress.init();
+    progress.setTotal(items.len);
+    var cancel = std.atomic.Value(bool).init(false);
+    commitItems(&app, &session, cache_dir, items, &outcomes, &progress, &cancel);
 
-    // Applying a profile also records each tracker's commit outcome.
+    var drop_id = "drop".*;
+    var drop_name = "Drop Me".*;
+    const remote = [_]jackett_admin.IndexerInfo{
+        .{ .id = &drop_id, .name = &drop_name, .configured = true, .categories = drop_name[0..0] },
+    };
+    var outcome = try collectProfileApplyOutcome(&app, items, &outcomes, progress.snapshot().completed, &remote);
+    defer outcome.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), outcome.failed_items.len);
+    try std.testing.expectEqualStrings("drop", outcome.failed_items[0].id);
+    try std.testing.expect(!outcome.failed_items[0].enable);
+    try std.testing.expectEqual(@as(usize, 1), outcome.failed_names.items.len);
+    try std.testing.expectEqualStrings("Drop Me", outcome.failed_names.items[0]);
+
+    // Applying a profile also records each indexer's commit outcome.
     var store = try last_status.load(std.testing.allocator, status_path);
     defer store.deinit();
     try std.testing.expectEqual(@as(?bool, true), store.get("add"));
     try std.testing.expectEqual(@as(?bool, false), store.get("drop"));
 }
 
-test "applyProfileChanges no-ops when sets already match" {
-    const mock = struct {
-        fn exec(_: std.mem.Allocator, _: jackett_admin.AdminRequest) jackett_admin.AdminError!jackett_admin.AdminResponse {
-            return error.HttpError; // must never be called
-        }
-        fn cacheDir(alloc: std.mem.Allocator) anyerror![]u8 {
-            return alloc.dupe(u8, "/tmp/unused");
-        }
-    };
-
+test "buildProfileApplyItems is empty when sets already match" {
     var app = App{
         .allocator = std.testing.allocator,
-        .client = jackett.Client.init(std.testing.allocator, "http://localhost:9117", "test-key"),
+        .client = undefined,
+        .deps = .{},
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "xterm",
+    };
+
+    const items = try buildProfileApplyItems(&app, &.{ "a", "b" }, &.{ "b", "a" });
+    defer std.testing.allocator.free(items);
+    try std.testing.expectEqual(@as(usize, 0), items.len);
+}
+
+test "collectProfileApplyOutcome ignores items skipped by a cancel" {
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = undefined,
         .deps = .{
-            .jackett_admin_executor = mock.exec,
-            .jackett_indexer_cache_dir_resolver = mock.cacheDir,
+            .last_status_path_resolver = struct {
+                fn f(_: std.mem.Allocator) anyerror![]u8 {
+                    return error.NoStatusFileInTests;
+                }
+            }.f,
         },
         .state = .{ .search = .{ .query = "" } },
         .running = true,
@@ -2548,13 +2670,55 @@ test "applyProfileChanges no-ops when sets already match" {
         .terminal = "xterm",
     };
 
-    var session = jackett_admin.AdminSession{ .cookie = try std.testing.allocator.dupe(u8, "Jackett=abc123") };
-    defer session.deinit(std.testing.allocator);
+    const items = [_]CommitItem{
+        .{ .idx = 0, .enable = true, .id = "a" },
+        .{ .idx = 1, .enable = false, .id = "b" },
+    };
+    // Only the first item was attempted (and failed); "b" was never tried.
+    const outcomes = [_]bool{ false, false };
+    var outcome = try collectProfileApplyOutcome(&app, &items, &outcomes, 1, &.{});
+    defer outcome.deinit(std.testing.allocator);
 
-    var failed = try applyProfileChanges(&app, &session, &.{ "a", "b" }, &.{ "b", "a" }, &.{});
-    defer failed.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), outcome.failed_items.len);
+    try std.testing.expectEqualStrings("a", outcome.failed_items[0].id);
+    try std.testing.expectEqualStrings("a", outcome.failed_names.items[0]);
+}
 
-    try std.testing.expectEqual(@as(usize, 0), failed.items.len);
+test "activeProfileModified compares the live set with the active profile" {
+    var store = profiles.ProfileStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    try std.testing.expectEqual(@as(?bool, null), activeProfileModified(&store, &.{"a"}));
+
+    try store.upsert("Movies", &.{ "a", "b" });
+    try std.testing.expectEqual(@as(?bool, null), activeProfileModified(&store, &.{"a"}));
+
+    try store.setActive("Movies");
+    try std.testing.expectEqual(@as(?bool, false), activeProfileModified(&store, &.{ "b", "a" }));
+    try std.testing.expectEqual(@as(?bool, true), activeProfileModified(&store, &.{"a"}));
+}
+
+test "saveProfileStore reports a write failure instead of swallowing it" {
+    var app = App{
+        .allocator = std.testing.allocator,
+        .client = undefined,
+        .deps = .{
+            .profiles_path_resolver = struct {
+                fn f(_: std.mem.Allocator) anyerror![]u8 {
+                    return error.NoProfilesPath;
+                }
+            }.f,
+        },
+        .state = .{ .search = .{ .query = "" } },
+        .running = true,
+        .term_rows = 24,
+        .term_cols = 80,
+        .terminal = "xterm",
+    };
+
+    var store = profiles.ProfileStore.init(std.testing.allocator);
+    defer store.deinit();
+    try std.testing.expectError(error.NoProfilesPath, saveProfileStore(&app, &store));
 }
 
 test "runProfilesState with no saved profiles returns to previous screen" {
@@ -2582,8 +2746,6 @@ test "runProfilesState with no saved profiles returns to previous screen" {
     };
 
     var profiles_state = ProfilesState{
-        .return_to = .search,
-        .pending_results = null,
         .pending_search_query = try std.testing.allocator.dupe(u8, "ubuntu"),
     };
 
@@ -2611,8 +2773,6 @@ test "deinitProfilesState frees pending_search_query when returning to search" {
     };
 
     var profiles_state = ProfilesState{
-        .return_to = .search,
-        .pending_results = null,
         .pending_search_query = try std.testing.allocator.dupe(u8, "ubuntu"),
     };
 
