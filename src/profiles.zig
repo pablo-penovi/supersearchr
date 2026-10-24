@@ -101,6 +101,40 @@ pub const ProfileStore = struct {
         self.active = new_active;
     }
 
+    /// Renames profile `old` to `new`, keeping its position and indexers. A
+    /// different profile already named `new` is replaced by it. The active
+    /// profile follows the rename. No-op when `old` does not exist or the
+    /// names are equal. `old` must not alias a name owned by the store.
+    pub fn rename(self: *ProfileStore, old: []const u8, new: []const u8) !void {
+        if (std.mem.eql(u8, old, new)) return;
+        var target: usize = for (self.list.items, 0..) |*p, i| {
+            if (std.mem.eql(u8, p.name, old)) break i;
+        } else return;
+
+        // Allocate up front so a failure leaves the store untouched.
+        const new_name = try self.allocator.dupe(u8, new);
+        errdefer self.allocator.free(new_name);
+        const was_active = if (self.active) |a| std.mem.eql(u8, a, old) else false;
+        const new_active: ?[]u8 = if (was_active) try self.allocator.dupe(u8, new) else null;
+
+        for (self.list.items, 0..) |*p, i| {
+            if (i != target and std.mem.eql(u8, p.name, new)) {
+                var replaced = self.list.orderedRemove(i);
+                replaced.deinit(self.allocator);
+                if (i < target) target -= 1;
+                break;
+            }
+        }
+
+        const renamed = &self.list.items[target];
+        self.allocator.free(renamed.name);
+        renamed.name = new_name;
+        if (new_active) |a| {
+            self.allocator.free(self.active.?);
+            self.active = a;
+        }
+    }
+
     /// Returns the profile names in insertion order. The outer slice is owned
     /// by the caller (free it); each name slice is borrowed from the store.
     pub fn names(self: *const ProfileStore, allocator: std.mem.Allocator) ![][]const u8 {
@@ -276,6 +310,52 @@ test "remove of non-active profile keeps active" {
     store.remove("B");
     try std.testing.expect(store.active != null);
     try std.testing.expectEqualStrings("A", store.active.?);
+}
+
+test "rename keeps position and indexers and moves the active marker" {
+    var store = ProfileStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    try store.upsert("A", &.{"x"});
+    try store.upsert("B", &.{ "y", "z" });
+    try store.upsert("C", &.{"w"});
+    try store.setActive("B");
+
+    try store.rename("B", "Movies");
+    try std.testing.expectEqual(@as(usize, 3), store.count());
+    try std.testing.expectEqualStrings("Movies", store.list.items[1].name);
+    try std.testing.expectEqual(@as(usize, 2), store.get("Movies").?.indexers.items.len);
+    try std.testing.expect(store.get("B") == null);
+    try std.testing.expectEqualStrings("Movies", store.active.?);
+}
+
+test "rename onto an existing name replaces that profile" {
+    var store = ProfileStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    try store.upsert("A", &.{"x"});
+    try store.upsert("B", &.{"y"});
+    try store.upsert("C", &.{"z"});
+    try store.setActive("A");
+
+    try store.rename("C", "A");
+    try std.testing.expectEqual(@as(usize, 2), store.count());
+    try std.testing.expectEqualStrings("B", store.list.items[0].name);
+    try std.testing.expectEqualStrings("A", store.list.items[1].name);
+    try std.testing.expectEqualStrings("z", store.get("A").?.indexers.items[0]);
+    // The active name still resolves, now to the renamed profile.
+    try std.testing.expectEqualStrings("A", store.active.?);
+}
+
+test "rename is a no-op for unknown or unchanged names" {
+    var store = ProfileStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    try store.upsert("A", &.{"x"});
+    try store.rename("missing", "B");
+    try store.rename("A", "A");
+    try std.testing.expectEqual(@as(usize, 1), store.count());
+    try std.testing.expectEqualStrings("A", store.list.items[0].name);
 }
 
 test "setActive replaces and clears" {

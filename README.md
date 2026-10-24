@@ -128,6 +128,7 @@ Indexers screen:
 - `Space`: toggle selected indexer active/inactive
 - `Enter`: save pending changes (`Esc` while saving stops after the indexer in flight)
 - `F3`: save the enabled indexers as a profile (new, or overwriting the active one)
+- `F2`: switch to the profiles screen (pending changes must be committed or discarded first)
 - `Esc`: revert pending changes, or return to the search screen when there are none
 
 The indexers table shows each indexer's categories, a **Record** of its last five search outcomes, and a **Last Status** column with the outcome of the most recent attempt to enable or disable it.
@@ -137,8 +138,12 @@ Profiles screen (`F2`):
 - `Up` / `Down`: move one profile
 - `Shift+Up` / `Shift+Down`: move one page
 - `Enter`: load the selected profile, enabling and disabling indexers on Jackett to match it, with live progress (`Esc` stops after the indexer in flight). Indexers that fail to toggle can be retried or kept as-is.
+- `r` or `R`: rename the selected profile
 - `Del`: delete the selected profile
+- `F1`: switch to the indexers screen
 - `Esc`: return to the search screen
+
+On wide terminals a panel beside the list previews the selected profile: each of its indexers with what loading it would do (`stays on`, `+ enable`, or `missing` if Jackett no longer has it), followed by the enabled indexers it would disable.
 
 A profile is a named set of enabled indexers. If the live indexers differ from the active profile when you open the screen, you are offered to save the changes into it, save them as a new profile, or discard them.
 
@@ -148,7 +153,7 @@ Disabling an indexer deletes it through Jackett's admin API after caching its co
 
 Besides `config.json`, the app config directory holds `profiles.json` (saved profiles and the active one), `record.json` (per-indexer search outcomes) and `last_status.json` (per-indexer enable/disable outcomes).
 
-State flow: `SEARCH -> RESULTS`, with `SEARCH -> INDEXERS` (`F1`) and `SEARCH -> PROFILES` (`F2`) returning to search; any state can fall into `ERROR`.
+State flow: `SEARCH -> RESULTS`, with `SEARCH -> INDEXERS` (`F1`) and `SEARCH -> PROFILES` (`F2`), which switch between each other with the same keys and return to search; any state can fall into `ERROR`.
 
 ## Debug Logging
 

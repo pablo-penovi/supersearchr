@@ -415,27 +415,38 @@ pub fn renderProfileSaveChoiceOverlay(
     }
 }
 
-pub const ProfileUncommittedAction = enum { include, discard, cancel };
+pub const ProfileUncommittedAction = enum { commit, discard, cancel };
 
-fn matchUncommittedKey(event: term.Event) ?ProfileUncommittedAction {
+/// Why the uncommitted-changes prompt is shown: F3 saving a profile (commit
+/// the toggles and include them in it) or F2 leaving for the profiles screen.
+pub const UncommittedPurpose = enum { save_profile, leave };
+
+fn matchUncommittedKey(event: term.Event, purpose: UncommittedPurpose) ?ProfileUncommittedAction {
+    const commit_key: u8 = switch (purpose) {
+        .save_profile => 'i',
+        .leave => 'c',
+    };
     return switch (event.key) {
         .escape => .cancel,
-        .char => switch (event.value) {
-            'i', 'I' => .include,
-            'd', 'D' => .discard,
-            else => null,
-        },
+        .char => if (std.ascii.toLower(event.value) == commit_key)
+            .commit
+        else if (event.value == 'd' or event.value == 'D')
+            .discard
+        else
+            null,
         else => null,
     };
 }
 
-/// F3 prompt shown when the Indexers screen has uncommitted toggles.
+/// Prompt shown when the Indexers screen has uncommitted toggles and the user
+/// presses F3 (save profile) or F2 (go to profiles).
 pub fn renderProfileUncommittedOverlay(
     term_rows: *u16,
     term_cols: *u16,
     refresh_terminal_size: RefreshTerminalSizeFn,
     backdrop: anytype,
     pending_names: []const []const u8,
+    purpose: UncommittedPurpose,
 ) ProfileUncommittedAction {
     term.discardPendingInput();
     var needs_render = true;
@@ -449,13 +460,16 @@ pub fn renderProfileUncommittedOverlay(
                 "Uncommitted Changes",
                 theme.superseedr_like.warn,
                 pending_names,
-                "(i) commit & include  (d) discard  Esc cancel",
+                switch (purpose) {
+                    .save_profile => "(i) commit & include  (d) discard  Esc cancel",
+                    .leave => "(c) commit  (d) discard  Esc cancel",
+                },
             );
             needs_render = false;
         }
         const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return .cancel;
         if (maybe_event) |event| {
-            if (matchUncommittedKey(event)) |action| return action;
+            if (matchUncommittedKey(event, purpose)) |action| return action;
         }
     }
 }
@@ -465,22 +479,26 @@ pub const NamePromptResult = union(enum) {
     cancel,
 };
 
-/// Text-input modal for naming a profile. Returns an allocator-owned name
-/// (caller frees) or `.cancel`. If the typed name collides with an existing
-/// one, the first ENTER arms an overwrite (shows a hint); a second ENTER on
-/// the same name confirms. Editing the text disarms.
+/// Text-input modal for naming a profile, titled `title` and pre-filled with
+/// `initial`. Returns an allocator-owned name (caller frees) or `.cancel`. If
+/// the typed name collides with one of `existing_names`, the first ENTER arms
+/// an overwrite (shows a hint); a second ENTER on the same name confirms.
+/// Editing the text disarms.
 pub fn renderProfileNamePromptOverlay(
     allocator: std.mem.Allocator,
     term_rows: *u16,
     term_cols: *u16,
     refresh_terminal_size: RefreshTerminalSizeFn,
     backdrop: anytype,
+    title: []const u8,
+    initial: []const u8,
     existing_names: []const []const u8,
 ) !NamePromptResult {
     term.discardPendingInput();
     defer term.hideCursor();
     var input = std.ArrayList(u8).empty;
     defer input.deinit(allocator);
+    try input.appendSlice(allocator, initial);
 
     var armed_overwrite = false;
     var needs_render = true;
@@ -491,7 +509,7 @@ pub fn renderProfileNamePromptOverlay(
         if (needs_render) {
             term.hideCursor();
             renderDimmedBackdrop(backdrop, term_rows.*, term_cols.*);
-            drawNamePromptModal(input.items, armed_overwrite);
+            drawNamePromptModal(title, input.items, armed_overwrite);
             needs_render = false;
         }
 
@@ -538,7 +556,7 @@ fn nameExists(existing_names: []const []const u8, name: []const u8) bool {
     return false;
 }
 
-fn drawNamePromptModal(query: []const u8, armed_overwrite: bool) void {
+fn drawNamePromptModal(title: []const u8, query: []const u8, armed_overwrite: bool) void {
     const stdout = compat.stdoutWriter();
     const colors = theme.superseedr_like;
     const border = theme.unicode_border;
@@ -549,7 +567,8 @@ fn drawNamePromptModal(query: []const u8, armed_overwrite: bool) void {
         term.moveCursor(1, 1);
         term.setFg256(colors.accent);
         term.setBold(true);
-        stdout.writeAll("Profile name:\r\n") catch {};
+        stdout.writeAll(title) catch {};
+        stdout.writeAll(":\r\n") catch {};
         term.setBold(false);
         term.setFg256(colors.text);
         var input_buf: [128]u8 = undefined;
@@ -585,7 +604,9 @@ fn drawNamePromptModal(query: []const u8, armed_overwrite: bool) void {
     stdout.writeAll(border.vertical) catch {};
     term.setFg256(colors.panel_title);
     term.setBold(true);
-    theme.writePadded(stdout, " Profile name ", panel_width - 2) catch {};
+    var title_buf: [64]u8 = undefined;
+    const title_line = std.mem.print(&title_buf, " {s} ", .{title}) catch " Profile name ";
+    theme.writePadded(stdout, title_line, panel_width - 2) catch {};
     term.setBold(false);
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
@@ -1152,11 +1173,19 @@ test "matchSaveChoiceKey maps o/n and escape" {
     try std.testing.expect(matchSaveChoiceKey(.{ .key = .char, .value = 'd' }) == null);
 }
 
-test "matchUncommittedKey maps i/d and escape" {
-    try std.testing.expectEqual(ProfileUncommittedAction.include, matchUncommittedKey(.{ .key = .char, .value = 'i' }).?);
-    try std.testing.expectEqual(ProfileUncommittedAction.discard, matchUncommittedKey(.{ .key = .char, .value = 'd' }).?);
-    try std.testing.expectEqual(ProfileUncommittedAction.cancel, matchUncommittedKey(.{ .key = .escape, .value = 0 }).?);
-    try std.testing.expect(matchUncommittedKey(.{ .key = .char, .value = 'z' }) == null);
+test "matchUncommittedKey maps i/d and escape when saving a profile" {
+    try std.testing.expectEqual(ProfileUncommittedAction.commit, matchUncommittedKey(.{ .key = .char, .value = 'i' }, .save_profile).?);
+    try std.testing.expectEqual(ProfileUncommittedAction.discard, matchUncommittedKey(.{ .key = .char, .value = 'd' }, .save_profile).?);
+    try std.testing.expectEqual(ProfileUncommittedAction.cancel, matchUncommittedKey(.{ .key = .escape, .value = 0 }, .save_profile).?);
+    try std.testing.expect(matchUncommittedKey(.{ .key = .char, .value = 'z' }, .save_profile) == null);
+    try std.testing.expect(matchUncommittedKey(.{ .key = .char, .value = 'c' }, .save_profile) == null);
+}
+
+test "matchUncommittedKey maps c/d and escape when leaving for profiles" {
+    try std.testing.expectEqual(ProfileUncommittedAction.commit, matchUncommittedKey(.{ .key = .char, .value = 'C' }, .leave).?);
+    try std.testing.expectEqual(ProfileUncommittedAction.discard, matchUncommittedKey(.{ .key = .char, .value = 'd' }, .leave).?);
+    try std.testing.expectEqual(ProfileUncommittedAction.cancel, matchUncommittedKey(.{ .key = .escape, .value = 0 }, .leave).?);
+    try std.testing.expect(matchUncommittedKey(.{ .key = .char, .value = 'i' }, .leave) == null);
 }
 
 test "matchApplyFailuresKey maps r and escape, ignores others" {

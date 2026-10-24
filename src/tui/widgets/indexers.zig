@@ -323,9 +323,9 @@ pub const IndexersWidget = struct {
     fn hintsText(self: *IndexersWidget, compact: bool) []const u8 {
         if (compact) {
             return if (self.hasPendingChanges())
-                "SPACE toggle | ENTER save | ESC revert | F3 save profile"
+                "SPACE toggle | ENTER save | ESC revert | F3 save profile | F2 profiles"
             else
-                "SPACE toggle | ESC back | F3 save profile";
+                "SPACE toggle | ESC back | F3 save profile | F2 profiles";
         }
         if (self.commit_progress) |progress| {
             return if (progress.canceling)
@@ -334,9 +334,9 @@ pub const IndexersWidget = struct {
                 "\xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | ESC stop after current";
         }
         return if (self.hasPendingChanges())
-            "\xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | SPACE toggle | ENTER save | ESC revert | F3 save profile"
+            "\xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | SPACE toggle | ENTER save | ESC revert | F3 save profile | F2 profiles"
         else
-            "\xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | SPACE toggle | ESC back | F3 save profile";
+            "\xe2\x86\x91\xe2\x86\x93 move | shift+\xe2\x86\x91\xe2\x86\x93 page | SPACE toggle | ESC back | F3 save profile | F2 profiles";
     }
 
     fn ensureMarqueeTarget(self: *IndexersWidget, categories_col_width: usize) void {
@@ -778,6 +778,8 @@ fn drawCompact(
     max_cols: u16,
 ) void {
     term.moveCursor(1, 1);
+    // Wipe whatever a previous screen or notice left on these lines.
+    term.clearBelow();
     term.setFg256(colors.panel_title);
     term.setBold(true);
     stdout.writeAll("Indexers\r\n") catch {};

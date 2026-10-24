@@ -587,6 +587,20 @@ fn runIndexersState(app: *App, indexers_state: *IndexersState) !void {
             needs_render = true;
             continue;
         }
+        if (event.key == .f2) {
+            const leave = prepareLeaveIndexersForProfiles(app, &widget, &session) catch {
+                deinitIndexersState(app, indexers_state);
+                app.state = .{ .err = .{ .message = "Failed to save indexer changes" } };
+                return;
+            };
+            if (leave) {
+                app.state = .{ .profiles = .{ .pending_search_query = indexers_state.pending_search_query } };
+                return;
+            }
+            widget.force_full_redraw = true;
+            needs_render = true;
+            continue;
+        }
         const action = widget.handleEvent(event);
         needs_render = true;
 
@@ -669,9 +683,10 @@ fn handleProfileSaveFromIndexers(
             refreshTerminalSizeValues,
             widget,
             pending_names.items,
+            .save_profile,
         );
         switch (choice) {
-            .include => {
+            .commit => {
                 const outcome = try commitIndexerChanges(app, widget, session);
                 if (outcome == .reverted) return;
             },
@@ -728,6 +743,59 @@ fn handleProfileSaveFromIndexers(
     }
 }
 
+/// F2 on the Indexers screen: decides whether to switch to the profiles
+/// screen. With no saved profiles it explains how to create one and stays.
+/// Uncommitted toggles must first be committed or discarded (or the switch
+/// cancelled). Returns true when the caller should switch.
+fn prepareLeaveIndexersForProfiles(
+    app: *App,
+    widget: *indexers_widget.IndexersWidget,
+    session: *const jackett_admin.AdminSession,
+) !bool {
+    var store = loadProfileStore(app);
+    defer store.deinit();
+    if (store.count() == 0) {
+        panels.renderInfoNoticeOverlay(
+            &app.term_rows,
+            &app.term_cols,
+            refreshTerminalSizeValues,
+            widget,
+            "Profiles",
+            no_profiles_on_indexers_message,
+            theme.superseedr_like.accent,
+        );
+        return false;
+    }
+
+    if (widget.hasPendingChanges()) {
+        var pending_names: std.ArrayList([]const u8) = .empty;
+        defer pending_names.deinit(app.allocator);
+        for (widget.rows) |row| {
+            if (row.pending_active != null) try pending_names.append(app.allocator, row.name);
+        }
+        const choice = panels.renderProfileUncommittedOverlay(
+            &app.term_rows,
+            &app.term_cols,
+            refreshTerminalSizeValues,
+            widget,
+            pending_names.items,
+            .leave,
+        );
+        switch (choice) {
+            .commit => {
+                // Reverting from the failures overlay keeps the user here to
+                // see the outcome rather than leaving straight away.
+                if (try commitIndexerChanges(app, widget, session) == .reverted) return false;
+            },
+            .discard => widget.revertPending(),
+            .cancel => return false,
+        }
+    }
+    return true;
+}
+
+const no_profiles_on_indexers_message = "No profiles yet: pick indexers, then press F3 to save one";
+
 const SaveDecision = enum { first_time, no_change, choose };
 
 /// Pure decision for F3 save: with no active profile it's a first-time save;
@@ -769,6 +837,8 @@ fn promptAndSaveNewProfile(
         &app.term_cols,
         refreshTerminalSizeValues,
         backdrop,
+        "Profile name",
+        "",
         existing,
     );
     switch (result) {
@@ -864,24 +934,130 @@ fn refreshProfilesWidget(
     app: *App,
     widget: *profiles_widget.ProfilesWidget,
     store: *const profiles.ProfileStore,
+    remote: []const jackett_admin.IndexerInfo,
 ) !void {
     var source_rows: std.ArrayList(profiles_widget.ProfilesWidget.SourceRow) = .empty;
-    defer source_rows.deinit(app.allocator);
+    defer {
+        for (source_rows.items) |row| app.allocator.free(row.details);
+        source_rows.deinit(app.allocator);
+    }
     for (store.list.items) |*p| {
         const is_active = if (store.active) |a| std.mem.eql(u8, a, p.name) else false;
-        try source_rows.append(app.allocator, .{
+        const details = try buildProfileDetails(app.allocator, p.indexers.items, remote);
+        source_rows.append(app.allocator, .{
             .name = p.name,
             .count = p.indexers.items.len,
             .active = is_active,
-        });
+            .details = details,
+        }) catch |err| {
+            app.allocator.free(details);
+            return err;
+        };
     }
     try widget.setProfiles(source_rows.items);
 }
 
-fn nameForId(remote: []const jackett_admin.IndexerInfo, id: []const u8) []const u8 {
-    for (remote) |info| {
-        if (std.mem.eql(u8, info.id, id)) return info.name;
+/// Details-panel rows previewing what loading a profile would do: its
+/// indexers (staying on, to enable, or missing from Jackett) sorted by name,
+/// followed by the currently-enabled indexers it would disable. Caller frees
+/// the slice; names borrow from `profile_ids`/`remote`.
+fn buildProfileDetails(
+    allocator: std.mem.Allocator,
+    profile_ids: []const []const u8,
+    remote: []const jackett_admin.IndexerInfo,
+) ![]profiles_widget.ProfilesWidget.DetailSource {
+    const DetailSource = profiles_widget.ProfilesWidget.DetailSource;
+    var list: std.ArrayList(DetailSource) = .empty;
+    errdefer list.deinit(allocator);
+
+    for (profile_ids) |id| {
+        const info = findIndexer(remote, id) orelse {
+            try list.append(allocator, .{ .name = id, .change = .missing });
+            continue;
+        };
+        try list.append(allocator, .{ .name = info.name, .change = if (info.configured) .keep else .enable });
     }
+    for (remote) |info| {
+        if (!info.configured) continue;
+        if (containsId(profile_ids, info.id)) continue;
+        try list.append(allocator, .{ .name = info.name, .change = .disable });
+    }
+
+    std.mem.sort(DetailSource, list.items, {}, lessThanDetail);
+    return list.toOwnedSlice(allocator);
+}
+
+fn lessThanDetail(_: void, a: profiles_widget.ProfilesWidget.DetailSource, b: profiles_widget.ProfilesWidget.DetailSource) bool {
+    const a_leaving = a.change == .disable;
+    const b_leaving = b.change == .disable;
+    if (a_leaving != b_leaving) return b_leaving;
+    return std.ascii.lessThanIgnoreCase(a.name, b.name);
+}
+
+fn findIndexer(remote: []const jackett_admin.IndexerInfo, id: []const u8) ?*const jackett_admin.IndexerInfo {
+    for (remote) |*info| {
+        if (std.mem.eql(u8, info.id, id)) return info;
+    }
+    return null;
+}
+
+fn containsId(ids: []const []const u8, id: []const u8) bool {
+    for (ids) |candidate| {
+        if (std.mem.eql(u8, candidate, id)) return true;
+    }
+    return false;
+}
+
+/// `r` on the Profiles screen: prompts for a new name (pre-filled with the
+/// current one) and renames the profile, keeping the cursor on it. Renaming
+/// onto another profile's name replaces that profile after a confirming ENTER.
+fn renameProfile(
+    app: *App,
+    widget: *profiles_widget.ProfilesWidget,
+    store: *profiles.ProfileStore,
+    remote: []const jackett_admin.IndexerInfo,
+    idx: usize,
+) !void {
+    const old_name = try app.allocator.dupe(u8, store.list.items[idx].name);
+    defer app.allocator.free(old_name);
+
+    // Collisions are only with the other profiles; keeping the name is a no-op.
+    var others: std.ArrayList([]const u8) = .empty;
+    defer others.deinit(app.allocator);
+    for (store.list.items, 0..) |p, i| {
+        if (i != idx) try others.append(app.allocator, p.name);
+    }
+
+    const result = try panels.renderProfileNamePromptOverlay(
+        app.allocator,
+        &app.term_rows,
+        &app.term_cols,
+        refreshTerminalSizeValues,
+        widget,
+        "Rename profile",
+        old_name,
+        others.items,
+    );
+    const new_name = switch (result) {
+        .name => |name| name,
+        .cancel => return,
+    };
+    defer app.allocator.free(new_name);
+    if (std.mem.eql(u8, new_name, old_name)) return;
+
+    store.rename(old_name, new_name) catch {
+        showProfileSaveError(app, widget);
+        return;
+    };
+    _ = persistProfileStore(app, widget, store);
+    try refreshProfilesWidget(app, widget, store, remote);
+    for (store.list.items, 0..) |p, i| {
+        if (std.mem.eql(u8, p.name, new_name)) widget.cursor = i;
+    }
+}
+
+fn nameForId(remote: []const jackett_admin.IndexerInfo, id: []const u8) []const u8 {
+    if (findIndexer(remote, id)) |info| return info.name;
     return id;
 }
 
@@ -1050,7 +1226,7 @@ fn runProfilesState(app: *App, profiles_state: *ProfilesState) !void {
 
     var widget = profiles_widget.ProfilesWidget.init(app.allocator);
     defer widget.deinit();
-    try refreshProfilesWidget(app, &widget, &store);
+    try refreshProfilesWidget(app, &widget, &store, remote_indexers);
 
     // Modified-warning step: live set differs from the active profile.
     app.active_profile_modified = activeProfileModified(&store, enabled.items);
@@ -1068,13 +1244,13 @@ fn runProfilesState(app: *App, profiles_state: *ProfilesState) !void {
                 if (saveProfileAs(app, &widget, &store, active_name, enabled.items, false)) {
                     app.active_profile_modified = false;
                 }
-                try refreshProfilesWidget(app, &widget, &store);
+                try refreshProfilesWidget(app, &widget, &store, remote_indexers);
             },
             .new_profile => {
                 if (try promptAndSaveNewProfile(app, &widget, &store, enabled.items)) {
                     app.active_profile_modified = false;
                 }
-                try refreshProfilesWidget(app, &widget, &store);
+                try refreshProfilesWidget(app, &widget, &store, remote_indexers);
             },
             .discard => {},
             .cancel => {
@@ -1118,6 +1294,10 @@ fn runProfilesState(app: *App, profiles_state: *ProfilesState) !void {
             }
             continue;
         };
+        if (event.key == .f1) {
+            app.state = .{ .indexers = .{ .pending_search_query = profiles_state.pending_search_query } };
+            return;
+        }
         const action = widget.handleEvent(event);
         needs_render = true;
 
@@ -1168,8 +1348,13 @@ fn runProfilesState(app: *App, profiles_state: *ProfilesState) !void {
                         returnFromProfiles(app, profiles_state);
                         return;
                     }
-                    try refreshProfilesWidget(app, &widget, &store);
+                    try refreshProfilesWidget(app, &widget, &store, remote_indexers);
                 }
+            },
+            .rename => |idx| {
+                if (idx >= store.list.items.len) continue;
+                try renameProfile(app, &widget, &store, remote_indexers, idx);
+                widget.force_full_redraw = true;
             },
             .close => {
                 returnFromProfiles(app, profiles_state);
@@ -2633,6 +2818,33 @@ test "profile apply enables/disables to match profile and reports failures for r
     defer store.deinit();
     try std.testing.expectEqual(@as(?bool, true), store.get("add"));
     try std.testing.expectEqual(@as(?bool, false), store.get("drop"));
+}
+
+test "buildProfileDetails previews keeps, enables, missing and disables" {
+    var ids = [_][3]u8{ "kep".*, "enb".*, "off".*, "dis".* };
+    var names = [_][7]u8{ "Charlie".*, "alpha  ".*, "Delta  ".*, "Bravo  ".* };
+    const remote = [_]jackett_admin.IndexerInfo{
+        .{ .id = &ids[0], .name = names[0][0..7], .configured = true, .categories = names[0][0..0] },
+        .{ .id = &ids[1], .name = names[1][0..5], .configured = false, .categories = names[1][0..0] },
+        .{ .id = &ids[2], .name = names[2][0..5], .configured = false, .categories = names[2][0..0] },
+        .{ .id = &ids[3], .name = names[3][0..5], .configured = true, .categories = names[3][0..0] },
+    };
+
+    // Profile: kep (enabled), enb (disabled), gone (unknown to Jackett).
+    // "dis" is enabled but not in the profile; "off" is neither.
+    const details = try buildProfileDetails(std.testing.allocator, &.{ "kep", "enb", "gone" }, &remote);
+    defer std.testing.allocator.free(details);
+
+    try std.testing.expectEqual(@as(usize, 4), details.len);
+    try std.testing.expectEqualStrings("alpha", details[0].name);
+    try std.testing.expectEqual(profiles_widget.ProfilesWidget.Change.enable, details[0].change);
+    try std.testing.expectEqualStrings("Charlie", details[1].name);
+    try std.testing.expectEqual(profiles_widget.ProfilesWidget.Change.keep, details[1].change);
+    try std.testing.expectEqualStrings("gone", details[2].name);
+    try std.testing.expectEqual(profiles_widget.ProfilesWidget.Change.missing, details[2].change);
+    // Indexers the load would disable come last.
+    try std.testing.expectEqualStrings("Bravo", details[3].name);
+    try std.testing.expectEqual(profiles_widget.ProfilesWidget.Change.disable, details[3].change);
 }
 
 test "buildProfileApplyItems is empty when sets already match" {

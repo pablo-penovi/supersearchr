@@ -26,7 +26,7 @@ Current project version: `v0.5.0`.
 - `src/config.zig`: Config file path handling, creation, defaults patching, and validation.
 - `src/debug/log.zig`: Optional debug logging controlled by environment variables.
 - `src/update_checker.zig`: Latest-release checker (GitHub API fetch + semantic version comparison).
-- `src/profiles.zig`: Indexer profiles store (named indexer-ID sets plus the active profile), apply-plan diffing, and `profiles.json` persistence.
+- `src/profiles.zig`: Indexer profiles store (named indexer-ID sets plus the active profile, with upsert/rename/remove), apply-plan diffing, and `profiles.json` persistence.
 - `src/record.zig`: Per-indexer search outcome history (last five successes/failures) persisted to `record.json`.
 - `src/last_status.zig`: Per-indexer latest enable/disable outcome persisted to `last_status.json`.
 - `src/structs/torrent.zig`: `Torrent` struct definition (title, stats, optional byte size, optional pub date, link) and metadata storage test.
@@ -40,7 +40,7 @@ Current project version: `v0.5.0`.
 - `src/tui/panels.zig`: Shared panel/overlay rendering helpers for notices, errors, and the profile save/apply/delete prompts.
 - `src/tui/app.zig`: App state machine (search/results/indexers/profiles/error), streaming Jackett session orchestration, indexer management and profile flows (worker-thread commits with live progress), and Superseedr handoff.
 - `src/tui/widgets/indexers.zig`: Indexers table widget with navigation, toggle state, Record/Last Status columns, commit progress, save/revert actions, and tests.
-- `src/tui/widgets/profiles.zig`: Profiles list widget for the F2 screen with navigation, load/delete actions, apply progress, and tests.
+- `src/tui/widgets/profiles.zig`: Profiles list widget for the F2 screen with a side-by-side details panel previewing the selected profile's changes, navigation, load/rename/delete actions, apply progress, and tests.
 - `src/tui/widgets/list_nav.zig`: Shared cursor/scroll/page navigation helpers and the commit-progress type used by list-style widgets.
 - `src/tui/widgets/hints.zig`: Key-hints footer marquee: scrolls the hints back and forth when they are wider than the terminal instead of letting them wrap.
 - `src/tui/widgets/search.zig`: Search input widget with the active-profile label, and tests.
