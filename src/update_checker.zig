@@ -68,8 +68,7 @@ pub fn checkLatestVersion(
     repo: Repo,
     executor: LatestVersionExecutor,
 ) UpdateError!?[]u8 {
-    const url = try std.fmt.allocPrint(
-        allocator,
+    const url = try allocator.print(
         "https://api.github.com/repos/{s}/{s}/releases/latest",
         .{ repo.owner, repo.name },
     );
@@ -139,7 +138,7 @@ fn parseVersion(raw: []const u8) UpdateError!Version {
         trimmed = trimmed[1..];
     }
 
-    const end = std.mem.indexOfAny(u8, trimmed, "-+") orelse trimmed.len;
+    const end = std.mem.findAny(u8, trimmed, "-+") orelse trimmed.len;
     const core = trimmed[0..end];
 
     var it = std.mem.tokenizeScalar(u8, core, '.');

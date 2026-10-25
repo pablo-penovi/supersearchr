@@ -3,19 +3,10 @@ const term = @import("term");
 const theme = @import("theme");
 const Torrent = @import("torrent").Torrent;
 const compat = @import("compat");
+const list_nav = @import("list_nav");
+const hints = @import("hints");
 
-const spinner_frames = [_][]const u8{
-    "⣎⡇",
-    "⣇⡇",
-    "⣏⡆",
-    "⣏⡅",
-    "⣏⡃",
-    "⣏⠇",
-    "⡏⡇",
-    "⢏⡇",
-    "⣋⡇",
-    "⣍⡇",
-};
+const spinner_frames = theme.spinner_frames;
 
 pub const SortColumn = enum {
     age,
@@ -46,6 +37,7 @@ pub const ResultsWidget = struct {
     marquee_target_set: bool,
     marquee_cursor: usize,
     marquee_title_col_width: usize,
+    hints_marquee: hints.HintsMarquee,
     sent_torrents: std.ArrayList(SentTorrent),
     failed_indexers: std.ArrayList([]const u8),
     live_status: LiveStatus,
@@ -100,6 +92,7 @@ pub const ResultsWidget = struct {
             .marquee_target_set = false,
             .marquee_cursor = 0,
             .marquee_title_col_width = 0,
+            .hints_marquee = .{},
             .sent_torrents = .empty,
             .failed_indexers = .empty,
             .live_status = .{},
@@ -210,7 +203,7 @@ pub const ResultsWidget = struct {
         const panel_width = if (compact) @as(usize, 0) else @as(usize, @intCast(max_cols - 2));
         const inner_width = if (compact) @as(usize, 0) else panel_width - 2;
         const layout = if (compact) TableLayout.compactFallback() else TableLayout.forInnerWidth(inner_width);
-        self.display_count = computeDisplayCount(max_rows);
+        self.display_count = list_nav.computeDisplayCount(max_rows);
         const end_idx = @min(self.scroll_offset + self.display_count, self.torrents.len);
         const snapshot = RenderSnapshot{
             .rows = max_rows,
@@ -274,11 +267,7 @@ pub const ResultsWidget = struct {
                     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
 
                     term.setFg256(colors.muted);
-                    if (self.live_status.phase == .done) {
-                        stdout.writeAll("  ENTER select | s search | r refresh | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line | J/K/shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort") catch {};
-                    } else {
-                        stdout.writeAll("  ENTER select | s search | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line | J/K/shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort") catch {};
-                    }
+                    self.hints_marquee.draw(stdout, self.hintsText(false), max_cols, hints.panel_indent_cols);
                     term.resetColor();
                     term.clearBelow();
                 }
@@ -360,10 +349,29 @@ pub const ResultsWidget = struct {
             .none => {},
         }
 
+        if (!compact and self.hints_marquee.dirty) {
+            drawHintsRow(stdout, colors, self, max_rows, max_cols);
+        }
+
         self.has_drawn_once = true;
         self.force_full_redraw = false;
         self.force_selected_redraw = false;
         self.last_snapshot = snapshot;
+    }
+
+    /// Key hints for the current state. The marquee compares the returned text
+    /// with the one it is scrolling, so a state change restarts the scroll.
+    fn hintsText(self: *ResultsWidget, compact: bool) []const u8 {
+        if (compact) {
+            return if (self.live_status.phase == .done)
+                "ENTER select | s search | r refresh | ESC exit | \xe2\x86\x91\xe2\x86\x93 line"
+            else
+                "ENTER select | s search | ESC exit | \xe2\x86\x91\xe2\x86\x93 line";
+        }
+        return if (self.live_status.phase == .done)
+            "ENTER select | s search | r refresh | / find | ESC exit | \xe2\x86\x91\xe2\x86\x93 line | shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort"
+        else
+            "ENTER select | s search | / find | ESC exit | \xe2\x86\x91\xe2\x86\x93 line | shift+\xe2\x86\x91\xe2\x86\x93 page | \xe2\x86\x90\xe2\x86\x92 move sort | TAB apply sort";
     }
 
     pub fn renderStatusOnly(self: *ResultsWidget, max_rows: u16, max_cols: u16) bool {
@@ -374,7 +382,7 @@ pub const ResultsWidget = struct {
         const colors = theme.superseedr_like;
         const border = theme.unicode_border;
         const panel_width = @as(usize, @intCast(max_cols - 2));
-        self.display_count = computeDisplayCount(max_rows);
+        self.display_count = list_nav.computeDisplayCount(max_rows);
         const end_idx = @min(self.scroll_offset + self.display_count, self.torrents.len);
 
         term.moveCursor(statusRowFromDisplayCount(self.display_count), 1);
@@ -383,12 +391,7 @@ pub const ResultsWidget = struct {
     }
 
     fn adjustScroll(self: *ResultsWidget) void {
-        if (self.display_count == 0) return;
-        if (self.cursor < self.scroll_offset) {
-            self.scroll_offset = self.cursor;
-        } else if (self.cursor >= self.scroll_offset + self.display_count) {
-            self.scroll_offset = self.cursor - self.display_count + 1;
-        }
+        list_nav.adjustScroll(self.cursor, &self.scroll_offset, self.display_count);
     }
 
     pub fn handleEvent(self: *ResultsWidget, event: term.Event, max_rows: u16) ResultsAction {
@@ -471,24 +474,12 @@ pub const ResultsWidget = struct {
             }
         }
 
-        self.display_count = computeDisplayCount(max_rows);
+        self.display_count = list_nav.computeDisplayCount(max_rows);
 
         switch (event.key) {
             .char => {
                 if (event.value == 'e' or event.value == 'E') {
                     if (self.live_status.phase == .done and self.live_status.failed > 0) return .review_failures;
-                }
-                if (event.value == 'j') {
-                    return self.moveCursorDown();
-                }
-                if (event.value == 'k') {
-                    return self.moveCursorUp();
-                }
-                if (event.value == 'J') {
-                    return self.moveCursorPageDown();
-                }
-                if (event.value == 'K') {
-                    return self.moveCursorPageUp();
                 }
                 if (event.value == 's' or event.value == 'S') {
                     return .new_search;
@@ -534,23 +525,24 @@ pub const ResultsWidget = struct {
     }
 
     pub fn advanceMarquee(self: *ResultsWidget, max_rows: u16, max_cols: u16) bool {
-        if (self.torrents.len == 0) return false;
-        if (self.cursor >= self.torrents.len) return false;
-
-        self.display_count = computeDisplayCount(max_rows);
+        self.display_count = list_nav.computeDisplayCount(max_rows);
         const compact = theme.isCompactViewport(max_rows, max_cols);
-        if (compact) return false;
+        const hints_changed = self.advanceHintsMarquee(max_cols, compact);
+
+        if (compact) return hints_changed;
+        if (self.torrents.len == 0) return hints_changed;
+        if (self.cursor >= self.torrents.len) return hints_changed;
 
         const panel_width = @as(usize, @intCast(max_cols - 2));
         const inner_width = panel_width - 2;
         const layout = TableLayout.forInnerWidth(inner_width);
-        if (layout.title_col_width == 0) return false;
+        if (layout.title_col_width == 0) return hints_changed;
 
         self.ensureMarqueeTarget(layout.title_col_width);
 
         const title = self.torrents[self.cursor].title;
         const title_cols = theme.displayWidthOfText(title);
-        if (title_cols <= layout.title_col_width) return false;
+        if (title_cols <= layout.title_col_width) return hints_changed;
 
         const overflow = title_cols - layout.title_col_width;
         if (self.marquee_offset_cols > overflow) {
@@ -559,7 +551,7 @@ pub const ResultsWidget = struct {
             return true;
         }
 
-        if (stepMarqueeState(
+        if (list_nav.stepMarqueeState(
             &self.marquee_offset_cols,
             &self.marquee_moving_right,
             &self.marquee_edge_hold,
@@ -569,7 +561,17 @@ pub const ResultsWidget = struct {
             self.force_selected_redraw = true;
             return true;
         }
-        return false;
+        return hints_changed;
+    }
+
+    /// Scrolls the key-hints footer when it is wider than the terminal. In the
+    /// compact layout the whole screen is repainted, so a step forces a full
+    /// redraw; the panel layout repaints the footer row on its own.
+    fn advanceHintsMarquee(self: *ResultsWidget, max_cols: u16, compact: bool) bool {
+        const indent = if (compact) hints.compact_indent_cols else hints.panel_indent_cols;
+        if (!self.hints_marquee.advance(self.hintsText(compact), max_cols, indent)) return false;
+        if (compact) self.force_full_redraw = true;
+        return true;
     }
 
     fn ensureMarqueeTarget(self: *ResultsWidget, title_col_width: usize) void {
@@ -595,8 +597,7 @@ pub const ResultsWidget = struct {
     }
 
     fn moveCursorDown(self: *ResultsWidget) ResultsAction {
-        if (self.cursor < self.torrents.len - 1) {
-            self.cursor += 1;
+        if (list_nav.moveDown(&self.cursor, self.torrents.len)) {
             self.adjustScroll();
             self.resetMarqueeState();
         }
@@ -604,8 +605,7 @@ pub const ResultsWidget = struct {
     }
 
     fn moveCursorUp(self: *ResultsWidget) ResultsAction {
-        if (self.cursor > 0) {
-            self.cursor -= 1;
+        if (list_nav.moveUp(&self.cursor)) {
             self.adjustScroll();
             self.resetMarqueeState();
         }
@@ -613,18 +613,22 @@ pub const ResultsWidget = struct {
     }
 
     fn moveCursorPageDown(self: *ResultsWidget) ResultsAction {
-        const step = @min(self.display_count, self.torrents.len - 1 - self.cursor);
-        self.cursor += step;
-        self.adjustScroll();
-        if (step > 0) self.resetMarqueeState();
+        if (list_nav.movePageDown(&self.cursor, self.torrents.len, self.display_count)) {
+            self.adjustScroll();
+            self.resetMarqueeState();
+        } else {
+            self.adjustScroll();
+        }
         return .continue_browsing;
     }
 
     fn moveCursorPageUp(self: *ResultsWidget) ResultsAction {
-        const step = @min(self.display_count, self.cursor);
-        self.cursor -= step;
-        self.adjustScroll();
-        if (step > 0) self.resetMarqueeState();
+        if (list_nav.movePageUp(&self.cursor, self.display_count)) {
+            self.adjustScroll();
+            self.resetMarqueeState();
+        } else {
+            self.adjustScroll();
+        }
         return .continue_browsing;
     }
 
@@ -692,12 +696,7 @@ pub const ResultsWidget = struct {
     }
 };
 
-const RenderMode = enum {
-    full,
-    partial_window,
-    partial_cursor,
-    none,
-};
+const RenderMode = list_nav.RenderMode;
 
 const RenderSnapshot = struct {
     rows: u16,
@@ -768,22 +767,42 @@ fn computeRedrawMode(
     last_snapshot: ?RenderSnapshot,
     current: RenderSnapshot,
 ) RenderMode {
-    if (!has_drawn_once or force_full_redraw) return .full;
-    if (force_selected_redraw) return .partial_cursor;
-    const prev = last_snapshot orelse return .full;
+    const prev = last_snapshot;
 
-    if (current.is_compact or prev.is_compact) return .full;
+    const base_current = list_nav.BaseSnapshot{
+        .rows = current.rows,
+        .cols = current.cols,
+        .is_compact = current.is_compact,
+        .cursor = current.cursor,
+        .scroll_offset = current.scroll_offset,
+        .display_count = current.display_count,
+        .item_count = current.torrents_len,
+    };
+    const base_prev: ?list_nav.BaseSnapshot = if (prev) |p| .{
+        .rows = p.rows,
+        .cols = p.cols,
+        .is_compact = p.is_compact,
+        .cursor = p.cursor,
+        .scroll_offset = p.scroll_offset,
+        .display_count = p.display_count,
+        .item_count = p.torrents_len,
+    } else null;
 
-    if (prev.rows != current.rows or prev.cols != current.cols) return .full;
-    if (prev.display_count != current.display_count) return .full;
-    if (prev.torrents_len != current.torrents_len) return .full;
-    if (prev.total_count != current.total_count) return .full;
-    if (!std.meta.eql(prev.live_status, current.live_status)) return .partial_window;
-    if (prev.spinner_frame != current.spinner_frame) return .partial_window;
+    const extra_full_tier_changed = if (prev) |p| p.total_count != current.total_count else false;
+    const extra_window_tier_changed = if (prev) |p|
+        !std.meta.eql(p.live_status, current.live_status) or p.spinner_frame != current.spinner_frame
+    else
+        false;
 
-    if (prev.scroll_offset != current.scroll_offset) return .partial_window;
-    if (prev.cursor != current.cursor) return .partial_cursor;
-    return .none;
+    return list_nav.computeRedrawMode(
+        has_drawn_once,
+        force_full_redraw,
+        force_selected_redraw,
+        base_prev,
+        base_current,
+        extra_full_tier_changed,
+        extra_window_tier_changed,
+    );
 }
 
 fn titleContains(title: []const u8, query: []const u8) bool {
@@ -841,12 +860,12 @@ fn highlightSearchTerm(
             if (is_selected) {
                 var buf: [64]u8 = undefined;
                 const fg = selectedColorForSendState(colors, send_state);
-                const style = std.fmt.bufPrint(&buf, "\x1b[48;5;{d}m\x1b[38;5;{d}m\x1b[1m", .{ colors.selected_bg, fg }) catch "";
+                const style = std.mem.print(&buf, "\x1b[48;5;{d}m\x1b[38;5;{d}m\x1b[1m", .{ colors.selected_bg, fg }) catch "";
                 writer.writeAll(style) catch break;
             } else {
                 var buf: [32]u8 = undefined;
                 const fg = colorForSendState(colors, send_state);
-                const style = std.fmt.bufPrint(&buf, "\x1b[38;5;{d}m", .{fg}) catch "";
+                const style = std.mem.print(&buf, "\x1b[38;5;{d}m", .{fg}) catch "";
                 writer.writeAll(style) catch break;
             }
 
@@ -858,10 +877,6 @@ fn highlightSearchTerm(
     }
 
     return writer.buffered();
-}
-
-fn computeDisplayCount(max_rows: u16) usize {
-    return if (max_rows > 7) @as(usize, @intCast(max_rows - 7)) else 1;
 }
 
 fn findTorrentByLink(torrents: []const Torrent, link: []const u8) ?usize {
@@ -961,11 +976,23 @@ fn drawCompact(
     }
     drawCompactDivider(stdout, colors, border, max_cols);
     term.setFg256(colors.muted);
-    if (self.live_status.phase == .done) {
-        stdout.writeAll("ENTER select | s search | r refresh | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line") catch {};
-    } else {
-        stdout.writeAll("ENTER select | s search | ESC exit | j/k/\xe2\x86\x91\xe2\x86\x93 line") catch {};
-    }
+    self.hints_marquee.draw(stdout, self.hintsText(true), max_cols, hints.compact_indent_cols);
+    term.resetColor();
+    term.clearBelow();
+}
+
+/// Repaints just the hints footer, for marquee steps that leave the rest of the
+/// screen untouched.
+fn drawHintsRow(
+    stdout: compat.FileWriter,
+    colors: theme.Theme,
+    widget: *ResultsWidget,
+    max_rows: u16,
+    max_cols: u16,
+) void {
+    term.moveCursor(hints.rowFromDisplayCount(widget.display_count, max_rows), 1);
+    term.setFg256(colors.muted);
+    widget.hints_marquee.draw(stdout, widget.hintsText(false), max_cols, hints.panel_indent_cols);
     term.resetColor();
     term.clearBelow();
 }
@@ -1127,40 +1154,6 @@ fn selectedTitleForRender(
     widget.ensureMarqueeTarget(title_col_width);
     const offset_cols = @min(widget.marquee_offset_cols, overflow);
     return theme.sliceByDisplayColumns(title, offset_cols, title_col_width, marquee_buf);
-}
-
-fn stepMarqueeState(
-    offset_cols: *usize,
-    moving_right: *bool,
-    edge_hold: *u8,
-    max_offset: usize,
-    hold_ticks: u8,
-) bool {
-    if (max_offset == 0) return false;
-
-    if (edge_hold.* > 0) {
-        edge_hold.* -= 1;
-        return false;
-    }
-
-    if (moving_right.*) {
-        if (offset_cols.* < max_offset) {
-            offset_cols.* += 1;
-            return true;
-        }
-        moving_right.* = false;
-        edge_hold.* = hold_ticks;
-        return false;
-    }
-
-    if (offset_cols.* > 0) {
-        offset_cols.* -= 1;
-        return true;
-    }
-
-    moving_right.* = true;
-    edge_hold.* = hold_ticks;
-    return false;
 }
 
 fn formatColumnHeader(
@@ -1345,17 +1338,17 @@ fn formatAgeText(buf: []u8, pub_date: ?i64, current_time: i64) []const u8 {
     const age = @max(diff, 0);
 
     if (age < 60) {
-        return std.fmt.bufPrint(buf, "{d}s", .{age}) catch "N/A";
+        return std.mem.print(buf, "{d}s", .{age}) catch "N/A";
     } else if (age < 3600) {
-        return std.fmt.bufPrint(buf, "{d}mi", .{age / 60}) catch "N/A";
+        return std.mem.print(buf, "{d}mi", .{age / 60}) catch "N/A";
     } else if (age < 86400) {
-        return std.fmt.bufPrint(buf, "{d}h", .{age / 3600}) catch "N/A";
+        return std.mem.print(buf, "{d}h", .{age / 3600}) catch "N/A";
     } else if (age < 30 * 86400) {
-        return std.fmt.bufPrint(buf, "{d}d", .{age / 86400}) catch "N/A";
+        return std.mem.print(buf, "{d}d", .{age / 86400}) catch "N/A";
     } else if (age < 365 * 86400) {
-        return std.fmt.bufPrint(buf, "{d}mo", .{age / (30 * 86400)}) catch "N/A";
+        return std.mem.print(buf, "{d}mo", .{age / (30 * 86400)}) catch "N/A";
     } else {
-        return std.fmt.bufPrint(buf, "{d}y", .{age / (365 * 86400)}) catch "N/A";
+        return std.mem.print(buf, "{d}y", .{age / (365 * 86400)}) catch "N/A";
     }
 }
 
@@ -1382,12 +1375,12 @@ fn buildDataCells(
     writeSpaces(&writer, layout.age_to_seeders_gap) catch return "";
 
     var sbuf: [16]u8 = undefined;
-    const seeders_text = std.fmt.bufPrint(&sbuf, "{d}", .{seeders}) catch "";
+    const seeders_text = std.mem.print(&sbuf, "{d}", .{seeders}) catch "";
     writeRightAligned(&writer, seeders_text, layout.seeders_width) catch return "";
     writeSpaces(&writer, layout.between_stats_gap) catch return "";
 
     var lbuf: [16]u8 = undefined;
-    const leechers_text = std.fmt.bufPrint(&lbuf, "{d}", .{leechers}) catch "";
+    const leechers_text = std.mem.print(&lbuf, "{d}", .{leechers}) catch "";
     writeRightAligned(&writer, leechers_text, layout.leechers_width) catch return "";
     writeSpaces(&writer, layout.between_stats_gap) catch return "";
 
@@ -1411,9 +1404,9 @@ fn formatSizeBytes(buf: []u8, size_bytes: ?u64) []const u8 {
     const unit = if (bytes >= gib) "GB" else "MB";
     const tenths = (@as(u128, bytes) * 10 + divisor / 2) / divisor;
     if (tenths % 10 == 0) {
-        return std.fmt.bufPrint(buf, "{d} {s}", .{ tenths / 10, unit }) catch "-";
+        return std.mem.print(buf, "{d} {s}", .{ tenths / 10, unit }) catch "-";
     }
-    return std.fmt.bufPrint(buf, "{d}.{d} {s}", .{ tenths / 10, tenths % 10, unit }) catch "-";
+    return std.mem.print(buf, "{d}.{d} {s}", .{ tenths / 10, tenths % 10, unit }) catch "-";
 }
 
 fn writeRightAligned(writer: anytype, text: []const u8, width: usize) !void {
@@ -1460,29 +1453,29 @@ fn formatStatusText(
 ) []const u8 {
     const base = switch (live_status.phase) {
         .discovering => if (torrents_len == 0)
-            std.fmt.bufPrint(buf, "No results yet | Discovering indexers... {s}", .{spinner_frames[spinner_frame % spinner_frames.len]}) catch "No results yet"
+            std.mem.print(buf, "No results yet | Discovering indexers... {s}", .{spinner_frames[spinner_frame % spinner_frames.len]}) catch "No results yet"
         else
             formatShowing(buf, scroll_offset, end_idx, total_count),
         .querying => querying: {
             const spinner = spinner_frames[spinner_frame % spinner_frames.len];
             if (torrents_len == 0) {
                 if (live_status.failed == 0) {
-                    break :querying std.fmt.bufPrint(buf, "No results yet | Searching {d}/{d} {s}", .{ live_status.completed, live_status.total, spinner }) catch "No results yet";
+                    break :querying std.mem.print(buf, "No results yet | Searching {d}/{d} {s}", .{ live_status.completed, live_status.total, spinner }) catch "No results yet";
                 }
-                break :querying std.fmt.bufPrint(
+                break :querying std.mem.print(
                     buf,
                     "No results yet | Searching {d}/{d}, {d} failed {s}",
                     .{ live_status.completed, live_status.total, live_status.failed, spinner },
                 ) catch "No results yet";
             }
             if (live_status.failed == 0) {
-                break :querying std.fmt.bufPrint(
+                break :querying std.mem.print(
                     buf,
                     "Showing {d}-{d} of {d} | Searching {d}/{d} {s}",
                     .{ scroll_offset + 1, end_idx, total_count, live_status.completed, live_status.total, spinner },
                 ) catch "Showing";
             }
-            break :querying std.fmt.bufPrint(
+            break :querying std.mem.print(
                 buf,
                 "Showing {d}-{d} of {d} | Searching {d}/{d}, {d} failed {s}",
                 .{ scroll_offset + 1, end_idx, total_count, live_status.completed, live_status.total, live_status.failed, spinner },
@@ -1491,26 +1484,26 @@ fn formatStatusText(
         .done => done: {
             if (live_status.failed == 0) {
                 if (torrents_len == 0) {
-                    break :done std.fmt.bufPrint(
+                    break :done std.mem.print(
                         buf,
                         "No results found | All indexers successful",
                         .{},
                     ) catch "No results found";
                 }
-                break :done std.fmt.bufPrint(
+                break :done std.mem.print(
                     buf,
                     "Showing {d}-{d} of {d} | All indexers successful",
                     .{ scroll_offset + 1, end_idx, total_count },
                 ) catch "Showing";
             } else {
                 if (torrents_len == 0) {
-                    break :done std.fmt.bufPrint(
+                    break :done std.mem.print(
                         buf,
                         "No results found | {d} indexers failed ('e' to review)",
                         .{live_status.failed},
                     ) catch "No results found";
                 }
-                break :done std.fmt.bufPrint(
+                break :done std.mem.print(
                     buf,
                     "Showing {d}-{d} of {d} | {d} indexers failed ('e' to review)",
                     .{ scroll_offset + 1, end_idx, total_count, live_status.failed },
@@ -1522,7 +1515,7 @@ fn formatStatusText(
 }
 
 fn formatShowing(buf: []u8, scroll_offset: usize, end_idx: usize, total_count: usize) []const u8 {
-    return std.fmt.bufPrint(buf, "Showing {d}-{d} of {d}", .{ scroll_offset + 1, end_idx, total_count }) catch "Showing";
+    return std.mem.print(buf, "Showing {d}-{d} of {d}", .{ scroll_offset + 1, end_idx, total_count }) catch "Showing";
 }
 
 fn contentRowFromRelative(rel_idx: usize) u16 {
@@ -1785,7 +1778,7 @@ test "formatSizeBytes renders missing megabytes and gigabytes" {
     try std.testing.expectEqualStrings("12.4 GB", formatSizeBytes(&buf, 12 * 1024 * 1024 * 1024 + 410 * 1024 * 1024));
 }
 
-test "ResultsWidget handleEvent j moves cursor down" {
+test "ResultsWidget handleEvent arrow_down moves cursor down" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
@@ -1802,7 +1795,7 @@ test "ResultsWidget handleEvent j moves cursor down" {
 
     try std.testing.expectEqual(@as(usize, 0), widget.cursor);
 
-    const event = term.Event{ .key = .char, .value = 'j' };
+    const event = term.Event{ .key = .arrow_down, .value = 0 };
     const action = widget.handleEvent(event, 8);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
@@ -2018,7 +2011,7 @@ test "ResultsWidget handleEvent escape returns cancel" {
     try std.testing.expectEqual(ResultsAction.cancel, action);
 }
 
-test "ResultsWidget handleEvent j adjusts scroll when cursor leaves window" {
+test "ResultsWidget handleEvent arrow_down adjusts scroll when cursor leaves window" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
@@ -2032,10 +2025,10 @@ test "ResultsWidget handleEvent j adjusts scroll when cursor leaves window" {
         .{ .title = "T6", .seeders = 6, .leechers = 0, .link = "magnet:6" },
     };
     widget.setTorrents(&torrents, 6);
-    // max_rows=8, display_count=1. cursor at 0 (last visible), j pushes it to 1 and scrolls.
+    // max_rows=8, display_count=1. cursor at 0 (last visible), arrow_down pushes it to 1 and scrolls.
     widget.cursor = 0;
 
-    const event = term.Event{ .key = .char, .value = 'j' };
+    const event = term.Event{ .key = .arrow_down, .value = 0 };
     const action = widget.handleEvent(event, 8);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
@@ -2043,7 +2036,7 @@ test "ResultsWidget handleEvent j adjusts scroll when cursor leaves window" {
     try std.testing.expectEqual(@as(usize, 1), widget.scroll_offset);
 }
 
-test "ResultsWidget handleEvent k moves cursor up" {
+test "ResultsWidget handleEvent arrow_up moves cursor up" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
@@ -2059,14 +2052,14 @@ test "ResultsWidget handleEvent k moves cursor up" {
     widget.setTorrents(&torrents, 6);
     widget.cursor = 1;
 
-    const event = term.Event{ .key = .char, .value = 'k' };
+    const event = term.Event{ .key = .arrow_up, .value = 0 };
     const action = widget.handleEvent(event, 10);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
     try std.testing.expectEqual(@as(usize, 0), widget.cursor);
 }
 
-test "ResultsWidget handleEvent j at last torrent does nothing" {
+test "ResultsWidget handleEvent arrow_down at last torrent does nothing" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
@@ -2082,14 +2075,14 @@ test "ResultsWidget handleEvent j at last torrent does nothing" {
     widget.setTorrents(&torrents, 6);
     widget.cursor = 5; // last torrent
 
-    const event = term.Event{ .key = .char, .value = 'j' };
+    const event = term.Event{ .key = .arrow_down, .value = 0 };
     const action = widget.handleEvent(event, 10);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
     try std.testing.expectEqual(@as(usize, 5), widget.cursor);
 }
 
-test "ResultsWidget handleEvent k at cursor 0 does nothing" {
+test "ResultsWidget handleEvent arrow_up at cursor 0 does nothing" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
@@ -2101,14 +2094,14 @@ test "ResultsWidget handleEvent k at cursor 0 does nothing" {
 
     try std.testing.expectEqual(@as(usize, 0), widget.cursor);
 
-    const event = term.Event{ .key = .char, .value = 'k' };
+    const event = term.Event{ .key = .arrow_up, .value = 0 };
     const action = widget.handleEvent(event, 20);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
     try std.testing.expectEqual(@as(usize, 0), widget.cursor);
 }
 
-test "ResultsWidget handleEvent J moves cursor by display_count" {
+test "ResultsWidget handleEvent shift_arrow_down moves cursor by display_count" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
@@ -2124,8 +2117,8 @@ test "ResultsWidget handleEvent J moves cursor by display_count" {
         .{ .title = "T8", .seeders = 8, .leechers = 0, .link = "magnet:8" },
     };
     widget.setTorrents(&torrents, 8);
-    // max_rows=8, display_count=1, cursor=0 -> J moves cursor to 1
-    const event = term.Event{ .key = .char, .value = 'J' };
+    // max_rows=8, display_count=1, cursor=0 -> shift_arrow_down moves cursor to 1
+    const event = term.Event{ .key = .shift_arrow_down, .value = 0 };
     const action = widget.handleEvent(event, 8);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
@@ -2133,7 +2126,7 @@ test "ResultsWidget handleEvent J moves cursor by display_count" {
     try std.testing.expectEqual(@as(usize, 1), widget.scroll_offset);
 }
 
-test "ResultsWidget handleEvent K retreats cursor by display_count" {
+test "ResultsWidget handleEvent shift_arrow_up retreats cursor by display_count" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
@@ -2151,8 +2144,8 @@ test "ResultsWidget handleEvent K retreats cursor by display_count" {
     widget.setTorrents(&torrents, 8);
     widget.cursor = 1;
     widget.scroll_offset = 0;
-    // max_rows=8, display_count=1, cursor=1 -> K moves cursor to 0
-    const event = term.Event{ .key = .char, .value = 'K' };
+    // max_rows=8, display_count=1, cursor=1 -> shift_arrow_up moves cursor to 0
+    const event = term.Event{ .key = .shift_arrow_up, .value = 0 };
     const action = widget.handleEvent(event, 8);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
@@ -2160,7 +2153,7 @@ test "ResultsWidget handleEvent K retreats cursor by display_count" {
     try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
 }
 
-test "ResultsWidget handleEvent J at last torrent does nothing" {
+test "ResultsWidget handleEvent shift_arrow_down at last torrent does nothing" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
@@ -2178,7 +2171,7 @@ test "ResultsWidget handleEvent J at last torrent does nothing" {
     widget.setTorrents(&torrents, 8);
     widget.cursor = 7; // last torrent
     widget.scroll_offset = 7;
-    const event = term.Event{ .key = .char, .value = 'J' };
+    const event = term.Event{ .key = .shift_arrow_down, .value = 0 };
     const action = widget.handleEvent(event, 10);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
@@ -2186,7 +2179,7 @@ test "ResultsWidget handleEvent J at last torrent does nothing" {
     try std.testing.expectEqual(@as(usize, 7), widget.scroll_offset);
 }
 
-test "ResultsWidget handleEvent K at cursor 0 does nothing" {
+test "ResultsWidget handleEvent shift_arrow_up at cursor 0 does nothing" {
     const allocator = std.testing.allocator;
     var widget = ResultsWidget.init(allocator);
     defer widget.deinit();
@@ -2199,12 +2192,30 @@ test "ResultsWidget handleEvent K at cursor 0 does nothing" {
     };
     widget.setTorrents(&torrents, 4);
     // cursor starts at 0
-    const event = term.Event{ .key = .char, .value = 'K' };
+    const event = term.Event{ .key = .shift_arrow_up, .value = 0 };
     const action = widget.handleEvent(event, 10);
 
     try std.testing.expectEqual(ResultsAction.continue_browsing, action);
     try std.testing.expectEqual(@as(usize, 0), widget.cursor);
     try std.testing.expectEqual(@as(usize, 0), widget.scroll_offset);
+}
+
+test "ResultsWidget handleEvent ignores j/k/J/K chars" {
+    const allocator = std.testing.allocator;
+    var widget = ResultsWidget.init(allocator);
+    defer widget.deinit();
+
+    var torrents = [_]Torrent{
+        .{ .title = "Test1", .seeders = 1, .leechers = 0, .link = "magnet:1" },
+        .{ .title = "Test2", .seeders = 2, .leechers = 0, .link = "magnet:2" },
+    };
+    widget.setTorrents(&torrents, 2);
+
+    for ([_]u8{ 'j', 'k', 'J', 'K' }) |c| {
+        const action = widget.handleEvent(.{ .key = .char, .value = c }, 20);
+        try std.testing.expectEqual(ResultsAction.continue_browsing, action);
+        try std.testing.expectEqual(@as(usize, 0), widget.cursor);
+    }
 }
 
 test "ResultsWidget cursor resets on new search" {
@@ -2329,37 +2340,6 @@ test "ResultsWidget advanceSpinner ticks frame correctly" {
     // 10th tick should wrap around to 0
     try std.testing.expect(widget.advanceSpinner());
     try std.testing.expectEqual(@as(usize, 0), widget.spinner_frame);
-}
-
-test "stepMarqueeState bounces and flips direction" {
-    var offset: usize = 0;
-    var moving_right = true;
-    var hold: u8 = 0;
-    const max_offset: usize = 2;
-
-    try std.testing.expect(stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
-    try std.testing.expectEqual(@as(usize, 1), offset);
-    try std.testing.expectEqual(true, moving_right);
-
-    try std.testing.expect(stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
-    try std.testing.expectEqual(@as(usize, 2), offset);
-    try std.testing.expectEqual(true, moving_right);
-
-    try std.testing.expect(!stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
-    try std.testing.expectEqual(@as(usize, 2), offset);
-    try std.testing.expectEqual(false, moving_right);
-
-    try std.testing.expect(stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
-    try std.testing.expectEqual(@as(usize, 1), offset);
-    try std.testing.expectEqual(false, moving_right);
-
-    try std.testing.expect(stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
-    try std.testing.expectEqual(@as(usize, 0), offset);
-    try std.testing.expectEqual(false, moving_right);
-
-    try std.testing.expect(!stepMarqueeState(&offset, &moving_right, &hold, max_offset, 0));
-    try std.testing.expectEqual(@as(usize, 0), offset);
-    try std.testing.expectEqual(true, moving_right);
 }
 
 test "advanceMarquee does not animate when title fits" {
@@ -2545,4 +2525,45 @@ test "ResultsWidget TAB resets selection cursor" {
 
     // Cursor should reset to 0!
     try std.testing.expectEqual(@as(usize, 0), widget.cursor);
+}
+
+test "the hints footer scrolls when it outgrows the terminal" {
+    var widget = ResultsWidget.init(std.testing.allocator);
+    defer widget.deinit();
+
+    // No torrents, so only the footer can move.
+    var moved = false;
+    for (0..8) |_| {
+        if (widget.advanceMarquee(24, 80)) moved = true;
+    }
+    try std.testing.expect(moved);
+    try std.testing.expect(widget.hints_marquee.offset_cols > 0);
+    try std.testing.expect(widget.hints_marquee.dirty);
+}
+
+test "the hints footer stays inside the terminal width" {
+    var widget = ResultsWidget.init(std.testing.allocator);
+    defer widget.deinit();
+
+    var buf: [512]u8 = undefined;
+    for ([_]u16{ 56, 80, 120, 200 }) |cols| {
+        var writer: std.Io.Writer = .fixed(&buf);
+        widget.hints_marquee.reset();
+        widget.hints_marquee.draw(&writer, widget.hintsText(false), cols, hints.panel_indent_cols);
+        try std.testing.expect(theme.displayWidthOfText(writer.buffered()) < cols);
+    }
+}
+
+test "the hints footer restarts when the live status changes" {
+    var widget = ResultsWidget.init(std.testing.allocator);
+    defer widget.deinit();
+    widget.live_status = .{ .phase = .querying, .completed = 0, .total = 2, .failed = 0 };
+
+    for (0..8) |_| _ = widget.advanceMarquee(24, 80);
+    try std.testing.expect(widget.hints_marquee.offset_cols > 0);
+
+    // The "r refresh" hint appears once the search finishes.
+    widget.live_status = .{ .phase = .done, .completed = 2, .total = 2, .failed = 0 };
+    _ = widget.advanceMarquee(24, 80);
+    try std.testing.expectEqual(@as(usize, 0), widget.hints_marquee.offset_cols);
 }

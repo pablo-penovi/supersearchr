@@ -2,11 +2,49 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## 0.6.0
+
+### Added
+- Added indexer profiles: a profile is a named set of enabled indexers. `F3` on the indexers screen saves the enabled indexers as a new profile or overwrites the active one, and `F2` on the search screen opens a profiles list to load or delete them. Loading a profile enables and disables indexers on Jackett to match it. Profiles live in `profiles.json` in the app config directory.
+- Loading a profile runs on a worker thread with live "Applying c/t" progress in the profiles panel, like committing on the indexers screen. `Esc` stops after the indexer in flight, and indexers that fail to toggle can be retried or kept as-is.
+- The search panel now shows the active profile next to its title, marked `(modified)` when the indexers enabled on Jackett no longer match it.
+- Added a **Record** column to the indexers screen with each indexer's last five search outcomes (`record.json`), and a **Last Status** column with the outcome of its most recent enable/disable (`last_status.json`).
+- Pressing `F2` with no saved profiles now explains how to create one instead of doing nothing.
+- The profiles screen shows a details panel beside the list (on terminals wide enough for it) previewing the selected profile: each indexer with what loading would do — `stays on`, `+ enable`, `- disable`, or `missing` when Jackett no longer has it — plus a summary row.
+- Profiles can be renamed with `r` on the profiles screen. The prompt is pre-filled with the current name; renaming onto another profile's name replaces it after a confirming `Enter`.
+- `F2` on the indexers screen switches straight to the profiles screen, and `F1` on the profiles screen switches back. Uncommitted indexer toggles must be committed or discarded first.
+
+### Changed
+- `main` now runs the app on its own `std.Io.Threaded` (installed through `compat.installIo`) instead of the global single-threaded `Io`, which supports neither concurrent tasks nor cancelation. The startup profile check relies on both.
+- The indexers (`F1`) and profiles (`F2`) screens are now only reachable from the search screen; the results screen no longer handles either shortcut.
+- The search screen's key hints now list `F1` and `F2` in both layouts, the compact indexers footer lists `F3`, and the results footer lists `/` instead of `F2`.
+- User-facing text now consistently says "indexer", Jackett's own term, instead of mixing in "tracker".
+
+### Fixed
+- Fixed profile saves silently failing: a profiles file that could not be written still showed "Saved". Write failures now show an error notice.
+- Fixed the "Indexers Modified" prompt leaving a ghost of itself over the profiles list after choosing to discard.
+- Fixed the compact indexers and profiles screens leaving the tail of the "Loading…" notice on their title line.
+- Fixed the key-hints footer wrapping onto the next line when it was wider than the terminal, which pushed the panel out of place. The hints now scroll back and forth with the same marquee used for over-long torrent titles (new `src/tui/widgets/hints.zig`), on the search, results, indexers and profiles screens, in both the panel and compact layouts.
+- Fixed the results panel becoming garbled when an indexer returns a title containing control characters. Some indexers (e.g. `catorrent`) scrape a multi-line page block into `<title>`, and the raw newlines moved the terminal cursor mid-row, shifting every row below it. Torrent titles and indexer names are now normalized in `src/jackett/client.zig` — trimmed, XML entities decoded (titles previously rendered a literal `&amp;`), control characters collapsed to single spaces, and invalid UTF-8 bytes replaced — so the renderer only ever receives measurable text.
+- Fixed `displayWidth` in `src/tui/theme.zig` counting combining marks, zero-width joiners and variation selectors as one column each instead of zero, and counting `Emoji_Presentation` symbols such as ✅, ⚡ and ⭐ as one column instead of two. Both cases desynchronized the title column from what the terminal actually drew.
+- Fixed a potential buffer overrun in `truncateWithEllipsis` in `src/tui/theme.zig`, whose scratch-buffer bounds check compared display columns against buffer bytes; a title of multi-byte characters could write past the buffer on a wide terminal.
+- Fixed the search screen's `(modified)` marker staying unknown until `F1` or `F2` had been visited. When `profiles.json` has an active profile, a background check now compares it with the indexers enabled on Jackett at launch and updates the label once it finishes, without blocking the UI. If Jackett can't be reached the marker just stays off, and quitting cancels a check that is still waiting on Jackett instead of waiting for it.
+- Fixed the results screen's failed-indexers overlay (`e`) listing indexer IDs such as `thepiratebay` instead of their display names. `record.json` is still keyed by ID.
+- Fixed the compact indexers footer showing the normal key hints while changes were being committed. It now shows `ESC stop after current`, then `Finishing current indexer…` after `Esc`, like the compact profiles footer.
+
+## 0.5.0
+
+### Added
+- Added an F1 indexers management screen for viewing Jackett indexers, toggling them active/inactive, and saving changes through Jackett's admin API while caching disabled indexer configs for later re-enable.
+- Added `jackettAdminPassword` as an optional config field for Jackett instances that protect the admin API with a password.
+
+### Changed
+- The indexers screen now groups enabled indexers together at the top, sorted alphabetically, with disabled indexers sorted alphabetically below. Toggling an indexer's active state live-moves it into its new alphabetical position within the corresponding group (shown in the existing pending-change color until saved); reverting restores the original saved-state ordering.
 
 ### Fixed
 - Fixed the list-search overlay's error handler in `src/tui/app.zig` matching nonexistent error names (`ResponseEmpty`, `XmlParsingFailed`) instead of the real `jackett.JackettError` variants, which caused real failures (e.g. parse errors, HTTP errors) to surface as a generic "Unexpected error in search overlay" message. It now reuses the existing exhaustive `getErrorMessage` mapping.
 - Fixed an unbounded buffer write in `padTitle` in `src/tui/widgets/results.zig` that could overflow its destination buffer when padding a selected, search-highlighted row with a wide marquee-truncated title.
+- Fixed the indexers management screen leaving the terminal's text cursor visible instead of hidden, unlike the search and results screens.
 
 ### Removed
 - Removed unused dead code from the project:

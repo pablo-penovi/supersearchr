@@ -41,7 +41,7 @@ pub fn formatCompactNoticeLine(
     compact_buf: []u8,
     trunc_buf: []u8,
 ) []const u8 {
-    const compact_line = std.fmt.bufPrint(compact_buf, "{s}: {s}", .{ title, message }) catch title;
+    const compact_line = std.mem.print(compact_buf, "{s}: {s}", .{ title, message }) catch title;
     return theme.truncateWithEllipsis(compact_line, @max(@as(usize, 1), max_cols), trunc_buf);
 }
 
@@ -88,13 +88,13 @@ pub fn renderResultErrorOverlay(
     message: []const u8,
 ) void {
     var buf: [256]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "Error: {s}", .{message}) catch "Error";
+    const msg = std.mem.print(&buf, "Error: {s}", .{message}) catch "Error";
     renderResultNoticeOverlay(term_rows, term_cols, refresh_terminal_size, widget, "Error", msg, theme.superseedr_like.err);
 }
 
 pub fn renderError(message: []const u8) void {
     var buf: [256]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "Error: {s}", .{message}) catch "Error";
+    const msg = std.mem.print(&buf, "Error: {s}", .{message}) catch "Error";
     renderNoticePanel("Error", msg, theme.superseedr_like.err, true);
 }
 
@@ -148,7 +148,7 @@ pub fn renderNoticePanel(title: []const u8, message: []const u8, title_color: u8
     term.setFg256(title_color);
     term.setBold(true);
     var title_buf: [64]u8 = undefined;
-    const title_line = std.fmt.bufPrint(&title_buf, " {s} ", .{title}) catch title;
+    const title_line = std.mem.print(&title_buf, " {s} ", .{title}) catch title;
     theme.writePadded(stdout, title_line, layout.panel_width - 2) catch {};
     term.setBold(false);
     term.setFg256(colors.panel_border);
@@ -158,7 +158,7 @@ pub fn renderNoticePanel(title: []const u8, message: []const u8, title_color: u8
 
     term.moveCursor(layout.top_row + 2, layout.panel_col);
     var msg_buf: [352]u8 = undefined;
-    const message_line = std.fmt.bufPrint(&msg_buf, " {s}", .{shown}) catch shown;
+    const message_line = std.mem.print(&msg_buf, " {s}", .{shown}) catch shown;
     theme.drawPanelRow(stdout, layout.panel_width, message_line, border, colors) catch {};
 
     term.moveCursor(layout.top_row + 3, layout.panel_col);
@@ -209,6 +209,24 @@ pub fn renderFailedIndexersOverlay(
 }
 
 fn drawFailedIndexersModal(failed_indexers: []const []const u8) void {
+    drawNamedListModal("Failed Indexers", theme.superseedr_like.err, failed_indexers, "Press any key to close");
+}
+
+fn drawNamedListModal(title: []const u8, title_color: u8, names: []const []const u8, footer_text: []const u8) void {
+    drawLinesModal(title, title_color, names, footer_text, true);
+}
+
+/// Draws a centered modal with a title, a list of body lines, and a footer
+/// call-to-action. When `bullet` is true each line is prefixed with "• "
+/// (used for name lists); otherwise lines are printed verbatim (used for
+/// choice prompts).
+fn drawLinesModal(
+    title: []const u8,
+    title_color: u8,
+    lines: []const []const u8,
+    footer_text: []const u8,
+    bullet: bool,
+) void {
     const stdout = compat.stdoutWriter();
     const colors = theme.superseedr_like;
     const border = theme.unicode_border;
@@ -217,25 +235,30 @@ fn drawFailedIndexersModal(failed_indexers: []const []const u8) void {
     const is_compact = theme.isCompactViewport(size.rows, size.cols);
     if (is_compact) {
         term.moveCursor(1, 1);
-        term.setFg256(colors.err);
+        term.setFg256(title_color);
         term.setBold(true);
-        stdout.writeAll("Failed Indexers:\r\n") catch {};
+        var title_buf: [64]u8 = undefined;
+        const title_line = std.mem.print(&title_buf, "{s}:\r\n", .{title}) catch "List:\r\n";
+        stdout.writeAll(title_line) catch {};
         term.setBold(false);
-        for (failed_indexers) |name| {
+        for (lines) |line| {
             term.setFg256(colors.text);
-            var item_buf: [128]u8 = undefined;
-            const item_line = std.fmt.bufPrint(&item_buf, " • {s}\r\n", .{name}) catch name;
+            var item_buf: [160]u8 = undefined;
+            const item_line = if (bullet)
+                std.mem.print(&item_buf, " • {s}\r\n", .{line}) catch line
+            else
+                std.mem.print(&item_buf, "{s}\r\n", .{line}) catch line;
             stdout.writeAll(item_line) catch {};
         }
         term.setFg256(colors.accent);
-        stdout.writeAll("Press any key to close...") catch {};
+        stdout.writeAll(footer_text) catch {};
         term.resetColor();
         return;
     }
 
-    const panel_width = @min(@as(usize, 50), @as(usize, @intCast(size.cols - 4)));
+    const panel_width = @min(@as(usize, 56), @as(usize, @intCast(size.cols - 4)));
     const left_pad = (@as(usize, @intCast(size.cols)) - panel_width) / 2;
-    const panel_height = 5 + failed_indexers.len;
+    const panel_height = 5 + lines.len;
     const top_pad = @max(@as(usize, 2), (@as(usize, @intCast(size.rows)) - panel_height) / 2);
     const panel_col = @as(u16, @intCast(left_pad + 1));
     const top_row = @as(u16, @intCast(top_pad));
@@ -248,10 +271,10 @@ fn drawFailedIndexersModal(failed_indexers: []const []const u8) void {
     term.moveCursor(top_row + 1, panel_col);
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
-    term.setFg256(colors.err);
+    term.setFg256(title_color);
     term.setBold(true);
     var title_buf: [64]u8 = undefined;
-    const title_line = std.fmt.bufPrint(&title_buf, " Failed Indexers ", .{}) catch " Failed Indexers ";
+    const title_line = std.mem.print(&title_buf, " {s} ", .{title}) catch title;
     theme.writePadded(stdout, title_line, panel_width - 2) catch {};
     term.setBold(false);
     term.setFg256(colors.panel_border);
@@ -259,21 +282,26 @@ fn drawFailedIndexersModal(failed_indexers: []const []const u8) void {
     term.resetColor();
     stdout.writeAll("\r\n") catch {};
 
-    // List of failed indexers
-    for (failed_indexers, 0..) |name, idx| {
+    // Body lines
+    for (lines, 0..) |line, idx| {
         term.moveCursor(top_row + 2 + @as(u16, @intCast(idx)), panel_col);
-        var item_buf: [128]u8 = undefined;
-        const item_line = std.fmt.bufPrint(&item_buf, " • {s}", .{name}) catch name;
+        var item_buf: [160]u8 = undefined;
+        const item_line = if (bullet)
+            std.mem.print(&item_buf, " • {s}", .{line}) catch line
+        else
+            std.mem.print(&item_buf, " {s}", .{line}) catch line;
         theme.drawPanelRow(stdout, panel_width, item_line, border, colors) catch {};
     }
 
-    // Call-to-action close row
-    const footer_row = top_row + 2 + @as(u16, @intCast(failed_indexers.len));
+    // Footer row
+    const footer_row = top_row + 2 + @as(u16, @intCast(lines.len));
     term.moveCursor(footer_row, panel_col);
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.setFg256(colors.accent); // Call-to-action color
-    theme.writePadded(stdout, " Press any key to close ", panel_width - 2) catch {};
+    var footer_buf: [80]u8 = undefined;
+    const footer_line = std.mem.print(&footer_buf, " {s} ", .{footer_text}) catch footer_text;
+    theme.writePadded(stdout, footer_line, panel_width - 2) catch {};
     term.setFg256(colors.panel_border);
     stdout.writeAll(border.vertical) catch {};
     term.resetColor();
@@ -282,6 +310,489 @@ fn drawFailedIndexersModal(failed_indexers: []const []const u8) void {
     // Bottom border
     term.moveCursor(footer_row + 1, panel_col);
     theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
+}
+
+/// Dims and re-renders a backdrop widget. Works with widgets that take
+/// `render(rows, cols)` (indexers/profiles) and ones that take `render()`.
+fn renderDimmedBackdrop(backdrop: anytype, rows: u16, cols: u16) void {
+    term.setDimPersistent(true);
+    if (comptime @hasField(@TypeOf(backdrop.*), "force_full_redraw")) {
+        backdrop.force_full_redraw = true;
+        backdrop.render(rows, cols);
+    } else {
+        backdrop.has_drawn_once = false;
+        backdrop.render();
+    }
+    term.setDimPersistent(false);
+}
+
+pub const ProfileModifiedAction = enum { save_existing, new_profile, discard, cancel };
+
+fn matchModifiedKey(event: term.Event) ?ProfileModifiedAction {
+    return switch (event.key) {
+        .escape => .cancel,
+        .char => switch (event.value) {
+            's', 'S' => .save_existing,
+            'n', 'N' => .new_profile,
+            'd', 'D' => .discard,
+            else => null,
+        },
+        else => null,
+    };
+}
+
+/// F2 warning shown when the live indexer set differs from the active profile.
+pub fn renderProfileModifiedOverlay(
+    term_rows: *u16,
+    term_cols: *u16,
+    refresh_terminal_size: RefreshTerminalSizeFn,
+    backdrop: anytype,
+) ProfileModifiedAction {
+    term.discardPendingInput();
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
+    const lines = [_][]const u8{
+        "Live indexers differ from the active profile.",
+        "(s) save changes to active profile",
+        "(n) save as a new profile",
+        "(d) discard and continue",
+    };
+
+    while (true) {
+        if (refresh_terminal_size(term_rows, term_cols)) needs_render = true;
+        if (needs_render) {
+            renderDimmedBackdrop(backdrop, term_rows.*, term_cols.*);
+            drawLinesModal("Indexers Modified", theme.superseedr_like.warn, &lines, "Esc cancel", false);
+            needs_render = false;
+        }
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return .cancel;
+        if (maybe_event) |event| {
+            if (matchModifiedKey(event)) |action| return action;
+        }
+    }
+}
+
+pub const ProfileSaveChoiceAction = enum { overwrite, new_profile, cancel };
+
+fn matchSaveChoiceKey(event: term.Event) ?ProfileSaveChoiceAction {
+    return switch (event.key) {
+        .escape => .cancel,
+        .char => switch (event.value) {
+            'o', 'O' => .overwrite,
+            'n', 'N' => .new_profile,
+            else => null,
+        },
+        else => null,
+    };
+}
+
+/// F3 prompt shown when the committed set differs from the active profile.
+pub fn renderProfileSaveChoiceOverlay(
+    term_rows: *u16,
+    term_cols: *u16,
+    refresh_terminal_size: RefreshTerminalSizeFn,
+    backdrop: anytype,
+) ProfileSaveChoiceAction {
+    term.discardPendingInput();
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
+    const lines = [_][]const u8{
+        "(o) overwrite the active profile",
+        "(n) save as a new profile",
+    };
+
+    while (true) {
+        if (refresh_terminal_size(term_rows, term_cols)) needs_render = true;
+        if (needs_render) {
+            renderDimmedBackdrop(backdrop, term_rows.*, term_cols.*);
+            drawLinesModal("Save Profile", theme.superseedr_like.accent, &lines, "Esc cancel", false);
+            needs_render = false;
+        }
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return .cancel;
+        if (maybe_event) |event| {
+            if (matchSaveChoiceKey(event)) |action| return action;
+        }
+    }
+}
+
+pub const ProfileUncommittedAction = enum { commit, discard, cancel };
+
+/// Why the uncommitted-changes prompt is shown: F3 saving a profile (commit
+/// the toggles and include them in it) or F2 leaving for the profiles screen.
+pub const UncommittedPurpose = enum { save_profile, leave };
+
+fn matchUncommittedKey(event: term.Event, purpose: UncommittedPurpose) ?ProfileUncommittedAction {
+    const commit_key: u8 = switch (purpose) {
+        .save_profile => 'i',
+        .leave => 'c',
+    };
+    return switch (event.key) {
+        .escape => .cancel,
+        .char => if (std.ascii.toLower(event.value) == commit_key)
+            .commit
+        else if (event.value == 'd' or event.value == 'D')
+            .discard
+        else
+            null,
+        else => null,
+    };
+}
+
+/// Prompt shown when the Indexers screen has uncommitted toggles and the user
+/// presses F3 (save profile) or F2 (go to profiles).
+pub fn renderProfileUncommittedOverlay(
+    term_rows: *u16,
+    term_cols: *u16,
+    refresh_terminal_size: RefreshTerminalSizeFn,
+    backdrop: anytype,
+    pending_names: []const []const u8,
+    purpose: UncommittedPurpose,
+) ProfileUncommittedAction {
+    term.discardPendingInput();
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
+
+    while (true) {
+        if (refresh_terminal_size(term_rows, term_cols)) needs_render = true;
+        if (needs_render) {
+            renderDimmedBackdrop(backdrop, term_rows.*, term_cols.*);
+            drawNamedListModal(
+                "Uncommitted Changes",
+                theme.superseedr_like.warn,
+                pending_names,
+                switch (purpose) {
+                    .save_profile => "(i) commit & include  (d) discard  Esc cancel",
+                    .leave => "(c) commit  (d) discard  Esc cancel",
+                },
+            );
+            needs_render = false;
+        }
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return .cancel;
+        if (maybe_event) |event| {
+            if (matchUncommittedKey(event, purpose)) |action| return action;
+        }
+    }
+}
+
+pub const NamePromptResult = union(enum) {
+    name: []u8,
+    cancel,
+};
+
+/// Text-input modal for naming a profile, titled `title` and pre-filled with
+/// `initial`. Returns an allocator-owned name (caller frees) or `.cancel`. If
+/// the typed name collides with one of `existing_names`, the first ENTER arms
+/// an overwrite (shows a hint); a second ENTER on the same name confirms.
+/// Editing the text disarms.
+pub fn renderProfileNamePromptOverlay(
+    allocator: std.mem.Allocator,
+    term_rows: *u16,
+    term_cols: *u16,
+    refresh_terminal_size: RefreshTerminalSizeFn,
+    backdrop: anytype,
+    title: []const u8,
+    initial: []const u8,
+    existing_names: []const []const u8,
+) !NamePromptResult {
+    term.discardPendingInput();
+    defer term.hideCursor();
+    var input = std.ArrayList(u8).empty;
+    defer input.deinit(allocator);
+    try input.appendSlice(allocator, initial);
+
+    var armed_overwrite = false;
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
+
+    while (true) {
+        if (refresh_terminal_size(term_rows, term_cols)) needs_render = true;
+        if (needs_render) {
+            term.hideCursor();
+            renderDimmedBackdrop(backdrop, term_rows.*, term_cols.*);
+            drawNamePromptModal(title, input.items, armed_overwrite);
+            needs_render = false;
+        }
+
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return .cancel;
+        if (maybe_event) |event| {
+            switch (event.key) {
+                .char, .digit => {
+                    try input.append(allocator, event.value);
+                    armed_overwrite = false;
+                    needs_render = true;
+                },
+                .backspace => {
+                    if (input.items.len > 0) _ = input.pop();
+                    armed_overwrite = false;
+                    needs_render = true;
+                },
+                .shift_backspace => {
+                    input.clearRetainingCapacity();
+                    armed_overwrite = false;
+                    needs_render = true;
+                },
+                .enter => {
+                    const trimmed = std.mem.trim(u8, input.items, " ");
+                    if (trimmed.len == 0) continue;
+                    const collides = nameExists(existing_names, trimmed);
+                    if (collides and !armed_overwrite) {
+                        armed_overwrite = true;
+                        needs_render = true;
+                        continue;
+                    }
+                    return .{ .name = try allocator.dupe(u8, trimmed) };
+                },
+                .escape => return .cancel,
+                else => {},
+            }
+        }
+    }
+}
+
+fn nameExists(existing_names: []const []const u8, name: []const u8) bool {
+    for (existing_names) |existing| {
+        if (std.mem.eql(u8, existing, name)) return true;
+    }
+    return false;
+}
+
+fn drawNamePromptModal(title: []const u8, query: []const u8, armed_overwrite: bool) void {
+    const stdout = compat.stdoutWriter();
+    const colors = theme.superseedr_like;
+    const border = theme.unicode_border;
+    const size = term.getTerminalSize() catch term.TerminalSize{ .rows = 24, .cols = 80 };
+
+    const is_compact = theme.isCompactViewport(size.rows, size.cols);
+    if (is_compact) {
+        term.moveCursor(1, 1);
+        term.setFg256(colors.accent);
+        term.setBold(true);
+        stdout.writeAll(title) catch {};
+        stdout.writeAll(":\r\n") catch {};
+        term.setBold(false);
+        term.setFg256(colors.text);
+        var input_buf: [128]u8 = undefined;
+        const input_line = std.mem.print(&input_buf, "> {s}\r\n", .{query}) catch "> ";
+        stdout.writeAll(input_line) catch {};
+        term.setFg256(colors.muted);
+        if (armed_overwrite) {
+            stdout.writeAll("Name exists - Enter to overwrite\r\n") catch {};
+        } else {
+            stdout.writeAll("ENTER save | ESC cancel\r\n") catch {};
+        }
+        term.resetColor();
+        const compact_cursor_col_usize = @min(@as(usize, @intCast(size.cols)), 3 + theme.displayWidthOfText(query));
+        term.moveCursor(2, @as(u16, @intCast(compact_cursor_col_usize)));
+        term.showCursor();
+        return;
+    }
+
+    const panel_width = @min(@as(usize, 56), @as(usize, @intCast(size.cols - 4)));
+    const left_pad = (@as(usize, @intCast(size.cols)) - panel_width) / 2;
+    const panel_height = 5;
+    const top_pad = @max(@as(usize, 2), (@as(usize, @intCast(size.rows)) - panel_height) / 2);
+    const panel_col = @as(u16, @intCast(left_pad + 1));
+    const top_row = @as(u16, @intCast(top_pad));
+
+    // Top border
+    term.moveCursor(top_row, panel_col);
+    theme.drawPanelTop(stdout, panel_width, border, colors) catch {};
+
+    // Title row
+    term.moveCursor(top_row + 1, panel_col);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.setFg256(colors.panel_title);
+    term.setBold(true);
+    var title_buf: [64]u8 = undefined;
+    const title_line = std.mem.print(&title_buf, " {s} ", .{title}) catch " Profile name ";
+    theme.writePadded(stdout, title_line, panel_width - 2) catch {};
+    term.setBold(false);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.resetColor();
+    stdout.writeAll("\r\n") catch {};
+
+    // Input row
+    term.moveCursor(top_row + 2, panel_col);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.setFg256(colors.text);
+    var input_buf: [256]u8 = undefined;
+    const input_text = std.mem.print(&input_buf, " Name: {s}", .{query}) catch " Name: ";
+    const disp_w = theme.displayWidthOfText(input_text);
+    stdout.writeAll(input_text) catch {};
+    if (disp_w < panel_width - 2) {
+        for (0..(panel_width - 2 - disp_w)) |_| stdout.writeAll(" ") catch {};
+    }
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.resetColor();
+    stdout.writeAll("\r\n") catch {};
+
+    // Help/status row
+    term.moveCursor(top_row + 3, panel_col);
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    if (armed_overwrite) {
+        term.setFg256(colors.warn);
+        theme.writePadded(stdout, " Name exists - press Enter again to overwrite ", panel_width - 2) catch {};
+    } else {
+        term.setFg256(colors.muted);
+        theme.writePadded(stdout, " Press ENTER to save | ESC to cancel ", panel_width - 2) catch {};
+    }
+    term.setFg256(colors.panel_border);
+    stdout.writeAll(border.vertical) catch {};
+    term.resetColor();
+    stdout.writeAll("\r\n") catch {};
+
+    // Bottom border
+    term.moveCursor(top_row + 4, panel_col);
+    theme.drawPanelBottom(stdout, panel_width, border, colors) catch {};
+
+    const prompt_len = theme.displayWidthOfText(" Name: ");
+    const cursor_col = panel_col + 1 + prompt_len + theme.displayWidthOfText(query);
+    term.moveCursor(top_row + 2, @as(u16, @intCast(cursor_col)));
+    term.showCursor();
+}
+
+/// Confirms deletion of a profile. ENTER confirms, Esc (or any other key) aborts.
+pub fn renderProfileDeleteConfirmOverlay(
+    term_rows: *u16,
+    term_cols: *u16,
+    refresh_terminal_size: RefreshTerminalSizeFn,
+    backdrop: anytype,
+    profile_name: []const u8,
+) bool {
+    term.discardPendingInput();
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
+
+    while (true) {
+        if (refresh_terminal_size(term_rows, term_cols)) needs_render = true;
+        if (needs_render) {
+            renderDimmedBackdrop(backdrop, term_rows.*, term_cols.*);
+            var line_buf: [160]u8 = undefined;
+            const line = std.mem.print(&line_buf, "Delete profile \"{s}\"?", .{profile_name}) catch "Delete this profile?";
+            const lines = [_][]const u8{line};
+            drawLinesModal("Confirm Delete", theme.superseedr_like.err, &lines, "ENTER delete | ESC cancel", false);
+            needs_render = false;
+        }
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return false;
+        if (maybe_event) |event| {
+            if (event.key == .enter) return true;
+            if (event.key == .escape) return false;
+        }
+    }
+}
+
+/// Generic dismissable notice over an arbitrary backdrop (e.g. "Saved").
+pub fn renderInfoNoticeOverlay(
+    term_rows: *u16,
+    term_cols: *u16,
+    refresh_terminal_size: RefreshTerminalSizeFn,
+    backdrop: anytype,
+    title: []const u8,
+    message: []const u8,
+    title_color: u8,
+) void {
+    term.discardPendingInput();
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
+
+    while (true) {
+        if (refresh_terminal_size(term_rows, term_cols)) needs_render = true;
+        if (needs_render) {
+            renderDimmedBackdrop(backdrop, term_rows.*, term_cols.*);
+            renderNoticePanel(title, message, title_color, false);
+            needs_render = false;
+        }
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return;
+        if (maybe_event != null) {
+            term.discardPendingInput();
+            return;
+        }
+    }
+}
+
+pub const ApplyFailuresAction = enum { retry, keep };
+
+fn matchApplyFailuresKey(event: term.Event) ?ApplyFailuresAction {
+    return switch (event.key) {
+        .escape => .keep,
+        .char => switch (event.value) {
+            'r', 'R' => .retry,
+            else => null,
+        },
+        else => null,
+    };
+}
+
+/// Modal listing indexers whose toggle failed while applying a profile. The
+/// user can retry just the failed ones, or keep the partially-applied set.
+pub fn renderProfileApplyFailuresOverlay(
+    term_rows: *u16,
+    term_cols: *u16,
+    refresh_terminal_size: RefreshTerminalSizeFn,
+    backdrop: anytype,
+    failed_names: []const []const u8,
+) ApplyFailuresAction {
+    term.discardPendingInput();
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
+
+    while (true) {
+        if (refresh_terminal_size(term_rows, term_cols)) needs_render = true;
+        if (needs_render) {
+            renderDimmedBackdrop(backdrop, term_rows.*, term_cols.*);
+            drawNamedListModal("Failed to Apply", theme.superseedr_like.err, failed_names, "r retry failed | ESC keep partial");
+            needs_render = false;
+        }
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return .keep;
+        if (maybe_event) |event| {
+            if (matchApplyFailuresKey(event)) |action| {
+                term.discardPendingInput();
+                return action;
+            }
+        }
+    }
+}
+
+pub const SaveFailuresAction = enum { retry, revert };
+
+pub fn renderIndexerSaveFailuresOverlay(
+    term_rows: *u16,
+    term_cols: *u16,
+    refresh_terminal_size: RefreshTerminalSizeFn,
+    widget: anytype,
+    failed_names: []const []const u8,
+) SaveFailuresAction {
+    term.discardPendingInput();
+    var needs_render = true;
+    const input_poll_ms: i32 = 80;
+
+    while (true) {
+        if (refresh_terminal_size(term_rows, term_cols)) {
+            needs_render = true;
+        }
+
+        if (needs_render) {
+            term.setDimPersistent(true);
+            widget.force_full_redraw = true;
+            widget.render(term_rows.*, term_cols.*);
+            term.setDimPersistent(false);
+
+            drawNamedListModal("Failed to Save", theme.superseedr_like.err, failed_names, "r retry failed | ESC discard failed");
+            needs_render = false;
+        }
+
+        const maybe_event = term.readKeyWithTimeout(input_poll_ms) catch return .revert;
+        if (maybe_event) |event| {
+            term.discardPendingInput();
+            if (event.key == .char and (event.value == 'r' or event.value == 'R')) return .retry;
+            if (event.key == .escape) return .revert;
+        }
+    }
 }
 
 pub fn renderExitConfirmationOverlay(
@@ -364,7 +875,7 @@ fn drawExitConfirmationModal() void {
     term.setFg256(colors.err);
     term.setBold(true);
     var title_buf: [64]u8 = undefined;
-    const title_line = std.fmt.bufPrint(&title_buf, " Exit Confirmation ", .{}) catch " Exit Confirmation ";
+    const title_line = std.mem.print(&title_buf, " Exit Confirmation ", .{}) catch " Exit Confirmation ";
     theme.writePadded(stdout, title_line, panel_width - 2) catch {};
     term.setBold(false);
     term.setFg256(colors.panel_border);
@@ -539,7 +1050,7 @@ fn drawListSearchModal(query: []const u8) void {
         term.setBold(false);
         term.setFg256(colors.text);
         var input_buf: [128]u8 = undefined;
-        const input_line = std.fmt.bufPrint(&input_buf, "> {s}\r\n", .{query}) catch "> ";
+        const input_line = std.mem.print(&input_buf, "> {s}\r\n", .{query}) catch "> ";
         stdout.writeAll(input_line) catch {};
         term.setFg256(colors.muted);
         if (unlocked) {
@@ -573,7 +1084,7 @@ fn drawListSearchModal(query: []const u8) void {
     term.setFg256(colors.panel_title);
     term.setBold(true);
     var title_buf: [64]u8 = undefined;
-    const title_line = std.fmt.bufPrint(&title_buf, " Search in results ", .{}) catch " Search in results ";
+    const title_line = std.mem.print(&title_buf, " Search in results ", .{}) catch " Search in results ";
     theme.writePadded(stdout, title_line, panel_width - 2) catch {};
     term.setBold(false);
     term.setFg256(colors.panel_border);
@@ -588,7 +1099,7 @@ fn drawListSearchModal(query: []const u8) void {
 
     term.setFg256(colors.text);
     var input_buf: [256]u8 = undefined;
-    const input_text = std.fmt.bufPrint(&input_buf, " Search: {s}", .{query}) catch " Search: ";
+    const input_text = std.mem.print(&input_buf, " Search: {s}", .{query}) catch " Search: ";
 
     const disp_w = theme.displayWidthOfText(input_text);
     stdout.writeAll(input_text) catch {};
@@ -643,6 +1154,52 @@ test "computeNoticePanelLayout centers panel in regular mode" {
     try std.testing.expectEqual(@as(usize, 72), regular.panel_width);
     try std.testing.expectEqual(@as(u16, 5), regular.panel_col);
     try std.testing.expectEqual(@as(u16, 8), regular.top_row);
+}
+
+test "matchModifiedKey maps letters and escape, ignores others" {
+    try std.testing.expectEqual(ProfileModifiedAction.save_existing, matchModifiedKey(.{ .key = .char, .value = 's' }).?);
+    try std.testing.expectEqual(ProfileModifiedAction.new_profile, matchModifiedKey(.{ .key = .char, .value = 'n' }).?);
+    try std.testing.expectEqual(ProfileModifiedAction.discard, matchModifiedKey(.{ .key = .char, .value = 'd' }).?);
+    try std.testing.expectEqual(ProfileModifiedAction.discard, matchModifiedKey(.{ .key = .char, .value = 'D' }).?);
+    try std.testing.expectEqual(ProfileModifiedAction.cancel, matchModifiedKey(.{ .key = .escape, .value = 0 }).?);
+    try std.testing.expect(matchModifiedKey(.{ .key = .char, .value = 'x' }) == null);
+    try std.testing.expect(matchModifiedKey(.{ .key = .enter, .value = 0 }) == null);
+}
+
+test "matchSaveChoiceKey maps o/n and escape" {
+    try std.testing.expectEqual(ProfileSaveChoiceAction.overwrite, matchSaveChoiceKey(.{ .key = .char, .value = 'o' }).?);
+    try std.testing.expectEqual(ProfileSaveChoiceAction.new_profile, matchSaveChoiceKey(.{ .key = .char, .value = 'n' }).?);
+    try std.testing.expectEqual(ProfileSaveChoiceAction.cancel, matchSaveChoiceKey(.{ .key = .escape, .value = 0 }).?);
+    try std.testing.expect(matchSaveChoiceKey(.{ .key = .char, .value = 'd' }) == null);
+}
+
+test "matchUncommittedKey maps i/d and escape when saving a profile" {
+    try std.testing.expectEqual(ProfileUncommittedAction.commit, matchUncommittedKey(.{ .key = .char, .value = 'i' }, .save_profile).?);
+    try std.testing.expectEqual(ProfileUncommittedAction.discard, matchUncommittedKey(.{ .key = .char, .value = 'd' }, .save_profile).?);
+    try std.testing.expectEqual(ProfileUncommittedAction.cancel, matchUncommittedKey(.{ .key = .escape, .value = 0 }, .save_profile).?);
+    try std.testing.expect(matchUncommittedKey(.{ .key = .char, .value = 'z' }, .save_profile) == null);
+    try std.testing.expect(matchUncommittedKey(.{ .key = .char, .value = 'c' }, .save_profile) == null);
+}
+
+test "matchUncommittedKey maps c/d and escape when leaving for profiles" {
+    try std.testing.expectEqual(ProfileUncommittedAction.commit, matchUncommittedKey(.{ .key = .char, .value = 'C' }, .leave).?);
+    try std.testing.expectEqual(ProfileUncommittedAction.discard, matchUncommittedKey(.{ .key = .char, .value = 'd' }, .leave).?);
+    try std.testing.expectEqual(ProfileUncommittedAction.cancel, matchUncommittedKey(.{ .key = .escape, .value = 0 }, .leave).?);
+    try std.testing.expect(matchUncommittedKey(.{ .key = .char, .value = 'i' }, .leave) == null);
+}
+
+test "matchApplyFailuresKey maps r and escape, ignores others" {
+    try std.testing.expectEqual(ApplyFailuresAction.retry, matchApplyFailuresKey(.{ .key = .char, .value = 'r' }).?);
+    try std.testing.expectEqual(ApplyFailuresAction.retry, matchApplyFailuresKey(.{ .key = .char, .value = 'R' }).?);
+    try std.testing.expectEqual(ApplyFailuresAction.keep, matchApplyFailuresKey(.{ .key = .escape, .value = 0 }).?);
+    try std.testing.expect(matchApplyFailuresKey(.{ .key = .enter, .value = 0 }) == null);
+}
+
+test "nameExists matches case-sensitively" {
+    const names = [_][]const u8{ "Anime", "Movies" };
+    try std.testing.expect(nameExists(&names, "Anime"));
+    try std.testing.expect(!nameExists(&names, "anime"));
+    try std.testing.expect(!nameExists(&names, "Books"));
 }
 
 test "formatCompactNoticeLine truncates with ellipsis when needed" {

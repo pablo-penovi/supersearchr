@@ -31,7 +31,7 @@ fn getLogPath(allocator: std.mem.Allocator) ![]const u8 {
 fn defaultLogPath(allocator: std.mem.Allocator) ![]const u8 {
     const temp_dir = try getTempDir(allocator);
     defer allocator.free(temp_dir);
-    return std.fs.path.join(allocator, &.{ temp_dir, default_log_filename });
+    return std.Io.Dir.path.join(allocator, &.{ temp_dir, default_log_filename });
 }
 
 fn getTempDir(allocator: std.mem.Allocator) ![]const u8 {
@@ -75,10 +75,10 @@ pub fn writef(
     defer compat.closeFile(file);
 
     var msg_buf: [2048]u8 = undefined;
-    const message = std.fmt.bufPrint(&msg_buf, fmt, args) catch return;
+    const message = std.mem.print(&msg_buf, fmt, args) catch return;
 
     var line_buf: [2304]u8 = undefined;
-    const line = std.fmt.bufPrint(
+    const line = std.mem.print(
         &line_buf,
         "[{d}] {s}: {s}\n",
         .{ @as(i64, @intCast(@divTrunc(std.Io.Clock.real.now(io).nanoseconds, 1_000_000_000))), scope, message },

@@ -7,3 +7,4 @@ REFACTOR.md
 coverage/
 .codex
 dist/
+.claude/

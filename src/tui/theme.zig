@@ -4,6 +4,26 @@ const term = @import("term");
 pub const compact_cols: u16 = 56;
 pub const compact_rows: u16 = 10;
 
+/// Animation frames for in-progress activity (streaming search, indexer
+/// commit). Shared so every progress footer animates identically.
+pub const spinner_frames = [_][]const u8{
+    "⣎⡇",
+    "⣇⡇",
+    "⣏⡆",
+    "⣏⡅",
+    "⣏⡃",
+    "⣏⠇",
+    "⡏⡇",
+    "⢏⡇",
+    "⣋⡇",
+    "⣍⡇",
+};
+
+/// Returns the spinner glyph for an arbitrary frame counter (wraps).
+pub fn spinnerGlyph(frame: usize) []const u8 {
+    return spinner_frames[frame % spinner_frames.len];
+}
+
 pub const Theme = struct {
     panel_border: u8,
     panel_title: u8,
@@ -89,7 +109,54 @@ pub fn isCompactViewport(rows: u16, cols: u16) bool {
     return cols < compact_cols or rows < compact_rows;
 }
 
+/// Combining marks and format characters occupy no column of their own; they
+/// stack onto the preceding character. Not an exhaustive Unicode table — it
+/// covers the ranges that show up in torrent titles.
+fn isZeroWidth(cp: u21) bool {
+    if (cp >= 0x0300 and cp <= 0x036F) return true; // combining diacriticals
+    if (cp >= 0x0483 and cp <= 0x0489) return true; // Cyrillic marks
+    if (cp >= 0x0591 and cp <= 0x05BD) return true; // Hebrew points
+    if (cp >= 0x0610 and cp <= 0x061A) return true; // Arabic marks
+    if (cp >= 0x064B and cp <= 0x065F) return true; // Arabic diacritics
+    if (cp == 0x0670) return true;
+    if (cp >= 0x06D6 and cp <= 0x06DC) return true;
+    if (cp == 0x0BCD) return true; // Tamil virama
+    if (cp >= 0x1AB0 and cp <= 0x1AFF) return true; // combining extended
+    if (cp >= 0x1DC0 and cp <= 0x1DFF) return true; // combining supplement
+    if (cp >= 0x200B and cp <= 0x200F) return true; // ZWSP, ZWNJ, ZWJ, bidi marks
+    if (cp >= 0x20D0 and cp <= 0x20F0) return true; // combining for symbols
+    if (cp >= 0xFE00 and cp <= 0xFE0F) return true; // variation selectors
+    if (cp == 0xFEFF) return true; // BOM
+    return false;
+}
+
+/// Symbols with Emoji_Presentation=Yes outside the main emoji planes. Their
+/// neighbours in the same blocks are drawn narrow, so the set is enumerated
+/// rather than treated as ranges.
+fn isEmojiPresentationSymbol(cp: u21) bool {
+    return switch (cp) {
+        0x231A, 0x231B => true,
+        0x23E9...0x23EC, 0x23F0, 0x23F3 => true,
+        0x25FD, 0x25FE => true,
+        0x2614, 0x2615 => true,
+        0x2648...0x2653 => true,
+        0x267F, 0x2693, 0x26A1 => true,
+        0x26AA, 0x26AB => true,
+        0x26BD, 0x26BE => true,
+        0x26C4, 0x26C5, 0x26CE, 0x26D4, 0x26EA => true,
+        0x26F2, 0x26F3, 0x26F5, 0x26FA, 0x26FD => true,
+        0x2705, 0x270A, 0x270B, 0x2728 => true,
+        0x274C, 0x274E => true,
+        0x2753...0x2755, 0x2757 => true,
+        0x2795...0x2797, 0x27B0, 0x27BF => true,
+        0x2B1B, 0x2B1C, 0x2B50, 0x2B55 => true,
+        else => false,
+    };
+}
+
 fn displayWidth(cp: u21) usize {
+    if (isZeroWidth(cp)) return 0;
+    if (isEmojiPresentationSymbol(cp)) return 2;
     if (cp >= 0x1100 and cp <= 0x115F) return 2;
     if (cp == 0x2329 or cp == 0x232A) return 2;
     if (cp >= 0x2E80 and cp <= 0x303E) return 2;
@@ -104,7 +171,7 @@ fn displayWidth(cp: u21) usize {
     if (cp >= 0xFFE0 and cp <= 0xFFE6) return 2;
     if (cp >= 0x1B000 and cp <= 0x1B0FF) return 2;
     if (cp == 0x1F004 or cp == 0x1F0CF) return 2;
-    if (cp >= 0x1F300 and cp <= 0x1F9FF) return 2;
+    if (cp >= 0x1F300 and cp <= 0x1FAFF) return 2;
     if (cp >= 0x20000 and cp <= 0x2FFFD) return 2;
     if (cp >= 0x30000 and cp <= 0x3FFFD) return 2;
     return 1;
@@ -124,11 +191,11 @@ fn nthColumnByteOffset(text: []const u8, n: usize) usize {
     var byte_pos: usize = 0;
     var cols: usize = 0;
     while (cols < n) {
-        const slice = iter.nextCodepointSlice() orelse break;
-        const cp = std.unicode.utf8Decode(slice) catch break;
+        const start = iter.i;
+        const cp = iter.nextCodepoint() orelse break;
         const w = displayWidth(cp);
         if (cols + w > n) break;
-        byte_pos += slice.len;
+        byte_pos += iter.i - start;
         cols += w;
     }
     return byte_pos;
@@ -167,13 +234,15 @@ pub fn truncateWithEllipsis(text: []const u8, width: usize, scratch: []u8) []con
     if (scratch.len < width) return text;
 
     if (width <= 3) {
-        const end = nthColumnByteOffset(text, width);
-        @memcpy(scratch[0..end], text[0..end]);
-        return scratch[0..end];
+        return text[0..nthColumnByteOffset(text, width)];
     }
 
     const keep = width - 3;
     const byte_end = nthColumnByteOffset(text, keep);
+    // A column can span up to four bytes, so the byte offset may outrun a
+    // scratch buffer sized against the column count. Drop the ellipsis rather
+    // than overrun it.
+    if (byte_end + 3 > scratch.len) return text[0..byte_end];
     @memcpy(scratch[0..byte_end], text[0..byte_end]);
     @memcpy(scratch[byte_end .. byte_end + 3], "...");
     return scratch[0 .. byte_end + 3];
@@ -200,14 +269,22 @@ test "unicode border is heavy box drawing" {
 test "writePadded pads correctly with multi-byte char" {
     var buf: [64]u8 = undefined;
     var writer: std.Io.Writer = .fixed(&buf);
-    // "⭐" is 3 bytes, 1 char. Total chars = 4. Pad to 6 → 2 spaces added.
+    // "é" is 2 bytes, 1 column. Total columns = 4. Pad to 6 → 2 spaces added.
+    try writePadded(&writer, "abcé", 6);
+    try std.testing.expectEqualStrings("abcé  ", writer.buffered());
+}
+
+test "writePadded accounts for a wide emoji symbol" {
+    var buf: [64]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buf);
+    // "⭐" is 3 bytes, 1 codepoint, 2 columns. "abc⭐" = 5 columns → 1 space.
     try writePadded(&writer, "abc⭐", 6);
-    try std.testing.expectEqualStrings("abc⭐  ", writer.buffered());
+    try std.testing.expectEqualStrings("abc⭐ ", writer.buffered());
 }
 
 test "truncateWithEllipsis handles multi-byte char in kept region" {
     var buf: [32]u8 = undefined;
-    // "abc⭐xyz" = 7 chars, truncate to 6 → "abc..."
+    // "abc⭐xyz" = 3 + 2 + 3 = 8 columns, truncate to 6 → "abc..."
     const out = truncateWithEllipsis("abc⭐xyz", 6, &buf);
     try std.testing.expectEqualStrings("abc...", out);
 }
@@ -239,6 +316,39 @@ test "truncateWithEllipsis truncates wide emoji correctly" {
     // "ab🌟cd" = 2+2+2 = 6 display cols. Truncate to 5 → "ab..." (wide 🌟 overshoots at col 4)
     const out = truncateWithEllipsis("ab🌟cd", 5, &buf);
     try std.testing.expectEqualStrings("ab...", out);
+}
+
+test "displayWidth returns 0 for combining marks" {
+    try std.testing.expectEqual(@as(usize, 0), displayWidth(0x0301)); // combining acute
+    try std.testing.expectEqual(@as(usize, 0), displayWidth(0x0BCD)); // Tamil virama
+    try std.testing.expectEqual(@as(usize, 0), displayWidth(0x200D)); // zero width joiner
+    try std.testing.expectEqual(@as(usize, 0), displayWidth(0xFE0F)); // variation selector-16
+}
+
+test "displayWidthOfText counts decomposed accent as one column" {
+    // "é" as e + combining acute renders in a single column.
+    try std.testing.expectEqual(@as(usize, 1), displayWidthOfText("e\u{0301}"));
+    // Real title from a Jackett feed: the virama stacks, so 29 codepoints
+    // occupy 28 columns.
+    try std.testing.expectEqual(@as(usize, 28), displayWidthOfText("நூல் - The terrible red dwarf"));
+}
+
+test "displayWidth returns 2 for emoji presentation symbols" {
+    try std.testing.expectEqual(@as(usize, 2), displayWidth(0x2705)); // ✅
+    try std.testing.expectEqual(@as(usize, 2), displayWidth(0x26A1)); // ⚡
+    try std.testing.expectEqual(@as(usize, 2), displayWidth(0x2B50)); // ⭐
+    try std.testing.expectEqual(@as(usize, 2), displayWidth(0x1FAB0)); // 🪰
+    // Neighbours in the same blocks stay narrow.
+    try std.testing.expectEqual(@as(usize, 1), displayWidth(0x2702)); // ✂
+    try std.testing.expectEqual(@as(usize, 1), displayWidth(0x2713)); // ✓
+}
+
+test "truncateWithEllipsis does not overrun a scratch buffer smaller than the byte span" {
+    // 8 columns of 4-byte codepoints need 32 bytes; the scratch holds only 10.
+    var buf: [10]u8 = undefined;
+    const text = "𝕬𝕭𝕮𝕯𝕰𝕱𝕲𝕳𝕴";
+    const out = truncateWithEllipsis(text, 8, &buf);
+    try std.testing.expectEqual(@as(usize, 5), displayWidthOfText(out));
 }
 
 test "isCompactViewport uses shared compact breakpoint" {

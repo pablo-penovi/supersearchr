@@ -64,7 +64,7 @@ pub fn defaultProcessChecker(allocator: std.mem.Allocator) anyerror!bool {
 
     if (builtin.os.tag == .windows) {
         if (!(result.term == .exited and result.term.exited == 0)) return false;
-        return std.mem.indexOf(u8, result.stdout, "superseedr.exe") != null;
+        return std.mem.find(u8, result.stdout, "superseedr.exe") != null;
     }
     return result.term == .exited and result.term.exited == 0;
 }
@@ -116,7 +116,7 @@ fn formatArgv(buf: []u8, argv: []const []const u8) []const u8 {
             written += 1;
         }
 
-        const part = std.fmt.bufPrint(buf[written..], "\"{s}\"", .{arg}) catch {
+        const part = std.mem.print(buf[written..], "\"{s}\"", .{arg}) catch {
             const suffix = "...";
             const suffix_len = @min(buf.len - written, suffix.len);
             @memcpy(buf[written .. written + suffix_len], suffix[0..suffix_len]);

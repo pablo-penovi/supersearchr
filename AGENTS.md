@@ -1,12 +1,12 @@
 ## Tooling
 
-This project is compiled using Zig 0.16.0.
-**CRITICAL**: It is essential to only use syntax, objects and functions that are compatible with Zig 0.16.0. It's wise to search in the Zig docs: https://ziglang.org/documentation/0.16.0/
+This project is compiled using Zig 0.17.0.
+**CRITICAL**: It is essential to only use syntax, objects and functions that are compatible with Zig 0.17.0. It's wise to search in the Zig docs: https://ziglang.org/documentation/0.17.0/ or read the std source under `/usr/lib/zig/std/` (deprecated decls carry a `/// Deprecated` doc comment naming the replacement). Do not use deprecated APIs.
 
 ## Coding rules
 
-- Do not use *std.Arraylist({type}).init(allocator)* to initialize ArrayList. This is INVALID in Zig 0.16.0. Instead, use *std.ArrayList({type}) = .{}*
-- When appending an item to an ArrayList, do not use *{array}.append(item)*. This is INVALID in Zig 0.16.0. Instead, use *{array}.append(allocator, item)*
+- Initialize ArrayList with *std.ArrayList({type}) = .empty*. Do not use *.{}* (INVALID in Zig 0.17.0, the fields have no defaults) nor *.init(allocator)*
+- When appending an item to an ArrayList, do not use *{array}.append(item)*. This is INVALID in Zig 0.17.0. Instead, use *{array}.append(allocator, item)*
 - When using this structure:
 ```zig
 // the "list" variable in this example is a std.ArrayList that you receive from another function
@@ -19,7 +19,16 @@ defer {
 ```
 make sure the capture is a var (|*{name}|) and not a const (|{name}|)
 - When adding a new module with tests, add a corresponding test section in build.zig following the pattern of existing tests (config_tests, jackett_tests, superseedr_tests, search_widget_tests, results_widget_tests, app_tests) and dependOn it in the test_step
-- std.io.getStdIn() and std.io.getStdOut() are deprecated in Zig 0.16.0. Use std.fs.File.stdin() and std.fs.File.stdout() instead
+- Use std.Io.File.stdin() and std.Io.File.stdout() (or the `compat` helpers). std.fs.File and std.io.getStdIn()/getStdOut() do not exist in Zig 0.17.0
+- Zig 0.17.0 renames/deprecations to follow:
+  - std.fmt.bufPrint → std.mem.print; std.fmt.allocPrint(allocator, ...) → allocator.print(...)
+  - std.mem.indexOf / indexOfScalar / indexOfScalarPos / indexOfPos / indexOfAny → std.mem.find / findScalar / findScalarPos / findPos / findAny
+  - std.fs.path → std.Io.Dir.path
+  - std.builtin → std.lang; std.builtin.OptimizeMode → std.lang.Optimize; optimize modes are lowercase (.debug, .safe, .fast, .small; CLI `-Doptimize=safe`)
+  - @intFromEnum → @backingInt (`zig fmt` rewrites it automatically)
+  - std.heap.DebugAllocator → std.heap.SafeAllocator (`.init(std.heap.page_allocator, .{})`; `deinit()` returns the leak count)
+  - build.zig: `b.args` → `run_cmd.addPassthruArgs()`; `b.pathFromRoot` → use `b.path(...)` LazyPaths
+- `zig build test` runs test binaries with `--listen=-`, which repurposes the test binary's real stdout as a binary IPC channel back to the build runner. Any code path reachable from a test that writes raw bytes directly to stdout (e.g. `term.hideCursor()`/`showCursor()`, or any other `compat.stdoutWriteAll`/terminal ANSI write) corrupts that protocol's framing and hangs `zig build test` forever — even though the test passes instantly when the compiled test binary is run directly (bypassing `--listen=-`). If a test hangs only under `zig build test` but the standalone binary (found under `.zig-cache/o/.../test-<name>`) runs and passes fine, suspect this. Fix by guarding the stdout-writing call with `if (!builtin.is_test)`, matching the existing pattern already used for `panels.renderNoticePanel` in `runIndexersState`. Also: a hung `zig build test` leaves orphaned `zig build`/`test-<name> --listen=-` processes that hold the `.zig-cache` lock and make every subsequent `zig build test` hang too — `pkill -9 -f "zig build test"` (and kill the matching `test-*` PIDs directly if `pkill -f` doesn't catch them) before retrying.
 
 ## Running Tests
 
@@ -28,7 +37,7 @@ make sure the capture is a var (|*{name}|) and not a const (|{name}|)
 
 ## Project Overview
 
-Supersearchr is a TUI BitTorrent search tool written in Zig 0.16.0. It searches via Jackett and sends selected magnet or torrent links to Superseedr.
+Supersearchr is a TUI BitTorrent search tool written in Zig 0.17.0. It searches via Jackett and sends selected magnet or torrent links to Superseedr. It can also enable/disable Jackett indexers through Jackett's admin API and save enabled sets as named profiles.
 
 ## Commands
 
@@ -40,21 +49,40 @@ zig build test --summary all       # Run all tests with detailed output
 
 ## Architecture
 
-The app is a state machine: SEARCH → LOADING → RESULTS → ERROR, with ESC exiting from any state.
+The app is a state machine over `State` in `src/tui/app.zig`: `search`, `results`, `indexers`, `profiles`, `err`.
 
-Modules use dependency injection (function pointer executors/checkers/spawners) for testability in `jackett/client.zig` and `superseedr/client.zig`.
+- `search` → `results` on submit (searches stream in per indexer); `results` → `search` with `s`.
+- F1 (`indexers`) and F2 (`profiles`) are reachable only from `search`; F1/F2 switch between the two screens, and ESC returns to `search` (on F1, ESC first reverts pending toggles).
+- ESC on `search` or `results` asks to confirm exit. `err` shows a message and returns to `search` on any key.
+
+Modules use dependency injection (function pointer executors/resolvers/checkers/spawners, gathered in `AppDeps` in `src/tui/app.zig`) for testability, e.g. in `jackett/client.zig`, `jackett/admin_client.zig`, and `superseedr/client.zig`; file paths (`profiles.json`, `record.json`, ...) come from injectable resolvers.
 
 ## Key Modules
 
-- `src/main.zig`: Entry point; loads config and starts the TUI app.
+- `src/main.zig`: Entry point; initializes the allocator and the app's `std.Io.Threaded` (cancel-capable), loads config, and starts the TUI app.
 - `src/config.zig`: Loads `~/.config/supersearchr/config.json`, validates required fields, and patches optional defaults like `terminal`.
-- `src/structs/torrent.zig`: Torrent struct (title, seeders, leechers, link).
-- `src/jackett/client.zig`: Jackett Torznab HTTP client; parses XML and sorts results.
+- `src/compat.zig`: `std.Io` helpers (the installed io instance, stdout, file I/O, timestamps, env vars).
+- `src/update_checker.zig`: Latest-release checker (GitHub API fetch + semantic version comparison).
+- `src/profiles.zig`: Indexer profiles store, apply-plan diffing, and `profiles.json` persistence.
+- `src/record.zig`: Per-indexer search outcome history persisted to `record.json` (keyed by indexer ID).
+- `src/last_status.zig`: Per-indexer latest enable/disable outcome persisted to `last_status.json`.
+- `src/debug/log.zig`: Optional debug logging controlled by environment variables.
+- `src/structs/torrent.zig`: Torrent struct (title, stats, optional size and pub date, link).
+- `src/jackett/client.zig`: Jackett Torznab client; configured-indexer discovery, streaming parallel per-indexer searches, XML parsing, and sorting.
+- `src/jackett/admin_client.zig`: Jackett admin REST client for login, indexer listing, config get/set/delete, and the disabled-indexer config cache.
+- `src/jackett/http_exec.zig`: Shared low-level HTTP request executor.
+- `src/jackett/url_encode.zig`: Percent-encoding helper for URL path and query components.
 - `src/superseedr/client.zig`: Spawns or talks to `superseedr add <link>`, validates link format.
 - `src/tui/term.zig`: Raw terminal mode, input, ANSI helpers, size detection.
-- `src/tui/app.zig`: Main event loop and state machine.
-- `src/tui/widgets/search.zig`: Search input widget.
-- `src/tui/widgets/results.zig`: Results list widget with navigation and selection.
+- `src/tui/theme.zig`: Color palette, border styles, and rendering helpers.
+- `src/tui/panels.zig`: Shared panel/overlay rendering for notices, errors, and profile prompts.
+- `src/tui/app.zig`: Main event loop and state machine, worker-thread indexer commits, search sessions, and Superseedr handoff.
+- `src/tui/widgets/search.zig`: Search input widget with the active-profile label.
+- `src/tui/widgets/results.zig`: Results list widget with live search status, sorting, navigation, and selection.
+- `src/tui/widgets/indexers.zig`: F1 indexers table with toggles, Record/Last Status columns, and commit progress.
+- `src/tui/widgets/profiles.zig`: F2 profiles list with a details panel, load/rename/delete, and apply progress.
+- `src/tui/widgets/list_nav.zig`: Shared cursor/scroll/page navigation and the commit-progress type.
+- `src/tui/widgets/hints.zig`: Key-hints footer marquee.
 
 ## Repository Map
 
