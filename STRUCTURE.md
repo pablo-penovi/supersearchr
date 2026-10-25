@@ -1,7 +1,7 @@
 # Repository Structure
 
 This file summarizes tracked files to avoid re-scanning. Build artifacts in `zig-out/` are excluded by design.
-Current project version: `v0.5.0`.
+Current project version: `v0.6.0`.
 
 ## Root
 
@@ -24,6 +24,7 @@ Current project version: `v0.5.0`.
 
 - `src/main.zig`: Program entry; initializes the allocator and the app's `std.Io.Threaded`, loads config, runs TUI app, and checks the entrypoint signature.
 - `src/config.zig`: Config file path handling, creation, defaults patching, and validation.
+- `src/compat.zig`: `std.Io` helpers: installed `Io` instance, stdout writer, file read/write, timestamps, and environment variable access.
 - `src/debug/log.zig`: Optional debug logging controlled by environment variables.
 - `src/update_checker.zig`: Latest-release checker (GitHub API fetch + semantic version comparison).
 - `src/profiles.zig`: Indexer profiles store (named indexer-ID sets plus the active profile, with upsert/rename/remove), apply-plan diffing, and `profiles.json` persistence.

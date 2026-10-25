@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## 0.6.0
 
 ### Added
 - Added indexer profiles: a profile is a named set of enabled indexers. `F3` on the indexers screen saves the enabled indexers as a new profile or overwrites the active one, and `F2` on the search screen opens a profiles list to load or delete them. Loading a profile enables and disables indexers on Jackett to match it. Profiles live in `profiles.json` in the app config directory.
