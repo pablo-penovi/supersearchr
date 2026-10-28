@@ -5,7 +5,7 @@
 Terminal-first BitTorrent search for [Jackett](https://github.com/Jackett/Jackett) + [Superseedr](https://github.com/Jagalite/superseedr), written in Zig 0.17.0.
 
 `supersearchr` lets you search Jackett from a TUI, browse sorted results, manage active Jackett indexers, and send a selected magnet/torrent link to `superseedr add`. Searches query configured Jackett indexers in parallel, stream result batches as each indexer finishes, and keep the displayed list sorted by seeders while the search continues.
-Current project version: `v0.6.0`.
+Current project version: `v0.6.1`.
 
 ## Requirements
 
@@ -126,7 +126,7 @@ Indexers screen:
 - `Up` / `Down`: move one indexer
 - `Shift+Up` / `Shift+Down`: move one page
 - `Space`: toggle selected indexer active/inactive
-- `Enter`: save pending changes (`Esc` while saving stops after the indexer in flight)
+- `Enter`: save pending changes (indexers are toggled in parallel; `Esc` while saving stops once the indexers in flight finish)
 - `F3`: save the enabled indexers as a profile (new, or overwriting the active one)
 - `F2`: switch to the profiles screen (pending changes must be committed or discarded first)
 - `Esc`: revert pending changes, or return to the search screen when there are none
@@ -137,7 +137,7 @@ Profiles screen (`F2`):
 
 - `Up` / `Down`: move one profile
 - `Shift+Up` / `Shift+Down`: move one page
-- `Enter`: load the selected profile, enabling and disabling indexers on Jackett to match it, with live progress (`Esc` stops after the indexer in flight). Indexers that fail to toggle can be retried or kept as-is.
+- `Enter`: load the selected profile, enabling and disabling indexers on Jackett to match it, with live progress, toggling indexers in parallel (`Esc` stops once the indexers in flight finish). Indexers that fail to toggle can be retried or kept as-is.
 - `r` or `R`: rename the selected profile
 - `Del`: delete the selected profile
 - `F1`: switch to the indexers screen

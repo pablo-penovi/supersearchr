@@ -267,7 +267,7 @@ pub const ProfilesWidget = struct {
     /// shorter list.
     fn hintsText(self: *const ProfilesWidget, compact: bool) []const u8 {
         if (self.apply_progress) |progress| {
-            if (progress.canceling) return "Finishing current indexer\xe2\x80\xa6";
+            if (progress.canceling) return "Finishing in-flight indexers\xe2\x80\xa6";
             return if (compact)
                 "ESC stop after current"
             else
@@ -960,7 +960,7 @@ test "hints switch to the stop hint while a profile is being applied" {
     try std.testing.expect(std.mem.find(u8, widget.hintsText(false), "ESC stop after current") != null);
     try std.testing.expect(std.mem.find(u8, widget.hintsText(true), "ENTER load") == null);
     widget.setCommitProgress(.{ .completed = 0, .total = 2, .failed = 0, .spinner_frame = 0, .canceling = true });
-    try std.testing.expect(std.mem.find(u8, widget.hintsText(false), "Finishing current indexer") != null);
+    try std.testing.expect(std.mem.find(u8, widget.hintsText(false), "Finishing in-flight indexers") != null);
 }
 
 test "handleEvent r returns rename with cursor index, but not on an empty list" {

@@ -68,8 +68,8 @@ pub const CommitProgress = struct {
     total: usize,
     failed: usize,
     spinner_frame: usize,
-    /// True once ESC has been pressed: the worker finishes the in-flight
-    /// indexer then stops. Drives the "Finishing current…" footer hint.
+    /// True once ESC has been pressed: the workers finish the in-flight
+    /// indexers then stop. Drives the "Finishing in-flight…" footer hint.
     canceling: bool = false,
 };
 

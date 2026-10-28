@@ -1,7 +1,7 @@
 # Repository Structure
 
 This file summarizes tracked files to avoid re-scanning. Build artifacts in `zig-out/` are excluded by design.
-Current project version: `v0.6.0`.
+Current project version: `v0.6.1`.
 
 ## Root
 
@@ -39,7 +39,7 @@ Current project version: `v0.6.0`.
 - `src/tui/term.zig`: Terminal raw mode, key reading, ANSI helpers, terminal size.
 - `src/tui/theme.zig`: Color palette, border styles, and rendering helpers.
 - `src/tui/panels.zig`: Shared panel/overlay rendering helpers for notices, errors, and the profile save/apply/delete prompts.
-- `src/tui/app.zig`: App state machine (search/results/indexers/profiles/error), streaming Jackett session orchestration, indexer management and profile flows (worker-thread commits with live progress), a background startup check for active-profile drift, and Superseedr handoff.
+- `src/tui/app.zig`: App state machine (search/results/indexers/profiles/error), streaming Jackett session orchestration, indexer management and profile flows (parallel worker-pool commits with live progress), a background startup check for active-profile drift, and Superseedr handoff.
 - `src/tui/widgets/indexers.zig`: Indexers table widget with navigation, toggle state, Record/Last Status columns, commit progress, save/revert actions, and tests.
 - `src/tui/widgets/profiles.zig`: Profiles list widget for the F2 screen with a side-by-side details panel previewing the selected profile's changes, navigation, load/rename/delete actions, apply progress, and tests.
 - `src/tui/widgets/list_nav.zig`: Shared cursor/scroll/page navigation helpers and the commit-progress type used by list-style widgets.
