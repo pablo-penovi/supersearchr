@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.6.1
+
+### Changed
+- Enabling and disabling indexers now runs in parallel, both when committing toggles on the indexers screen (`F1`) and when loading a profile (`F2`). Each toggle waits on Jackett validating the indexer's site, so a batch used to take the sum of every indexer's time; it now takes about as long as the slowest one. Up to 16 indexers are toggled at once (`jackett_commit_parallel` in `AppDeps`).
+- `Esc` during a commit or profile load now lets every indexer in flight finish, then stops; indexers not yet started keep their pending toggle. The footer hint reads "Finishing in-flight indexers…".
+
 ## 0.6.0
 
 ### Added

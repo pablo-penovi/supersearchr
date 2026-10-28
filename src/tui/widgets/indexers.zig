@@ -322,7 +322,7 @@ pub const IndexersWidget = struct {
     /// Key hints for the current state, shown in the footer.
     fn hintsText(self: *IndexersWidget, compact: bool) []const u8 {
         if (self.commit_progress) |progress| {
-            if (progress.canceling) return "Finishing current indexer\xe2\x80\xa6";
+            if (progress.canceling) return "Finishing in-flight indexers\xe2\x80\xa6";
             return if (compact)
                 "ESC stop after current"
             else
@@ -1255,6 +1255,6 @@ test "hints switch to the stop hint while changes are being committed" {
     try std.testing.expect(std.mem.find(u8, widget.hintsText(false), "ESC stop after current") != null);
     try std.testing.expectEqualStrings("ESC stop after current", widget.hintsText(true));
     widget.setCommitProgress(.{ .completed = 0, .total = 2, .failed = 0, .spinner_frame = 0, .canceling = true });
-    try std.testing.expect(std.mem.find(u8, widget.hintsText(false), "Finishing current indexer") != null);
-    try std.testing.expect(std.mem.find(u8, widget.hintsText(true), "Finishing current indexer") != null);
+    try std.testing.expect(std.mem.find(u8, widget.hintsText(false), "Finishing in-flight indexers") != null);
+    try std.testing.expect(std.mem.find(u8, widget.hintsText(true), "Finishing in-flight indexers") != null);
 }
