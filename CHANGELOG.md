@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.6.2
+
+### Fixed
+- Fixed the update check never reporting a newer release. GitHub serves the release JSON gzip-compressed, and the checker parsed the raw compressed bytes, failed, and silently showed nothing. The response body is now decompressed before parsing.
+
+### Changed
+- The update notice under the search input now strikes through the current version and shows the new one next to it as `vX.Y.Z New available!` in bold yellow, replacing the cyan `[NEW vX.Y.Z]` tag.
+
 ## 0.6.1
 
 ### Changed
