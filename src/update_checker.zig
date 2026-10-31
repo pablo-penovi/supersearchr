@@ -54,8 +54,18 @@ pub fn defaultLatestVersionExecutor(allocator: std.mem.Allocator, url: []const u
     const status = response.head.status;
     if (status != .ok) return error.HttpError;
 
+    // GitHub gzips the release JSON; decompress before handing it to the parser.
+    const decompress_buffer: []u8 = switch (response.head.content_encoding) {
+        .identity => &.{},
+        .zstd => allocator.alloc(u8, std.compress.zstd.default_window_len) catch return error.OutOfMemory,
+        .deflate, .gzip => allocator.alloc(u8, std.compress.flate.max_window_len) catch return error.OutOfMemory,
+        .compress => return error.ResponseReadFailed,
+    };
+    defer if (decompress_buffer.len != 0) allocator.free(decompress_buffer);
+
     var read_buf: [4096]u8 = undefined;
-    const reader = response.reader(&read_buf);
+    var decompress: std.http.Decompress = undefined;
+    const reader = response.readerDecompressing(&read_buf, &decompress, decompress_buffer);
     const body = reader.allocRemaining(allocator, .limited(64 * 1024)) catch |err| {
         return mapAnyToUpdateError(err, error.ResponseReadFailed);
     };

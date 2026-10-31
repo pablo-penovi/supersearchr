@@ -312,12 +312,19 @@ fn drawPanelTitleCells(
 
 fn writeVersionLine(stdout: compat.FileWriter, colors: theme.Theme, latest_version: ?[]const u8) void {
     term.setFg256(colors.muted);
-    stdout.writeAll("v" ++ build_options.version) catch {};
     if (latest_version) |latest| {
-        term.setFg256(colors.accent);
-        stdout.writeAll(" [NEW v") catch {};
+        term.setStrikethrough(true);
+        stdout.writeAll("v" ++ build_options.version) catch {};
+        term.setStrikethrough(false);
+        stdout.writeAll(" ") catch {};
+        term.setFg256(colors.warn);
+        term.setBold(true);
+        stdout.writeAll("v") catch {};
         stdout.writeAll(latest) catch {};
-        stdout.writeAll("]") catch {};
+        stdout.writeAll(" New available!") catch {};
+        term.setBold(false);
+    } else {
+        stdout.writeAll("v" ++ build_options.version) catch {};
     }
     term.resetColor();
 }

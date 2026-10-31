@@ -1,7 +1,7 @@
 # Repository Structure
 
 This file summarizes tracked files to avoid re-scanning. Build artifacts in `zig-out/` are excluded by design.
-Current project version: `v0.6.1`.
+Current project version: `v0.6.2`.
 
 ## Root
 
@@ -36,7 +36,7 @@ Current project version: `v0.6.1`.
 - `src/jackett/http_exec.zig`: Shared low-level HTTP request executor used by Jackett client modules.
 - `src/jackett/url_encode.zig`: Percent-encoding helper for Torznab/admin URL path and query components.
 - `src/superseedr/client.zig`: Superseedr integration, final magnet/path validation, process checks, spawn/add flow.
-- `src/tui/term.zig`: Terminal raw mode, key reading, ANSI helpers, terminal size.
+- `src/tui/term.zig`: Terminal raw mode, key reading, ANSI helpers (colors, bold, dim, strikethrough), terminal size.
 - `src/tui/theme.zig`: Color palette, border styles, and rendering helpers.
 - `src/tui/panels.zig`: Shared panel/overlay rendering helpers for notices, errors, and the profile save/apply/delete prompts.
 - `src/tui/app.zig`: App state machine (search/results/indexers/profiles/error), streaming Jackett session orchestration, indexer management and profile flows (parallel worker-pool commits with live progress), a background startup check for active-profile drift, and Superseedr handoff.
@@ -44,5 +44,5 @@ Current project version: `v0.6.1`.
 - `src/tui/widgets/profiles.zig`: Profiles list widget for the F2 screen with a side-by-side details panel previewing the selected profile's changes, navigation, load/rename/delete actions, apply progress, and tests.
 - `src/tui/widgets/list_nav.zig`: Shared cursor/scroll/page navigation helpers and the commit-progress type used by list-style widgets.
 - `src/tui/widgets/hints.zig`: Key-hints footer marquee: scrolls the hints back and forth when they are wider than the terminal instead of letting them wrap.
-- `src/tui/widgets/search.zig`: Search input widget with the active-profile label, and tests.
+- `src/tui/widgets/search.zig`: Search input widget with the active-profile label and the version line with its update notice, and tests.
 - `src/tui/widgets/results.zig`: Results list widget with navigation, live search status, streaming update preservation, stats/size/age table rendering, and tests.

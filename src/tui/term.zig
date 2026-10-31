@@ -386,6 +386,14 @@ pub fn setDim(on: bool) void {
     }
 }
 
+pub fn setStrikethrough(on: bool) void {
+    if (on) {
+        compat.stdoutWriteAll("\x1b[9m");
+    } else {
+        compat.stdoutWriteAll("\x1b[29m");
+    }
+}
+
 pub fn setDimPersistent(on: bool) void {
     dim_persistent = on;
     setDim(on);
